@@ -1,0 +1,17 @@
+# polarbeam-server dev configuration (compose dev overlay only).
+listen:
+  grpc: ":8443"
+  grpc_hostname: grpc.polarbeam.local
+  http: ":8080"
+db:
+  url: postgres://polarbeam:polarbeam-dev@timescaledb:5432/polarbeam
+tls:
+  cert_file: /etc/polarbeam/tls/server.crt
+  key_file: /etc/polarbeam/tls/server.key
+ca:
+  dir: /var/lib/polarbeam-server/ca
+  # Cert-rotation e2e switch: uncomment, then `make reset && make up` so the
+  # fleet enrolls with 10-minute certs (renewal fires ~5 min in).
+  # agent_cert_lifetime: 10m
+log:
+  level: debug

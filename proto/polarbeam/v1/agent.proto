@@ -1,0 +1,77 @@
+// Agent <-> control plane channel. Every RPC here requires mTLS; the agent's
+// identity is ALWAYS taken from the client certificate URI SAN
+// (polarbeam://agent/<uuid>) and never from message fields.
+syntax = "proto3";
+
+package polarbeam.v1;
+
+import "google/protobuf/timestamp.proto";
+import "polarbeam/v1/common.proto";
+
+option go_package = "github.com/devalexllc/polarbeam/internal/pb/polarbeamv1";
+
+service AgentService {
+  // Long-lived stream: the server pushes FULL config snapshots (never
+  // diffs); the agent diffs locally against its running workers. The open
+  // stream doubles as agent liveness.
+  rpc StreamConfig(AgentHello) returns (stream ConfigSnapshot);
+
+  // Batched result ingestion. Results may arrive late and out of order
+  // (disk spool replay after an outage); the server orders by started_at.
+  rpc PushResults(PushResultsRequest) returns (PushResultsResponse);
+
+  // Certificate rotation over the existing mTLS channel (CSR in, cert out).
+  rpc RenewCert(RenewCertRequest) returns (RenewCertResponse);
+}
+
+message AgentHello {
+  string agent_version = 1;
+  // Hash of the config snapshot the agent is currently running; lets the
+  // server skip a no-op initial push.
+  string config_hash = 2;
+}
+
+message ConfigSnapshot {
+  // Content hash of the snapshot (server-computed, stable for identical
+  // configs).
+  string config_hash = 1;
+  repeated ProbeSpec probes = 2;
+  SpoolPolicy spool = 3;
+}
+
+// Server-tunable spool bounds (agent-local config takes precedence if set).
+message SpoolPolicy {
+  int64 max_bytes = 1;
+  int64 max_age_seconds = 2;
+}
+
+message PushResultsRequest {
+  repeated ProbeResult results = 1;
+  // Number of results dropped from the spool (overflow/age) since the last
+  // acknowledged push — loss is reported, never silent. Legacy: pre-v0.4
+  // servers only read this delta, and a retried push can double-count it.
+  // Servers that understand dropped_total ignore this field when that one
+  // is present.
+  uint64 dropped_since_last_push = 2;
+  // Lifetime total of results this agent has dropped (monotonic except on
+  // spool-state loss). Presence marks a total-reporting agent; the server
+  // derives an idempotent delta from it, so retries never double-count.
+  // Agents set BOTH fields to keep pre-v0.4 servers working.
+  optional uint64 dropped_total = 3;
+}
+
+message PushResultsResponse {
+  uint32 accepted = 1;
+}
+
+message RenewCertRequest {
+  // PKCS#10 CSR, DER (fresh key allowed; identity comes from the current
+  // client certificate, not the CSR subject).
+  bytes csr_der = 1;
+}
+
+message RenewCertResponse {
+  bytes cert_der = 1;
+  bytes ca_bundle_der = 2;
+  google.protobuf.Timestamp not_after = 3;
+}

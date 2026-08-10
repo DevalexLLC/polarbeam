@@ -1,0 +1,132 @@
+# Release pipeline, triggered by version tags (vX.Y.Z):
+#   images  → multi-arch (amd64+arm64) server/agent/proxy pushed to
+#             ghcr.io/devalexllc, tagged <tag> + latest
+#   bundle  → per-arch air-gap bundles from the just-pushed images,
+#             attached to a GitHub release with SHA256SUMS
+#
+# The Go build stage cross-compiles on the build platform ($BUILDPLATFORM
+# in the Dockerfiles); QEMU only executes the tiny final-stage RUNs
+# (adduser/setcap) on the target arch.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    strategy:
+      # One image at a time: three legs pushing concurrently write a dozen
+      # ghcr manifests (2 tags x 2 arches x 3 images) inside a few seconds,
+      # which trips GitHub's SECONDARY rate limit — a burst throttle,
+      # unrelated to the hourly API quota. Observed on v0.3.0: the agent
+      # leg's :latest push 403'd with "exceeded a secondary rate limit"
+      # AFTER its :v0.3.0 manifest had landed, failing the job and skipping
+      # release/bundle/publish. Costs ~2 min of wall clock on a tag build.
+      max-parallel: 1
+      matrix:
+        include:
+          - { name: server, file: deploy/docker/server.Dockerfile, target: "" }
+          # release explicitly: the agent Dockerfile's default target is dev
+          - { name: agent, file: deploy/docker/agent.Dockerfile, target: release }
+          - { name: proxy, file: deploy/docker/proxy.Dockerfile, target: "" }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # git describe needs tags
+      - id: meta
+        run: |
+          echo "version=$(git describe --tags --always --dirty)" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push ${{ matrix.name }}
+        uses: docker/build-push-action@v6
+        env:
+          # Build-record artifacts are noise here and their size made the
+          # publish job's unfiltered artifact download flaky.
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          target: ${{ matrix.target }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            COMMIT=${{ steps.meta.outputs.commit }}
+          tags: |
+            ghcr.io/devalexllc/polarbeam-${{ matrix.name }}:${{ github.ref_name }}
+            ghcr.io/devalexllc/polarbeam-${{ matrix.name }}:latest
+
+# The release is created BEFORE the bundles exist, and each bundle job
+# uploads its ~1.3 GiB tarball straight to the release. Funneling the
+# bundles through a publish job as workflow artifacts failed repeatably
+# (download-artifact gave up after 5 retries on the multi-GiB transfer),
+# and the round-trip was pure overhead. Checksums are per-asset .sha256
+# files; the bundle also carries an internal SHA256SUMS over its contents.
+  release:
+    needs: [images]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create draft GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Draft until both bundles have uploaded — a non-draft release
+          # here would announce an empty release, permanently if a
+          # bundle job failed.
+          gh release create "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes \
+            --draft
+
+  bundle:
+    needs: [release]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      # ghcr packages can be private (they are on first push): authenticate
+      # the pulls the bundle script performs.
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Assemble bundle
+        run: deploy/release/build-bundle.sh "${{ github.ref_name }}" "${{ matrix.arch }}"
+      - name: Upload bundle to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          f=$(ls polarbeam-*-bundle.tar.gz)
+          sha256sum "$f" > "$f.sha256"
+          gh release upload "${{ github.ref_name }}" "$f" "$f.sha256" \
+            --repo "${{ github.repository }}"
+
+  publish:
+    needs: [bundle]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release edit "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --draft=false

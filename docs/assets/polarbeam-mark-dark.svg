@@ -1,0 +1,10 @@
+<!-- Static dark-theme variant of polarbeam-mark.svg, geometry in
+     lockstep with it and the docs/assets README copies. The app picks a
+     variant from the resolved data-theme (components/LogoMark.tsx) because
+     the adaptive mark's embedded media query tracks the OS scheme, not the
+     manual theme toggle. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">PolarBEAM</title>
+  <circle cx="32" cy="32" r="26" fill="none" stroke="#dce8f0" stroke-width="4"/>
+  <path fill="#58b7e8" d="M32 6 37.5 26.5 58 32 37.5 37.5 32 58 26.5 37.5 6 32 26.5 26.5Z"/>
+</svg>

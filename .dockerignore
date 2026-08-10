@@ -1,0 +1,10 @@
+# Trim the image build context. CAUTION: vendor/, internal/pb/, and
+# web/dist/ MUST stay in the context — the offline build depends on all
+# three (vendored deps, committed protobuf, go:embed'ed SPA). Never add
+# them here.
+.git
+bin/
+tmp/
+dist/
+web/node_modules/
+web/tsconfig.tsbuildinfo

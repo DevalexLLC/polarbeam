@@ -1,0 +1,17 @@
+{
+  "printWidth": 120,
+  "tabWidth": 2,
+  "semi": false,
+  "singleQuote": true,
+  "jsxSingleQuote": false,
+  "trailingComma": "all",
+  "sortPackageJson": false,
+  "ignorePatterns": [
+    "dist/**",
+    "node_modules/**",
+    "src/assets/mapGeo.ts",
+    "pnpm-lock.yaml",
+    "tsconfig.tsbuildinfo",
+    "public/fonts/**"
+  ]
+}

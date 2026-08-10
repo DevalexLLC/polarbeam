@@ -1,0 +1,53 @@
+# PolarBEAM edge proxy: SNI-based TCP passthrough on 443.
+#
+# TLS is NEVER terminated here. Agents' mTLS client-certificate verification
+# happens end-to-end in polarbeam-server; the proxy only inspects the
+# cleartext SNI in the ClientHello and routes the TCP stream:
+#
+#   ${POLARBEAM_GRPC_SNI}  -> server:8443  (agent gRPC, mTLS)
+#   anything else           -> server:8080  (dashboard HTTPS)
+#
+# This is a template: the official nginx entrypoint substitutes ONLY
+# defined environment variables (POLARBEAM_GRPC_SNI, defaulted in the
+# proxy image), leaving nginx runtime $variables untouched, and renders
+# /etc/nginx/nginx.conf at start. Any SNI-capable proxy (haproxy,
+# traefik) can replace this image — passthrough is generic.
+
+user nginx;
+worker_processes auto;
+error_log /dev/stderr warn;
+pid /tmp/nginx.pid;
+
+events {
+    worker_connections 4096;
+}
+
+stream {
+    log_format proxy '$remote_addr [$time_local] sni="$ssl_preread_server_name" '
+                     'backend=$backend bytes_in=$bytes_received bytes_out=$bytes_sent';
+    access_log /dev/stdout proxy;
+
+    map $ssl_preread_server_name $backend {
+        ${POLARBEAM_GRPC_SNI}  server_grpc;
+        default                server_dashboard;
+    }
+
+    upstream server_grpc {
+        server server:8443;
+    }
+
+    upstream server_dashboard {
+        server server:8080;
+    }
+
+    server {
+        listen 443;
+        ssl_preread on;
+        proxy_pass $backend;
+        proxy_connect_timeout 5s;
+        # Long-lived agent config streams must not be idled out by the
+        # proxy. gRPC keepalive pings flow every ~60s in both directions,
+        # so 10m of true silence means the connection is dead.
+        proxy_timeout 10m;
+    }
+}

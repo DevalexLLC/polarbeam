@@ -1,0 +1,28 @@
+# Build outputs
+/bin/
+
+# Local state (dev runs)
+/tmp/
+*.log
+
+# Editor noise
+.idea/
+.vscode/
+*~
+
+# Node modules are never committed; web/dist IS committed (air-gap builds)
+web/node_modules/
+
+# Local-only config
+*.local.yaml
+
+# Claude Code local artifacts (never committed)
+.claude/settings.local.json
+.claude/worktrees/
+
+# TypeScript incremental build cache
+web/tsconfig.tsbuildinfo
+
+# Local screenshots (conversation attachments, never project files)
+/Screenshot*.png
+/dist/

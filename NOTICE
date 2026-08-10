@@ -1,0 +1,16 @@
+PolarBEAM
+Copyright 2026 Devalex LLC
+
+This product is licensed under the GNU Affero General Public License,
+version 3 only (AGPL-3.0-only). See the LICENSE file for the full
+license text. Commercial licensing exceptions are available from
+Devalex LLC.
+
+This product includes third-party software. The polarbeam-server and
+polarbeam-agent binaries are statically linked and embed the Go standard
+library and the Go modules vendored under vendor/; polarbeam-server
+additionally embeds the built dashboard, which bundles third-party
+JavaScript packages and the JetBrains Mono webfont. All of their licenses
+and attribution notices are reproduced in full in the accompanying
+THIRD-PARTY-NOTICES file, which is distributed alongside this NOTICE in
+every release artifact.

@@ -1,0 +1,31 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "react", "unicorn", "oxc", "import", "jsx-a11y"],
+  "env": { "browser": true, "es2022": true },
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn"
+  },
+  "rules": {
+    // Not part of any category, so it must be named explicitly.
+    "react/rules-of-hooks": "error",
+    // tsconfig sets "jsx": "react-jsx" (the automatic runtime), so JSX never
+    // expands to React.createElement and React need not be in scope.
+    "react/react-in-jsx-scope": "off",
+    // Bundled stylesheets are imported for their side effect and have
+    // nothing to bind (src/main.tsx pulls in styles.css and uPlot's CSS).
+    "import/no-unassigned-import": "off",
+    // The dashboard uses role="status" for live regions, role="group" for
+    // toolbars and role="img" for inline SVG -- all correct ARIA. The tags
+    // this rule prefers (output, fieldset, img) carry different semantics
+    // and their own UA styling, so swapping them would be a regression.
+    "jsx-a11y/prefer-tag-over-role": "off"
+  },
+  "overrides": [
+    {
+      "files": ["tools/**/*.mjs"],
+      "env": { "browser": false, "node": true }
+    }
+  ],
+  "ignorePatterns": ["dist", "node_modules", "src/assets/mapGeo.ts"]
+}

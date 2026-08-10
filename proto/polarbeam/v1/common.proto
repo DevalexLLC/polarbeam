@@ -1,0 +1,124 @@
+// PolarBEAM wire contract — shared types.
+//
+// Compatibility rules: this package is consumed by agents that may be
+// years old and written in other languages (Windows, ESXi, network gear).
+// Fields are only ever added, never renumbered or repurposed. All
+// durations/timings are int64 MICROSECONDS with -1 meaning "not measured".
+syntax = "proto3";
+
+package polarbeam.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/devalexllc/polarbeam/internal/pb/polarbeamv1";
+
+enum ProbeType {
+  PROBE_TYPE_UNSPECIFIED = 0;
+  PROBE_TYPE_ICMP = 1;
+  PROBE_TYPE_TCP = 2;
+  PROBE_TYPE_TLS = 3;
+  PROBE_TYPE_HTTP = 4;
+  PROBE_TYPE_DNS = 5;
+  PROBE_TYPE_TRACEROUTE = 6;
+}
+
+enum ProbeStatus {
+  PROBE_STATUS_UNSPECIFIED = 0;
+  PROBE_STATUS_OK = 1;
+  PROBE_STATUS_TIMEOUT = 2;
+  PROBE_STATUS_CONN_REFUSED = 3;
+  PROBE_STATUS_DNS_FAILURE = 4;
+  PROBE_STATUS_TLS_FAILURE = 5;
+  PROBE_STATUS_ERROR = 6;
+  // The agent does not support this probe type (reported, never silently
+  // skipped — the server surfaces it as a config problem).
+  PROBE_STATUS_UNSUPPORTED = 7;
+}
+
+enum TargetKind {
+  TARGET_KIND_UNSPECIFIED = 0;
+  // A peer polarbeam agent (mesh probe). Direction identity comes from
+  // the server-side target row, which resolves to the peer's site.
+  TARGET_KIND_AGENT_PEER = 1;
+  // An arbitrary designated endpoint.
+  TARGET_KIND_EXTERNAL = 2;
+}
+
+message Target {
+  TargetKind kind = 1;
+  // Server-side targets.id — the join key for direction pairing.
+  string target_id = 2;
+  // host or IP to probe.
+  string address = 3;
+  uint32 port = 4;
+  // For HTTP probes: full URL (address/port are derived server-side).
+  string url = 5;
+}
+
+// A single probe assignment. Sent by the server inside ConfigSnapshot.
+message ProbeSpec {
+  // Stable UUID derived deterministically from the probe config or mesh
+  // expansion (UUIDv5) — survives config re-pushes unchanged.
+  string probe_id = 1;
+  ProbeType type = 2;
+  Target target = 3;
+  google.protobuf.Duration interval = 4;
+  google.protobuf.Duration timeout = 5;
+  // Packets per run for train-based probes (ICMP); 0 = single-shot.
+  uint32 train_count = 6;
+  google.protobuf.Duration train_spacing = 7;
+  // Type-specific parameters, e.g. http.method, http.expect_status,
+  // dns.qname, dns.qtype, dns.resolver, tls.sni.
+  map<string, string> params = 8;
+}
+
+// Round-trip statistics over a probe train. Microseconds; -1 = not measured.
+message RttStats {
+  int64 min_us = 1;
+  int64 avg_us = 2;
+  int64 max_us = 3;
+  int64 stddev_us = 4;
+}
+
+// Phase timings for connection-oriented probes. Microseconds; -1 = not measured.
+message Timings {
+  int64 dns_us = 1;
+  int64 tcp_connect_us = 2;
+  int64 tls_handshake_us = 3;
+  int64 ttfb_us = 4;
+  int64 total_us = 5;
+}
+
+message Hop {
+  uint32 ttl = 1;
+  // Responding addresses at this TTL; empty = silent hop ('*').
+  repeated string addrs = 2;
+  repeated int64 rtt_us = 3;
+}
+
+message TracerouteResult {
+  repeated Hop hops = 1;
+  bool dest_reached = 2;
+  // sha256 over the hop address sequence ('*' for silent hops); the server
+  // detects path changes by comparing hashes.
+  bytes path_hash = 3;
+}
+
+// One completed probe run.
+message ProbeResult {
+  string probe_id = 1;
+  ProbeType type = 2;
+  string target_id = 3;
+  google.protobuf.Timestamp started_at = 4;
+  ProbeStatus status = 5;
+  string error = 6;
+  // Train accounting: loss = (sent - received) / sent.
+  uint32 sent = 7;
+  uint32 received = 8;
+  RttStats rtt = 9;
+  // RFC 3550 smoothed interarrival jitter, microseconds; -1 = not measured.
+  int64 jitter_us = 10;
+  Timings timings = 11;
+  TracerouteResult traceroute = 12;
+}

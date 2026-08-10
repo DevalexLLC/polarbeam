@@ -1,0 +1,113 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/polarbeam-mark-dark.svg">
+    <img src="docs/assets/polarbeam-mark-light.svg" alt="" width="96" height="96">
+  </picture>
+</p>
+
+# PolarBEAM
+
+**B**idirectional **E**ndpoint **A**vailability & **M**easurement —
+real-time visibility into connectivity, latency, packet loss, and service
+reachability between geographically dispersed sites.
+
+PolarBEAM is a central control plane plus a lightweight agent that runs at
+each site. Agents probe each other (full mesh) and designated endpoints over
+ICMP, TCP, TLS, HTTP(S), and DNS, run periodic traceroutes, and push results
+to the control plane over mTLS on port 443. The dashboard shows current and
+historical latency (min/avg/max/percentiles), packet loss, jitter, TCP connect
+and TLS handshake times, recent outages, and path changes — **in both
+directions for every site pair** — over 7/30/90/365-day windows.
+
+## Design highlights
+
+- **Directional by construction.** Site A → Site B and Site B → Site A are
+  distinct measurement series; the source identity comes from the agent's mTLS
+  client certificate and cannot be spoofed. Asymmetric routing, firewall, and
+  return-path problems are visible instead of averaged away.
+- **Store and forward.** Agents spool results to disk when the control plane
+  is unreachable and replay them on reconnect. Overflow is dropped oldest-first
+  and *reported* — never silent.
+- **Built-in PKI.** The control plane runs its own CA. Agents enroll with a
+  one-time join token, receive a short-lived client certificate, and rotate it
+  automatically.
+- **Air-gap friendly.** The repository vendors everything a build needs: Go
+  dependencies (`vendor/`), generated protobuf code (`internal/pb/`), and the
+  built dashboard (`web/dist/`). `go build -mod=vendor` with no network is the
+  supported build. Releases publish images to `ghcr.io/devalexllc` and attach
+  an offline install bundle (image tarballs + compose file + docs) per
+  architecture; the agent is a single static Go binary shipped as a container
+  image. See `docs/install.md` and `docs/airgap-build.md`.
+- **Fail loud.** Unknown config keys are fatal. Missing hard dependencies fail
+  preflight at startup with the problem named. No silent no-ops.
+
+## Architecture
+
+```
+      site A                    control plane (containers)             site B
+┌────────────────┐           ┌───────────────────────────────┐   ┌────────────────┐
+│ polarbeam-     │ mTLS/gRPC │ nginx        polarbeam-server │   │ polarbeam-     │
+│ agent ─────────┼──:443───> │ (SNI      ──> gRPC :8443      │<──┼─ agent         │
+│  probes ───────┼────────── ┼─passthrough)  dashboard :8080 │   │   probes       │
+│  spool         │           │           ──> TimescaleDB     │   │   spool        │
+└────────────────┘           └───────────────────────────────┘   └────────────────┘
+        └─────────────── ICMP/TCP/TLS/HTTP/DNS/traceroute ───────────────┘
+```
+
+- **`polarbeam-server`** — control plane: gRPC API for agents (enrollment,
+  config distribution, result ingestion, certificate renewal), REST API + SPA
+  for humans, outage and path-change detection, TimescaleDB storage with
+  continuous aggregates for long-window percentile queries.
+- **`polarbeam-agent`** — probe engine: scheduler, per-type probers, disk
+  spool, certificate lifecycle. Single static binary, shipped and run as a
+  container.
+
+## Building
+
+Requires only the Go toolchain — no network access:
+
+```
+make build        # bin/polarbeam-server, bin/polarbeam-agent
+make test
+```
+
+Regenerating vendored artifacts (dev-time only, needs tooling/network):
+
+```
+make proto        # regenerate internal/pb from proto/ (buf)
+make web          # rebuild web/dist from web/src (node + pnpm)
+make vendor       # re-vendor Go dependencies
+```
+
+## Development environment
+
+```
+make up           # full containerized stack: proxy + server + TimescaleDB
+                  # + three fake site agents (dev overlay) — see deploy/
+make down
+```
+
+## Production installation
+
+Follow the [complete installation and user guide](docs/install.md) to deploy
+the proxy and control plane, enroll container agents, configure probe
+workloads, and verify a working multi-site system. Online image pulls and
+air-gapped release bundles are both covered.
+
+## Status
+
+Early development. See `docs/architecture.md` for the full design.
+
+## License
+
+Copyright 2026 Devalex LLC. Licensed under the [GNU Affero General Public
+License, version 3 only (AGPL-3.0-only)](LICENSE); see [NOTICE](NOTICE) for
+the attribution notice that redistributions must carry. Commercial
+licensing exceptions are available from Devalex LLC.
+
+The binaries statically link the Go standard library and the modules
+vendored under `vendor/`, and the server embeds the built dashboard and its
+bundled JavaScript packages and webfont. Every one of those licenses and
+attribution notices is reproduced in
+[THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES), generated by `make notices` and
+shipped with every release artifact.

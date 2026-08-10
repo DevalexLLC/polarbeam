@@ -1,0 +1,9 @@
+# polarbeam-agent dev configuration (compose dev overlay only).
+# Site identity comes from the join token, not this file — all three dev
+# agents share this config.
+server:
+  address: proxy:443
+  sni: grpc.polarbeam.local   # routes to the gRPC listener at the proxy
+state_dir: /var/lib/polarbeam-agent
+log:
+  level: debug

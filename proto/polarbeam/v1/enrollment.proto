@@ -1,0 +1,39 @@
+// Agent enrollment: join token + CSR in, signed client certificate out.
+// This is the only RPC served WITHOUT a client certificate (server-TLS only);
+// the one-time join token is the authentication.
+syntax = "proto3";
+
+package polarbeam.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/devalexllc/polarbeam/internal/pb/polarbeamv1";
+
+service EnrollmentService {
+  rpc Enroll(EnrollRequest) returns (EnrollResponse);
+}
+
+message EnrollRequest {
+  // One-time token issued by `polarbeam-server token create` ("<id>.<secret>").
+  string join_token = 1;
+  // PKCS#10 certificate signing request, DER. The private key never leaves
+  // the agent.
+  bytes csr_der = 2;
+  string hostname = 3;
+  string agent_version = 4;
+  // Address peers should use to probe this agent (defaults to the observed
+  // source address if empty; must be set when the agent is behind NAT).
+  string probe_address = 5;
+}
+
+message EnrollResponse {
+  // Server-assigned identity; also embedded in the certificate URI SAN
+  // (polarbeam://agent/<uuid>).
+  string agent_id = 1;
+  // Signed client certificate, DER.
+  bytes cert_der = 2;
+  // CA bundle the agent must trust for the mTLS channel, DER (may contain
+  // multiple certificates, concatenated).
+  bytes ca_bundle_der = 3;
+  google.protobuf.Timestamp not_after = 4;
+}

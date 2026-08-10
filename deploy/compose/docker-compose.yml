@@ -1,0 +1,62 @@
+# PolarBEAM control plane — production base stack.
+#
+# The ONLY exposed port is 443 on the proxy (SNI passthrough; see
+# ../proxy/nginx.conf). TimescaleDB and the server are internal-only.
+#
+# Production expects:
+#   - POLARBEAM_DB_PASSWORD set in the environment or .env (required, no default)
+#   - POLARBEAM_VERSION pinned in .env (see env.example)
+#   - ./server.yaml         (copy server.example.yaml and edit)
+#   - server TLS cert/key in the "tls" volume, readable by uid 10001 (the
+#     server runs non-root; or replace with a bind mount)
+#   - images loaded via `docker load` from the release bundle (air-gapped),
+#     or pulled from ghcr.io/devalexllc where online
+#
+# Dev environments must NEVER compose this file alone — always together with
+# ../compose-dev/docker-compose.dev.yml (make up does this). Composing the
+# base alone silently removes the dev overlay services.
+
+name: polarbeam
+
+services:
+  proxy:
+    image: ghcr.io/devalexllc/polarbeam-proxy:${POLARBEAM_VERSION:-latest}
+    restart: unless-stopped
+    ports:
+      - "443:443"
+    environment:
+      # Must match the server's listen.grpc_hostname (the SNI agents dial).
+      POLARBEAM_GRPC_SNI: ${POLARBEAM_GRPC_SNI:-grpc.polarbeam.local}
+    depends_on:
+      - server
+
+  server:
+    image: ghcr.io/devalexllc/polarbeam-server:${POLARBEAM_VERSION:-latest}
+    restart: unless-stopped
+    volumes:
+      - ./server.yaml:/etc/polarbeam/server.yaml:ro
+      - server-state:/var/lib/polarbeam-server
+      - tls:/etc/polarbeam/tls
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+
+  timescaledb:
+    image: timescale/timescaledb-ha:pg16-all
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: polarbeam
+      POSTGRES_USER: polarbeam
+      POSTGRES_PASSWORD: ${POLARBEAM_DB_PASSWORD:?POLARBEAM_DB_PASSWORD must be set}
+    volumes:
+      - dbdata:/home/postgres/pgdata
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U polarbeam -d polarbeam"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  dbdata:
+  server-state:
+  tls:

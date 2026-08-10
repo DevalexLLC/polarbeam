@@ -1,0 +1,9 @@
+# Regenerates internal/pb from proto/ — dev-time only; output is committed.
+version: v2
+plugins:
+  - local: protoc-gen-go
+    out: .
+    opt: module=github.com/devalexllc/polarbeam
+  - local: protoc-gen-go-grpc
+    out: .
+    opt: module=github.com/devalexllc/polarbeam

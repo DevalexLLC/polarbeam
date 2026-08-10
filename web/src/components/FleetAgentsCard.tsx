@@ -1,0 +1,74 @@
+import { fmtAgo } from '../format'
+import type { AgentHealthResponse, AgentInfo } from '../types'
+import HealthStrip, { stripStats, UptimeValue } from './HealthStrip'
+
+// Fleet health at a glance: one row per agent with its last update, 24 h
+// probe-success strip, and uptime %. Agents absent from the health response
+// have no results in the window — they show "—", never an invented 100 %.
+export default function FleetAgentsCard({
+  agents,
+  health,
+}: {
+  agents: AgentInfo[]
+  health: AgentHealthResponse | null
+}) {
+  const bucketS = health?.bucket_s ?? 1800
+  const nowS = Date.now() / 1000
+  const healthById = new Map(health?.agents.map((a) => [a.id, a.buckets]) ?? [])
+
+  return (
+    <section className="card overview-fleet">
+      <div className="card-head">
+        <div>
+          <span className="eyebrow">Fleet</span>
+          <h2>Agents</h2>
+        </div>
+        <a className="text-link" href="#/agents">
+          View agents
+        </a>
+      </div>
+      {agents.length === 0 ? (
+        <div className="empty-state">
+          <strong>No agents enrolled</strong>
+          <span>Enroll an agent to start measuring.</span>
+        </div>
+      ) : (
+        <div className="fleet-scroll">
+          <table className="fleet-table">
+            <thead>
+              <tr>
+                <th scope="col">Agent</th>
+                <th scope="col">Last update</th>
+                <th scope="col">24 h health</th>
+                <th scope="col" className="fleet-uptime">
+                  Uptime
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {agents.map((a) => {
+                const buckets = healthById.get(a.id) ?? []
+                const s = stripStats(buckets, bucketS, nowS)
+                return (
+                  <tr key={a.id}>
+                    <td>
+                      <strong>{a.site}</strong>
+                      <small>{a.hostname}</small>
+                    </td>
+                    <td className="fleet-seen">{a.last_seen_at ? fmtAgo(a.last_seen_at) : 'never'}</td>
+                    <td className="fleet-health">
+                      <HealthStrip buckets={s.inWindow} bucketS={bucketS} endS={s.endS} label={s.stripLabel} />
+                    </td>
+                    <td className="fleet-uptime">
+                      <UptimeValue uptime={s.uptime} partial={s.partial} stripLabel={s.stripLabel} />
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  )
+}

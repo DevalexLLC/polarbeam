@@ -1,0 +1,272 @@
+// PushResults ingestion: wire → row mapping and probe-assignment checks.
+package grpcapi
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+
+	pb "github.com/devalexllc/polarbeam/internal/pb/polarbeamv1"
+	"github.com/devalexllc/polarbeam/internal/server/meshexpand"
+	"github.com/devalexllc/polarbeam/internal/server/outage"
+	"github.com/devalexllc/polarbeam/internal/server/pathwatch"
+	"github.com/devalexllc/polarbeam/internal/server/store"
+)
+
+const (
+	// Sanity cap well above the agent's ≤500 batch size; anything larger is
+	// a broken or hostile client.
+	maxBatchSize = 5000
+	// Results stamped further in the future than this are clock garbage.
+	maxFutureSkew = 5 * time.Minute
+	// error text is truncated to keep hypertable rows narrow.
+	maxErrorLen = 128
+
+	assignmentCacheTTL = 30 * time.Second
+)
+
+// assignmentCache memoizes each agent's expanded probe→target map so a
+// batch costs at most one config load. Both presence and absence within the
+// TTL are trusted — assignment changes converge within 30 s, same as config
+// distribution. Checking the (probe, target) PAIR — not just the target —
+// matters for cleanup durability: a spooled result for a deleted or
+// disabled probe would otherwise slip through whenever its target is still
+// assigned via another probe config, recreating retired series_state and
+// reopening an incident that nothing will ever close.
+type assignmentCache struct {
+	mu      sync.Mutex
+	entries map[uuid.UUID]assignmentEntry
+}
+
+type assignmentEntry struct {
+	// probe ID → the target that probe is configured against.
+	probes  map[uuid.UUID]uuid.UUID
+	expires time.Time
+}
+
+func (c *assignmentCache) lookup(agentID uuid.UUID, now time.Time) (map[uuid.UUID]uuid.UUID, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, found := c.entries[agentID]
+	if !found || now.After(e.expires) {
+		return nil, false
+	}
+	return e.probes, true
+}
+
+func (c *assignmentCache) put(agentID uuid.UUID, probes map[uuid.UUID]uuid.UUID, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = make(map[uuid.UUID]assignmentEntry)
+	}
+	// Opportunistic sweep keeps the map bounded without a background task.
+	if len(c.entries) > 4096 {
+		for k, e := range c.entries {
+			if now.After(e.expires) {
+				delete(c.entries, k)
+			}
+		}
+	}
+	c.entries[agentID] = assignmentEntry{probes: probes, expires: now.Add(assignmentCacheTTL)}
+}
+
+// agentProbeMap returns the agent's current probe→target assignments,
+// derived from the SAME expansion that builds config snapshots
+// (meshexpand.BuildSnapshot), so ingest can never accept a probe ID the
+// agent wasn't told to run.
+func (s *Server) agentProbeMap(ctx context.Context, agentID uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+	now := time.Now()
+	if m, hit := s.assignments.lookup(agentID, now); hit {
+		return m, nil
+	}
+	in, err := s.store.LoadAgentConfigInputs(ctx, agentID)
+	if err != nil {
+		return nil, err
+	}
+	snap, err := meshexpand.BuildSnapshot(in)
+	if err != nil {
+		return nil, err
+	}
+	specs := snap.GetProbes()
+	m := make(map[uuid.UUID]uuid.UUID, len(specs))
+	for _, spec := range specs {
+		probeID, err := uuid.Parse(spec.GetProbeId())
+		if err != nil {
+			continue // cannot happen: snapshot IDs are server-derived
+		}
+		targetID, err := uuid.Parse(spec.GetTarget().GetTargetId())
+		if err != nil {
+			continue
+		}
+		m[probeID] = targetID
+	}
+	s.assignments.put(agentID, m, now)
+	return m, nil
+}
+
+// resultToRow maps one wire ProbeResult to a hypertable row. Pure: all
+// validation failures return an error naming the problem. now is injected
+// for testability.
+func resultToRow(r *pb.ProbeResult, now time.Time) (store.ResultRow, error) {
+	var row store.ResultRow
+
+	probeID, err := uuid.Parse(r.GetProbeId())
+	if err != nil {
+		return row, fmt.Errorf("bad probe_id %q", r.GetProbeId())
+	}
+	targetID, err := uuid.Parse(r.GetTargetId())
+	if err != nil {
+		return row, fmt.Errorf("bad target_id %q", r.GetTargetId())
+	}
+	if r.GetStartedAt() == nil {
+		return row, fmt.Errorf("missing started_at")
+	}
+	t := r.GetStartedAt().AsTime()
+	if t.After(now.Add(maxFutureSkew)) {
+		return row, fmt.Errorf("started_at %s is in the future", t.Format(time.RFC3339))
+	}
+	if r.GetStatus() == pb.ProbeStatus_PROBE_STATUS_UNSPECIFIED {
+		return row, fmt.Errorf("status unspecified")
+	}
+
+	row = store.ResultRow{
+		Time:      t,
+		TargetID:  targetID,
+		ProbeID:   probeID,
+		ProbeType: int16(r.GetType()),
+		Status:    int16(r.GetStatus()),
+		Sent:      int32(min(r.GetSent(), 1<<30)),
+		Received:  int32(min(r.GetReceived(), 1<<30)),
+	}
+	if row.Sent > 0 {
+		loss := float32(row.Sent-row.Received) / float32(row.Sent) * 100
+		row.LossPct = &loss
+	}
+	if rtt := r.GetRtt(); rtt != nil {
+		row.RttMinUS = usColumn(rtt.GetMinUs())
+		row.RttAvgUS = usColumn(rtt.GetAvgUs())
+		row.RttMaxUS = usColumn(rtt.GetMaxUs())
+		row.RttStddevUS = usColumn(rtt.GetStddevUs())
+	}
+	row.JitterUS = usColumn(r.GetJitterUs())
+	if tm := r.GetTimings(); tm != nil {
+		row.DNSUS = usColumn(tm.GetDnsUs())
+		row.TCPConnectUS = usColumn(tm.GetTcpConnectUs())
+		row.TLSHandshakeUS = usColumn(tm.GetTlsHandshakeUs())
+		row.TTFBUS = usColumn(tm.GetTtfbUs())
+		row.TotalUS = usColumn(tm.GetTotalUs())
+	}
+	if e := r.GetError(); e != "" {
+		if len(e) > maxErrorLen {
+			e = e[:maxErrorLen]
+		}
+		row.Error = &e
+	}
+	if tr := r.GetTraceroute(); tr != nil {
+		payload, err := tracePayload(tr)
+		if err != nil {
+			return row, err
+		}
+		row.Traceroute = payload
+	}
+	return row, nil
+}
+
+// maxTracerouteHops caps hop counts from the wire; the prober sends at most
+// 30, anything beyond 64 is a broken or hostile client.
+const maxTracerouteHops = 64
+
+// tracePayload maps the wire TracerouteResult to the pathwatch payload,
+// marshaling hops to the JSON shape stored in traceroute_current/path_events.
+func tracePayload(tr *pb.TracerouteResult) (*store.TraceroutePayload, error) {
+	if len(tr.GetHops()) > maxTracerouteHops {
+		return nil, fmt.Errorf("traceroute with %d hops exceeds the %d-hop limit", len(tr.GetHops()), maxTracerouteHops)
+	}
+	if tr.GetDestReached() && len(tr.GetPathHash()) != sha256.Size {
+		return nil, fmt.Errorf("traceroute path_hash is %d bytes, want %d", len(tr.GetPathHash()), sha256.Size)
+	}
+	type hopJSON struct {
+		TTL   uint32   `json:"ttl"`
+		Addrs []string `json:"addrs"`
+		RTTUS []int64  `json:"rtt_us"`
+	}
+	hops := make([]hopJSON, len(tr.GetHops()))
+	for i, h := range tr.GetHops() {
+		addrs := h.GetAddrs()
+		if addrs == nil {
+			addrs = []string{}
+		}
+		rtts := h.GetRttUs()
+		if rtts == nil {
+			rtts = []int64{}
+		}
+		hops[i] = hopJSON{TTL: h.GetTtl(), Addrs: addrs, RTTUS: rtts}
+	}
+	raw, err := json.Marshal(hops)
+	if err != nil {
+		return nil, fmt.Errorf("marshal traceroute hops: %w", err)
+	}
+	return &store.TraceroutePayload{
+		DestReached: tr.GetDestReached(),
+		PathHash:    tr.GetPathHash(),
+		Hops:        raw,
+	}, nil
+}
+
+// toPathRuns extracts the traceroute payloads from genuinely inserted rows.
+func toPathRuns(rows []store.ResultRow) []pathwatch.Run {
+	var runs []pathwatch.Run
+	for _, r := range rows {
+		if r.Traceroute == nil {
+			continue
+		}
+		runs = append(runs, pathwatch.Run{
+			ProbeID:     r.ProbeID,
+			TargetID:    r.TargetID,
+			Time:        r.Time,
+			DestReached: r.Traceroute.DestReached,
+			PathHash:    r.Traceroute.PathHash,
+			Hops:        r.Traceroute.Hops,
+		})
+	}
+	return runs
+}
+
+// toOutageResults maps genuinely inserted rows to the outage package's
+// input. UNSUPPORTED and every other non-OK status count as failures.
+func toOutageResults(rows []store.ResultRow) []outage.Result {
+	out := make([]outage.Result, len(rows))
+	for i, r := range rows {
+		var errText string
+		if r.Error != nil {
+			errText = *r.Error
+		}
+		out[i] = outage.Result{
+			ProbeID:    r.ProbeID,
+			TargetID:   r.TargetID,
+			ProbeType:  r.ProbeType,
+			Time:       r.Time,
+			OK:         r.Status == int16(pb.ProbeStatus_PROBE_STATUS_OK),
+			StatusCode: r.Status,
+			Error:      errText,
+		}
+	}
+	return out
+}
+
+// usColumn converts a wire microsecond value to a nullable column: negative
+// means "not measured" (NULL), and values beyond int32 are clamped (an int32
+// of microseconds is ~35 minutes — far past any probe timeout).
+func usColumn(us int64) *int32 {
+	if us < 0 {
+		return nil
+	}
+	v := int32(min(us, 1<<31-1))
+	return &v
+}

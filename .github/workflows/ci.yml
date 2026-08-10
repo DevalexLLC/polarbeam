@@ -1,0 +1,115 @@
+# PR/branch gate. The offline-build job IS the M6 air-gap clause: with the
+# module proxy off and toolchain downloads disabled, a build that succeeds
+# proves vendor/, internal/pb/, and web/dist/ are complete — no build step
+# reaches the network.
+#
+# Deliberately absent (future work):
+#   - proto regen drift: buf is NOT vendored (the Makefile's `go run` branch
+#     falls back to a host binary) and plugin versions are unpinned, so a CI
+#     regen would produce false diffs. Vendor + pin buf first.
+#   - web/dist drift: `pnpm install` + build nondeterminism across
+#     environments makes byte-comparing dist/ noisy; the committed dist is
+#     covered by review instead.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  offline-build:
+    runs-on: ubuntu-latest
+    env:
+      GOFLAGS: -mod=vendor
+      GOPROXY: "off"
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          # The vendored tree is the dependency cache; a populated module
+          # cache would mask an incomplete vendor/.
+          cache: false
+      - name: Build (network disabled)
+        run: make build
+      - name: Test (network disabled)
+        run: make test
+      - name: Vet
+        run: make vet
+      - name: Format check
+        run: make fmt-check
+      # Reads vendor/ only, so it runs under GOPROXY=off. A dependency added
+      # without regenerating attribution shows up as a dirty tree below.
+      - name: Regenerate third-party notices
+        run: make notices
+      - name: Working tree must stay clean
+        run: git diff --exit-code
+
+  # Style gate for the SPA sources. This job installs from the npm registry,
+  # which is fine: it checks dev tooling, not release artifacts. The air-gap
+  # guarantee lives entirely in offline-build above, and web/dist is built
+  # and committed by hand via `make web`. pnpm enforces the 14-day
+  # minimum-release-age supply-chain policy from web/pnpm-workspace.yaml.
+  web-lint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.nvmrc
+      # Corepack (bundled with Node 24) installs the pnpm pinned in
+      # web/package.json's packageManager field and verifies its +sha512
+      # integrity before running it — the same fail-closed bootstrap dev
+      # machines use. Deliberately NOT pnpm/action-setup: it strips the
+      # hash (`version.split('+')[0]`) and installs unverified.
+      - name: Install pinned pnpm via corepack
+        run: |
+          corepack enable pnpm
+          corepack install
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('web/pnpm-lock.yaml') }}
+          restore-keys: pnpm-store-${{ runner.os }}-
+      - run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm run lint
+      - name: Format check
+        run: pnpm run fmt:check
+      # offline-build folds the COMMITTED web/THIRD-PARTY-LICENSES into
+      # THIRD-PARTY-NOTICES but cannot regenerate it (node_modules is
+      # gitignored and absent there), so a dependency bump without `make web`
+      # would fold stale attribution and still pass its clean-tree check.
+      # This is the only job with node_modules; the check belongs here.
+      - name: Bundled-dependency attribution must be current
+        run: |
+          node tools/gen-spa-licenses.mjs
+          git diff --exit-code THIRD-PARTY-LICENSES
+
+  docker-build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { name: server, file: deploy/docker/server.Dockerfile, target: "" }
+          # release explicitly: the agent Dockerfile's default target is dev
+          - { name: agent, file: deploy/docker/agent.Dockerfile, target: release }
+          - { name: proxy, file: deploy/docker/proxy.Dockerfile, target: "" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build ${{ matrix.name }} image
+        uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          target: ${{ matrix.target }}
+          push: false

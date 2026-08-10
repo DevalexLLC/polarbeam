@@ -1,0 +1,32 @@
+# polarbeam-server configuration — example.
+# Copy to server.yaml and edit. Unknown keys are FATAL (fail-loud).
+
+listen:
+  grpc: ":8443"   # agent-facing mTLS gRPC (proxy routes grpc.<domain> here)
+  # DNS name agents connect to (their SNI). The built-in CA auto-issues the
+  # gRPC server certificate with this SAN.
+  grpc_hostname: grpc.polarbeam.example.com
+  http: ":8080"   # dashboard HTTPS       (proxy routes everything else here)
+
+db:
+  # In the compose stack the hostname is the service name.
+  url: postgres://polarbeam:CHANGE_ME@timescaledb:5432/polarbeam
+
+tls:
+  # Dashboard certificate (browser-facing listener only; the gRPC listener's
+  # certificate is auto-issued by the built-in CA with the grpc_hostname SAN).
+  cert_file: /etc/polarbeam/tls/server.crt
+  key_file: /etc/polarbeam/tls/server.key
+
+ca:
+  # Built-in CA for agent client certificates (created by `ca init`).
+  dir: /var/lib/polarbeam-server/ca
+  # Issued-certificate lifetimes. Agents renew at 2/3 of the leaf's actual
+  # validity; the gRPC server certificate is reissued past 2/3. Shortening
+  # agent_cert_lifetime below 24h logs a TEST MODE warning — it exists for
+  # cert-rotation verification, never for production.
+  # agent_cert_lifetime: 720h
+  # server_cert_lifetime: 2160h
+
+log:
+  level: info

@@ -1,0 +1,169 @@
+# PolarBEAM dev overlay — ALWAYS composed together with ../compose/docker-compose.yml
+# (use `make up`; never bring up the base file alone in a dev environment).
+#
+# Adds: image builds from source, dev TLS certgen, join-token bootstrap, and
+# six fake site agents (nyc, lon, syd, va, co, tx) meshed through the real
+# proxy path.
+# Optional: `--profile netem` degrades agent-syd's link for realistic charts.
+
+services:
+  # Host port 443 is often taken on dev boxes; publish on 9443 instead.
+  # Inside the compose network agents still reach proxy:443 — the production
+  # path (SNI passthrough on 443) is exercised unchanged.
+  proxy:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/proxy.Dockerfile
+    image: polarbeam-proxy:dev
+    ports: !override
+      - "9443:443"
+
+  server:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/server.Dockerfile
+    image: polarbeam-server:dev
+    volumes:
+      - ../compose-dev/server.dev.yaml:/etc/polarbeam/server.yaml:ro
+    # Dev auto-migrates and auto-inits the CA; production runs these
+    # steps explicitly (documented in docs/architecture.md).
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - >
+        polarbeam-server migrate --config /etc/polarbeam/server.yaml
+        && polarbeam-server ca init --config /etc/polarbeam/server.yaml --if-missing
+        && exec polarbeam-server serve --config /etc/polarbeam/server.yaml
+    depends_on:
+      certgen:
+        condition: service_completed_successfully
+
+  certgen:
+    image: alpine/openssl:3.5.5
+    entrypoint: /bin/sh
+    command: /certgen.sh
+    volumes:
+      - ../compose-dev/certgen.sh:/certgen.sh:ro
+      - tls:/etc/polarbeam/tls
+
+  bootstrap:
+    image: polarbeam-server:dev
+    # Dev-only: the image runs as uid 10001, but the tokens volume is
+    # created root-owned; root keeps the bootstrap writes simple.
+    user: "0"
+    entrypoint: /bin/sh
+    command: /bootstrap.sh
+    restart: on-failure
+    volumes:
+      - ../compose-dev/bootstrap.sh:/bootstrap.sh:ro
+      - ../compose-dev/server.dev.yaml:/etc/polarbeam/server.yaml:ro
+      - server-state:/var/lib/polarbeam-server
+      - tokens:/bootstrap
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+
+  agent-nyc:
+    build: &agent-build
+      context: ../..
+      dockerfile: deploy/docker/agent.Dockerfile
+      # The Dockerfile's default target is dev, but consumers must be
+      # explicit (production/CI build --target release).
+      target: dev
+    image: polarbeam-agent:dev
+    restart: unless-stopped
+    cap_add: [NET_RAW, NET_ADMIN]  # NET_ADMIN dev-only: lets the gate run iptables in-container
+    environment:
+      POLARBEAM_SITE: nyc
+    volumes:
+      - ../compose-dev/agent.dev.yaml:/etc/polarbeam/agent.yaml:ro
+      - tokens:/bootstrap:ro
+      - agent-nyc-state:/var/lib/polarbeam-agent
+    depends_on: [proxy, bootstrap]
+
+  agent-lon:
+    build: *agent-build
+    image: polarbeam-agent:dev
+    restart: unless-stopped
+    cap_add: [NET_RAW, NET_ADMIN]  # NET_ADMIN dev-only: lets the gate run iptables in-container
+    environment:
+      POLARBEAM_SITE: lon
+    volumes:
+      - ../compose-dev/agent.dev.yaml:/etc/polarbeam/agent.yaml:ro
+      - tokens:/bootstrap:ro
+      - agent-lon-state:/var/lib/polarbeam-agent
+    depends_on: [proxy, bootstrap]
+
+  agent-syd:
+    build: *agent-build
+    image: polarbeam-agent:dev
+    restart: unless-stopped
+    cap_add: [NET_RAW, NET_ADMIN]  # NET_ADMIN dev-only: lets the gate run iptables in-container
+    environment:
+      POLARBEAM_SITE: syd
+    volumes:
+      - ../compose-dev/agent.dev.yaml:/etc/polarbeam/agent.yaml:ro
+      - tokens:/bootstrap:ro
+      - agent-syd-state:/var/lib/polarbeam-agent
+    depends_on: [proxy, bootstrap]
+
+  agent-va:
+    build: *agent-build
+    image: polarbeam-agent:dev
+    restart: unless-stopped
+    cap_add: [NET_RAW, NET_ADMIN]  # NET_ADMIN dev-only: lets the gate run iptables in-container
+    environment:
+      POLARBEAM_SITE: va
+    volumes:
+      - ../compose-dev/agent.dev.yaml:/etc/polarbeam/agent.yaml:ro
+      - tokens:/bootstrap:ro
+      - agent-va-state:/var/lib/polarbeam-agent
+    depends_on: [proxy, bootstrap]
+
+  agent-co:
+    build: *agent-build
+    image: polarbeam-agent:dev
+    restart: unless-stopped
+    cap_add: [NET_RAW, NET_ADMIN]  # NET_ADMIN dev-only: lets the gate run iptables in-container
+    environment:
+      POLARBEAM_SITE: co
+    volumes:
+      - ../compose-dev/agent.dev.yaml:/etc/polarbeam/agent.yaml:ro
+      - tokens:/bootstrap:ro
+      - agent-co-state:/var/lib/polarbeam-agent
+    depends_on: [proxy, bootstrap]
+
+  agent-tx:
+    build: *agent-build
+    image: polarbeam-agent:dev
+    restart: unless-stopped
+    cap_add: [NET_RAW, NET_ADMIN]  # NET_ADMIN dev-only: lets the gate run iptables in-container
+    environment:
+      POLARBEAM_SITE: tx
+    volumes:
+      - ../compose-dev/agent.dev.yaml:/etc/polarbeam/agent.yaml:ro
+      - tokens:/bootstrap:ro
+      - agent-tx-state:/var/lib/polarbeam-agent
+    depends_on: [proxy, bootstrap]
+
+  # `docker compose --profile netem up -d` degrades agent-syd's link so charts
+  # show realistic latency/jitter/loss. Dev-only; fetches iproute2 at start.
+  netem:
+    profiles: [netem]
+    image: alpine:3.22
+    network_mode: service:agent-syd
+    cap_add: [NET_ADMIN]
+    command: >
+      sh -c "apk add --no-cache iproute2
+             && tc qdisc replace dev eth0 root netem delay 80ms 10ms loss 2%
+             && echo netem applied && sleep infinity"
+    depends_on: [agent-syd]
+
+volumes:
+  tokens:
+  agent-nyc-state:
+  agent-lon-state:
+  agent-syd-state:
+  agent-va-state:
+  agent-co-state:
+  agent-tx-state:

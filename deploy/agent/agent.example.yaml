@@ -1,0 +1,25 @@
+# polarbeam-agent configuration.
+#
+# Loading is strict: unknown keys are fatal, and `polarbeam-agent selfcheck
+# --config /etc/polarbeam/agent.yaml` names every problem before the
+# service starts. server.address is intentionally left unset — the first
+# start fails loudly asking for it, instead of probing nowhere.
+
+server:
+  # Control-plane endpoint as agents reach it (the proxy's public :443).
+  #address: polarbeam.example.com:443
+  # SNI routing the proxy to the gRPC listener. Must match the server's
+  # listen.grpc_hostname (default deployment uses grpc.<dashboard-domain>).
+  #sni: grpc.polarbeam.example.com
+
+# Spool + PKI live here; must match the container's state volume mount.
+state_dir: /var/lib/polarbeam-agent
+
+# Offline result spool (defaults shown). Results older than max_age or past
+# max_bytes are dropped oldest-first and the loss is reported to the server.
+#spool:
+#  max_bytes: 268435456   # 256 MiB
+#  max_age: 168h          # 7 days
+
+log:
+  level: info   # debug|info|warn|error
