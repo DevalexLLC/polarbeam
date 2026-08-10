@@ -1,11 +1,21 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
   <title id="title">PolarBEAM</title>
   <style>
-    .ring { stroke: #1c3a4f; }
+    .structure { stroke: #18181b; }
+    .node { fill: #4f46e5; stroke: #18181b; }
+    .beam { fill: #4f46e5; }
     @media (prefers-color-scheme: dark) {
-      .ring { stroke: #dce8f0; }
+      .structure { stroke: #f4f4f5; }
+      .node { fill: #818cf8; stroke: #f4f4f5; }
+      .beam { fill: #818cf8; }
     }
   </style>
-  <circle class="ring" cx="32" cy="32" r="26" fill="none" stroke-width="4"/>
-  <path fill="#2f9ddb" d="M32 6 37.5 26.5 58 32 37.5 37.5 32 58 26.5 37.5 6 32 26.5 26.5Z"/>
+  <path class="structure" d="M32 8 9.5 52 32 38 54.5 52Z" fill="none" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path class="beam" d="M32 8 37.5 35.5 32 38 26.5 35.5Z"/>
+  <g class="node" stroke-width="3">
+    <circle cx="32" cy="8" r="4.5"/>
+    <circle cx="9.5" cy="52" r="4.5"/>
+    <circle cx="54.5" cy="52" r="4.5"/>
+    <circle cx="32" cy="38" r="5"/>
+  </g>
 </svg>
