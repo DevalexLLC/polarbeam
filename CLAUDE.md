@@ -88,6 +88,11 @@ Full design + milestone plan: `docs/architecture.md`.
   building, so a finding or an unformatted file blocks the dist rebuild;
   `make web-fix` = `oxlint --fix` + `oxfmt`. `make lint` is untouched
   (Go-only, offline — CONTRIBUTING.md promises that).
+- Branding: the PolarBEAM mark uses the dashboard's neutral ink and indigo
+  accent. `web/public/polarbeam-mark.svg` is the adaptive favicon; its static
+  light/dark variants are used by the SPA and duplicated under `docs/assets/`
+  for the README. Keep the geometry synchronized across all five source SVGs
+  and rebuild `web/dist/` with `make web` after changing them.
 - Dev host ports: proxy publishes on **9443** (443 is usually taken on dev
   boxes); inside the network agents use `proxy:443` as in production.
 - Migrations: `internal/server/migrate/sql/NNNN_*.sql`, applied in filename
