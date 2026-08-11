@@ -147,7 +147,7 @@ func (a *api) issueSession(w http.ResponseWriter, r *http.Request, user *store.U
 	}
 	// Audit metrics must never lock an authenticated user out; the session
 	// is already committed (same posture as the cleanup warn above).
-	if err := a.db.RecordLogin(r.Context(), user.ID, user.Username, user.Role, user.AuthSource); err != nil {
+	if err := a.db.RecordLogin(r.Context(), user.ID); err != nil {
 		slog.Warn("httpapi: record login", "err", err)
 	}
 

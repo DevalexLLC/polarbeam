@@ -31,7 +31,7 @@ type DB interface {
 	TouchSession(ctx context.Context, id uuid.UUID) error
 	DeleteSessionByTokenHash(ctx context.Context, tokenHash []byte) error
 	DeleteExpiredSessions(ctx context.Context) (int64, error)
-	RecordLogin(ctx context.Context, userID uuid.UUID, username, role, authSource string) error
+	RecordLogin(ctx context.Context, userID uuid.UUID) error
 	ListUserAccounts(ctx context.Context, f store.UserAccountFilter) ([]store.UserAccountInfo, int64, error)
 	MonthlyLoginStats(ctx context.Context, months int) ([]store.LoginMonthStat, error)
 	CreateUser(ctx context.Context, username, passwordHash, role string) (uuid.UUID, error)

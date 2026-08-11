@@ -223,16 +223,28 @@ func (s *Store) DeleteExpiredSessions(ctx context.Context) (int64, error) {
 	return tag.RowsAffected(), nil
 }
 
-// RecordLogin appends a login audit event. The row deliberately has no FK
-// to users, and username/role/auth_source are snapshots: the audit log and
-// its exact unique-identity counts survive user deletion and IdP-driven
-// renames, and a deleted identity keeps a last-known role.
-func (s *Store) RecordLogin(ctx context.Context, userID uuid.UUID, username, role, authSource string) error {
-	_, err := s.pool.Exec(ctx,
-		`INSERT INTO login_events (user_id, username, role, auth_source) VALUES ($1, $2, $3, $4)`,
-		userID, username, role, authSource)
+// RecordLogin appends a login audit event, snapshotting everything from
+// the just-authenticated user's row in one statement. The row deliberately
+// has no FK to users, so the audit log survives user deletion; the
+// identity snapshot (issuer+subject for SSO, username for local) is what
+// keeps unique-user counts exact across deletion, JIT re-provisioning, and
+// IdP-driven renames — user_id alone double-counts a deleted-then-
+// reprovisioned SSO user.
+func (s *Store) RecordLogin(ctx context.Context, userID uuid.UUID) error {
+	// Unit separator, not NUL: Postgres text cannot hold 0x00, and \x1f
+	// cannot appear in an issuer URL, so the join is unambiguous.
+	tag, err := s.pool.Exec(ctx, `
+		INSERT INTO login_events (user_id, identity, username, role, auth_source)
+		SELECT id,
+		       CASE WHEN auth_source = 'oidc' THEN oidc_issuer || E'\x1f' || oidc_subject
+		            ELSE username END,
+		       username, role, auth_source
+		  FROM users WHERE id = $1`, userID)
 	if err != nil {
 		return fmt.Errorf("record login: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("record login: user %s vanished before the event was written", userID)
 	}
 	return nil
 }
@@ -366,8 +378,9 @@ type LoginMonthStat struct {
 
 // MonthlyLoginStats returns zero-filled per-month login totals for the most
 // recent `months` UTC calendar months, oldest first, ending with the current
-// month. Buckets are UTC regardless of the connection's TimeZone; deleted
-// users keep counting as one identity via the FK-less user_id.
+// month. Buckets are UTC regardless of the connection's TimeZone; unique
+// users count DISTINCT identity snapshots, so one person stays one count
+// across renames, deletion, and SSO re-provisioning.
 func (s *Store) MonthlyLoginStats(ctx context.Context, months int) ([]LoginMonthStat, error) {
 	rows, err := s.pool.Query(ctx, `
 		WITH months AS (
@@ -380,7 +393,7 @@ func (s *Store) MonthlyLoginStats(ctx context.Context, months int) ([]LoginMonth
 		       count(e.id),
 		       count(e.id) FILTER (WHERE e.auth_source = 'local'),
 		       count(e.id) FILTER (WHERE e.auth_source = 'oidc'),
-		       count(DISTINCT e.user_id)
+		       count(DISTINCT e.identity)
 		  FROM months
 		  LEFT JOIN login_events e
 		    ON e.occurred_at >= (months.m AT TIME ZONE 'UTC')

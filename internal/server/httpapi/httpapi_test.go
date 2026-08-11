@@ -125,8 +125,13 @@ type recordedLogin struct {
 	AuthSource string
 }
 
-func (f *fakeDB) RecordLogin(_ context.Context, userID uuid.UUID, username, role, authSource string) error {
-	f.logins = append(f.logins, recordedLogin{UserID: userID, Username: username, Role: role, AuthSource: authSource})
+// RecordLogin snapshots from the user row like the store's INSERT..SELECT.
+func (f *fakeDB) RecordLogin(_ context.Context, userID uuid.UUID) error {
+	u := f.userByID(userID)
+	if u == nil {
+		return fmt.Errorf("record login: user %s vanished before the event was written", userID)
+	}
+	f.logins = append(f.logins, recordedLogin{UserID: userID, Username: u.Username, Role: u.Role, AuthSource: u.AuthSource})
 	return nil
 }
 
