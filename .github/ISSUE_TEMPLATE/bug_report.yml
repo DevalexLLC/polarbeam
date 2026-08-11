@@ -1,0 +1,68 @@
+name: Bug report
+description: Something is broken or behaving unexpectedly.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        **Suspected security vulnerability?** Do not file it here — use
+        [private vulnerability reporting](https://github.com/DevalexLLC/polarbeam/security/advisories/new)
+        instead.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: >-
+        Output of `polarbeam-server version` / `polarbeam-agent version`, or
+        the commit hash.
+      placeholder: v0.3.0
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      multiple: true
+      options:
+        - Server / control plane
+        - Agent
+        - Proxy (SNI passthrough)
+        - Dashboard (SPA)
+        - Enrollment / CA / certificates
+        - Database / migrations
+        - Build / packaging / air-gap bundle
+        - Documentation
+        - Other / not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: deployment
+    attributes:
+      label: Deployment shape
+      description: >-
+        Containerized control plane? Agent container? Does traffic pass the
+        SNI proxy? Air-gapped or connected site?
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs and configuration
+      description: >-
+        Trim to the relevant parts and **redact secrets** (tokens, passwords,
+        certificate keys).
+      render: text
