@@ -76,7 +76,8 @@ type DB interface {
 
 	GetOIDCSettings(ctx context.Context) (*store.OIDCSettings, error)
 	UpdateOIDCSettings(ctx context.Context, o store.OIDCSettings, keepSecret bool) (*store.OIDCSettings, error)
-	UpsertOIDCUser(ctx context.Context, subject, username, role string) (*store.UserInfo, error)
+	UpsertOIDCUser(ctx context.Context, issuer, subject, username, role string) (*store.UserInfo, error)
+	DeleteOIDCSessions(ctx context.Context) (int64, error)
 }
 
 // OIDCProviders is the slice of oidcauth.Manager the handlers use — an

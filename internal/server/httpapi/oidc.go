@@ -174,7 +174,7 @@ func (a *api) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := a.db.UpsertOIDCUser(r.Context(), claims.Subject, claims.Username, claims.Role)
+	user, err := a.db.UpsertOIDCUser(r.Context(), claims.Issuer, claims.Subject, claims.Username, claims.Role)
 	if err != nil {
 		fail("internal", "upsert oidc user", err)
 		return
@@ -387,6 +387,23 @@ func (a *api) handleOIDCSettingsPut(w http.ResponseWriter, r *http.Request) {
 	if len(problems) > 0 {
 		writeError(w, http.StatusBadRequest, strings.Join(problems, "; "))
 		return
+	}
+	// A different issuer or client is a different provider (the same rule
+	// that forces a fresh client_secret above): sessions issued under the
+	// old provider must not carry over. Revoke BEFORE persisting — if the
+	// delete fails the settings stay unchanged, so a retried PUT still sees
+	// the provider change and re-fires. Update-first would compare equal on
+	// retry and leave the stale sessions alive.
+	if in.Issuer != current.Issuer || in.ClientID != current.ClientID {
+		n, err := a.db.DeleteOIDCSessions(r.Context())
+		if err != nil {
+			internalError(w, "revoke oidc sessions", err)
+			return
+		}
+		if n > 0 {
+			slog.Info("httpapi: oidc provider changed; revoked sso sessions", "count", n)
+			warnings = append(warnings, "identity provider changed: all single sign-on sessions were signed out")
+		}
 	}
 	o := in.settings()
 	o.UpdatedBy = sessionFrom(r.Context()).Username

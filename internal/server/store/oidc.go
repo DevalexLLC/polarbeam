@@ -79,35 +79,23 @@ func (s *Store) UpdateOIDCSettings(ctx context.Context, o OIDCSettings, keepSecr
 	return out, nil
 }
 
-// GetUserByOIDCSubject returns the federated user for an OIDC subject, or
-// (nil, nil) when none exists yet.
-func (s *Store) GetUserByOIDCSubject(ctx context.Context, subject string) (*UserInfo, error) {
-	var u UserInfo
-	err := s.pool.QueryRow(ctx,
-		`SELECT id, username, COALESCE(password_hash, ''), role, disabled, created_at, auth_source
-		   FROM users WHERE oidc_subject = $1`, subject).
-		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Disabled, &u.CreatedAt, &u.AuthSource)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get user by oidc subject: %w", err)
-	}
-	return &u, nil
-}
-
 // UpsertOIDCUser JIT-provisions (or refreshes) a federated user keyed on the
-// immutable OIDC subject. Username and role track the IdP on every login;
-// disabled is deliberately never touched — it is the operator's revocation
-// lever and must survive re-login attempts. A username squatted by another
-// row gets one retry under a deterministic subject-derived suffix, so a
-// colliding local name can never deny a federated login.
-func (s *Store) UpsertOIDCUser(ctx context.Context, subject, username, role string) (*UserInfo, error) {
-	u, err := s.upsertOIDCUser(ctx, subject, username, role)
+// pair (issuer, subject) — subjects are unique only within an issuer, so the
+// bare subject would let a re-pointed provider merge unrelated accounts.
+// Username and role track the IdP on every login; disabled is deliberately
+// never touched — it is the operator's revocation lever and must survive
+// re-login attempts. A username squatted by another row gets one retry under
+// a deterministic identity-derived suffix, so a colliding local name can
+// never deny a federated login.
+func (s *Store) UpsertOIDCUser(ctx context.Context, issuer, subject, username, role string) (*UserInfo, error) {
+	if issuer == "" || subject == "" {
+		return nil, errors.New("upsert oidc user: empty issuer or subject")
+	}
+	u, err := s.upsertOIDCUser(ctx, issuer, subject, username, role)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "users_username_key" {
-		sum := sha256.Sum256([]byte(subject))
-		u, err = s.upsertOIDCUser(ctx, subject, username+"-"+hex.EncodeToString(sum[:4]), role)
+		sum := sha256.Sum256([]byte(issuer + "\x00" + subject))
+		u, err = s.upsertOIDCUser(ctx, issuer, subject, username+"-"+hex.EncodeToString(sum[:4]), role)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("upsert oidc user: %w", err)
@@ -115,15 +103,15 @@ func (s *Store) UpsertOIDCUser(ctx context.Context, subject, username, role stri
 	return u, nil
 }
 
-func (s *Store) upsertOIDCUser(ctx context.Context, subject, username, role string) (*UserInfo, error) {
+func (s *Store) upsertOIDCUser(ctx context.Context, issuer, subject, username, role string) (*UserInfo, error) {
 	var u UserInfo
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO users (username, password_hash, role, auth_source, oidc_subject)
-		VALUES ($1, NULL, $2, 'oidc', $3)
-		ON CONFLICT (oidc_subject) WHERE oidc_subject IS NOT NULL
+		INSERT INTO users (username, password_hash, role, auth_source, oidc_issuer, oidc_subject)
+		VALUES ($1, NULL, $2, 'oidc', $3, $4)
+		ON CONFLICT (oidc_issuer, oidc_subject) WHERE oidc_subject IS NOT NULL
 		DO UPDATE SET username = EXCLUDED.username, role = EXCLUDED.role
 		RETURNING id, username, COALESCE(password_hash, ''), role, disabled, created_at, auth_source`,
-		username, role, subject).
+		username, role, issuer, subject).
 		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Disabled, &u.CreatedAt, &u.AuthSource)
 	if err != nil {
 		return nil, err

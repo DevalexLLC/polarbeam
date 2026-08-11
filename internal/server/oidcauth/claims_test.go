@@ -10,6 +10,7 @@ func TestMapClaims(t *testing.T) {
 	admins := []string{"polarbeam-admins", "sre"}
 	cases := []struct {
 		name     string
+		issuer   string
 		subject  string
 		all      map[string]any
 		wantRole string
@@ -37,6 +38,9 @@ func TestMapClaims(t *testing.T) {
 		{name: "empty subject", subject: "",
 			all:     map[string]any{"preferred_username": "x"},
 			wantErr: "empty subject"},
+		{name: "empty issuer", issuer: "-", subject: "s1",
+			all:     map[string]any{"preferred_username": "x"},
+			wantErr: "empty issuer"},
 		{name: "missing username claim", subject: "s1",
 			all:     map[string]any{"groups": []any{"polarbeam-admins"}},
 			wantErr: `missing username claim "preferred_username"`},
@@ -49,7 +53,11 @@ func TestMapClaims(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := mapClaims("preferred_username", "groups", admins, tc.subject, tc.all)
+			issuer := "https://idp.example/realms/x"
+			if tc.issuer == "-" { // sentinel: the empty-issuer case
+				issuer = ""
+			}
+			got, err := mapClaims("preferred_username", "groups", admins, issuer, tc.subject, tc.all)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("err = %v, want mention of %q", err, tc.wantErr)
@@ -63,8 +71,8 @@ func TestMapClaims(t *testing.T) {
 			if err != nil {
 				t.Fatalf("mapClaims: %v", err)
 			}
-			if got.Subject != tc.subject || got.Username != tc.wantUser || got.Role != tc.wantRole {
-				t.Errorf("claims = %+v, want user %q role %q", got, tc.wantUser, tc.wantRole)
+			if got.Issuer != issuer || got.Subject != tc.subject || got.Username != tc.wantUser || got.Role != tc.wantRole {
+				t.Errorf("claims = %+v, want issuer %q user %q role %q", got, issuer, tc.wantUser, tc.wantRole)
 			}
 		})
 	}
@@ -73,7 +81,7 @@ func TestMapClaims(t *testing.T) {
 func TestMapClaimsNoAdminValues(t *testing.T) {
 	// With no admin_values configured nothing can elevate, whatever the
 	// claim carries.
-	got, err := mapClaims("sub", "groups", nil, "s1",
+	got, err := mapClaims("sub", "groups", nil, "https://idp.example/realms/x", "s1",
 		map[string]any{"sub": "s1", "groups": []any{"anything"}})
 	if err != nil {
 		t.Fatalf("mapClaims: %v", err)

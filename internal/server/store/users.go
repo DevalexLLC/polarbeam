@@ -120,6 +120,20 @@ func (s *Store) DeleteSessionByTokenHash(ctx context.Context, tokenHash []byte) 
 	return nil
 }
 
+// DeleteOIDCSessions signs out every federated user. Called when the
+// configured provider identity (issuer/client) changes: sessions issued
+// under the previous provider must not carry over to the new one. Local
+// (break-glass) sessions are never touched.
+func (s *Store) DeleteOIDCSessions(ctx context.Context) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM sessions USING users
+		 WHERE sessions.user_id = users.id AND users.auth_source = 'oidc'`)
+	if err != nil {
+		return 0, fmt.Errorf("delete oidc sessions: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // DeleteExpiredSessions is opportunistic cleanup run from the login handler;
 // expired rows are already invisible to lookups either way.
 func (s *Store) DeleteExpiredSessions(ctx context.Context) (int64, error) {

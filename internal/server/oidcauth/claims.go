@@ -23,7 +23,10 @@ func claimsErrorf(format string, args ...any) error {
 // against adminValues grants admin; anything else, including an absent
 // claim, is a viewer. Viewer is the floor, never an error: role mapping
 // can only elevate.
-func mapClaims(usernameClaim, roleClaim string, adminValues []string, subject string, all map[string]any) (*Claims, error) {
+func mapClaims(usernameClaim, roleClaim string, adminValues []string, issuer, subject string, all map[string]any) (*Claims, error) {
+	if issuer == "" {
+		return nil, claimsErrorf("id_token has an empty issuer")
+	}
 	if subject == "" {
 		return nil, claimsErrorf("id_token has an empty subject")
 	}
@@ -36,7 +39,7 @@ func mapClaims(usernameClaim, roleClaim string, adminValues []string, subject st
 	if matchesAdmin(all[roleClaim], adminValues) {
 		role = "admin"
 	}
-	return &Claims{Subject: subject, Username: username, Role: role}, nil
+	return &Claims{Issuer: issuer, Subject: subject, Username: username, Role: role}, nil
 }
 
 func matchesAdmin(claim any, adminValues []string) bool {
