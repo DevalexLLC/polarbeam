@@ -294,7 +294,7 @@ The probe measures:
 - TCP connect time
 - TLS handshake time for HTTPS
 - Time to first response byte
-- Total request time
+- Total request time, including draining the response body (up to 1 MiB)
 - Whether the response status matched the expectation
 
 | Parameter | Default | Meaning |
@@ -305,7 +305,10 @@ The probe measures:
 
 Redirects are not followed. A configured endpoint returning 302 is measured as
 302 rather than as the destination of its `Location` header. Each run uses a
-new connection, and response-body reading is limited to 1 MiB.
+new connection, and response-body reading is limited to 1 MiB. Reaching that
+limit on a larger body is success, but a body that fails before it completes
+is not: a transfer that stalls past the probe timeout reports `TIMEOUT`, and
+a truncated or reset transfer reports `ERROR`.
 
 Typical uses include:
 
@@ -316,7 +319,9 @@ Typical uses include:
 - Testing a reverse proxy and its upstream application together
 
 Current limitations include no response-body assertion, custom request
-headers, authentication, request body, or redirect following.
+headers, authentication, request body, or redirect following. The absence of
+a body assertion means body *content* is not checked; body *transfer*
+failures (stall, truncation, reset) still fail the probe as described above.
 
 ## DNS
 

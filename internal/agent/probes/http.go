@@ -87,10 +87,16 @@ func (HTTP) Run(ctx context.Context, spec *pb.ProbeSpec) *pb.ProbeResult {
 		res.Timings.TotalUs = us(time.Since(start))
 		return fail(res, err, pb.ProbeStatus_PROBE_STATUS_UNSPECIFIED)
 	}
-	io.Copy(io.Discard, io.LimitReader(resp.Body, httpBodyLimit))
+	// Reaching httpBodyLimit is clean EOF from the LimitReader, not an error;
+	// only a transport failure (stall, truncation, reset) surfaces here.
+	_, err = io.Copy(io.Discard, io.LimitReader(resp.Body, httpBodyLimit))
 	resp.Body.Close()
 	record()
 	res.Timings.TotalUs = us(time.Since(start))
+	if err != nil {
+		return fail(res, fmt.Errorf("reading response body: %w", err),
+			pb.ProbeStatus_PROBE_STATUS_UNSPECIFIED)
+	}
 	res.Received = 1
 
 	expect := params["http.expect_status"]
