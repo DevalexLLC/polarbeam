@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
-import { apiGet } from '../api'
+import { apiDelete, apiGet, apiPost, apiPut } from '../api'
 import { fmtAgo, fmtTime } from '../format'
 import { useTimezone } from '../timezone'
-import type { LoginMonth, UsersResponse } from '../types'
+import type { LoginMonth, UserAccount, UserCreateResponse, UsersResponse } from '../types'
+import ConfirmButton from './ConfirmButton'
 
 const POLL_MS = 30_000
 
@@ -155,9 +156,11 @@ function FilterGroup<T extends string>({
 
 export default function UsersPanel({
   isAdmin,
+  currentUsername,
   onAuthError,
 }: {
   isAdmin: boolean
+  currentUsername: string
   onAuthError: (err: unknown) => void
 }) {
   useTimezone() // re-render fmtTime renders on UTC/local toggle
@@ -169,6 +172,15 @@ export default function UsersPanel({
   const [status, setStatus] = useState<StatusFilter>('')
   const [source, setSource] = useState<SourceFilter>('')
   const [offset, setOffset] = useState(0)
+  const [refresh, setRefresh] = useState(0) // bumped after any mutation
+  const [actionError, setActionError] = useState('')
+  const [newUsername, setNewUsername] = useState('')
+  const [newRole, setNewRole] = useState<'viewer' | 'admin'>('viewer')
+  const [creating, setCreating] = useState(false)
+  // The generated password lives in its own state so the 30 s poll can
+  // never clear it — it is shown exactly once and cannot be recovered.
+  const [minted, setMinted] = useState<UserCreateResponse | null>(null)
+  const [copied, setCopied] = useState(false)
 
   // Debounce the search box so each keystroke doesn't hit the server; any
   // applied-filter change resets to the first page.
@@ -232,7 +244,58 @@ export default function UsersPanel({
       cancelled = true
       clearInterval(id)
     }
-  }, [isAdmin, onAuthError, q, role, status, source, offset])
+  }, [isAdmin, onAuthError, q, role, status, source, offset, refresh])
+
+  const create = async () => {
+    if (!newUsername.trim()) return
+    setCreating(true)
+    setActionError('')
+    setCopied(false)
+    try {
+      const res = await apiPost<UserCreateResponse>('/api/v1/users', {
+        username: newUsername.trim(),
+        role: newRole,
+      })
+      setMinted(res)
+      setNewUsername('')
+      setRefresh((r) => r + 1)
+    } catch (err) {
+      onAuthError(err)
+      setActionError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  const setDisabled = async (u: UserAccount, disabled: boolean) => {
+    setActionError('')
+    try {
+      await apiPut('/api/v1/users/' + encodeURIComponent(u.id), { disabled })
+      setRefresh((r) => r + 1)
+    } catch (err) {
+      onAuthError(err)
+      setActionError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const remove = async (u: UserAccount) => {
+    setActionError('')
+    try {
+      await apiDelete('/api/v1/users/' + encodeURIComponent(u.id))
+      setRefresh((r) => r + 1)
+    } catch (err) {
+      onAuthError(err)
+      setActionError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const copyMinted = () => {
+    if (!minted) return
+    navigator.clipboard.writeText(minted.password).then(
+      () => setCopied(true),
+      () => setCopied(false),
+    )
+  }
 
   if (!isAdmin) {
     return (
@@ -292,10 +355,82 @@ export default function UsersPanel({
           </div>
         </div>
         <p className="section-intro">
-          Local accounts are created with <code>polarbeam-server user add</code>; single sign-on accounts are
-          provisioned automatically at first login. Deleted accounts stay listed with their last-known details as long
-          as their sign-in history is retained. Sign-in counts start when this server first records logins.
+          Single sign-on accounts are provisioned automatically at first login. Deleted accounts stay listed with their
+          last-known details as long as their sign-in history is retained. Sign-in counts start when this server first
+          records logins.
         </p>
+        <div className="config-form">
+          <h3 className="eyebrow">Create local user</h3>
+          <div className="config-form-grid">
+            <label className="threshold-field">
+              <span className="eyebrow">Username</span>
+              <span className="threshold-input">
+                <input
+                  type="text"
+                  value={newUsername}
+                  disabled={creating}
+                  placeholder="username"
+                  onChange={(e) => setNewUsername(e.target.value)}
+                />
+              </span>
+            </label>
+            <label className="threshold-field">
+              <span className="eyebrow">Role</span>
+              <span className="threshold-input">
+                <select
+                  value={newRole}
+                  disabled={creating}
+                  onChange={(e) => setNewRole(e.target.value === 'admin' ? 'admin' : 'viewer')}
+                >
+                  <option value="viewer">viewer</option>
+                  <option value="admin">admin</option>
+                </select>
+              </span>
+            </label>
+          </div>
+          {actionError && (
+            <ul className="error threshold-errors">
+              <li>{actionError}</li>
+            </ul>
+          )}
+          <div className="threshold-foot">
+            <span className="hint">
+              The password is generated and shown once — hand it to the user out-of-band. Federated users sign in via
+              SSO instead.
+            </span>
+            <span className="threshold-actions">
+              {/* Creation stays blocked while a password is displayed:
+                  minting another would replace the only copy. */}
+              <button
+                className="primary"
+                onClick={create}
+                disabled={creating || !newUsername.trim() || minted !== null}
+                title={minted !== null ? 'Copy and dismiss the displayed password first' : undefined}
+              >
+                {creating ? 'Creating…' : 'Create user'}
+              </button>
+            </span>
+          </div>
+        </div>
+        {minted && (
+          <div className="inline-alert" role="status">
+            <div>
+              <strong>
+                Password for {minted.username} ({minted.role}).
+              </strong>{' '}
+              Copy it now — it is shown only once and cannot be recovered.
+              <div className="mono token-reveal">{minted.password}</div>
+            </div>
+            <span className="threshold-actions">
+              <button type="button" className="secondary-button" onClick={copyMinted}>
+                {copied ? 'Copied' : 'Copy'}
+              </button>
+              <button type="button" className="linklike" onClick={() => setMinted(null)}>
+                Dismiss
+              </button>
+            </span>
+          </div>
+        )}
         <div className="users-toolbar">
           <label className="search-field">
             <span className="sr-only">Search usernames</span>
@@ -367,6 +502,9 @@ export default function UsersPanel({
                     <th>Sign-ins</th>
                     <th>Last sign-in</th>
                     <th>Created</th>
+                    <th className="actions-col">
+                      <span className="sr-only">Actions</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -392,6 +530,38 @@ export default function UsersPanel({
                       </td>
                       <td data-label="Created" title={u.created_at ? fmtTime(u.created_at) : undefined}>
                         {u.created_at ? fmtAgo(u.created_at) : '—'}
+                      </td>
+                      <td data-label="Actions" className="config-actions">
+                        {u.status !== 'deleted' && (
+                          <>
+                            <ConfirmButton
+                              label={u.status === 'disabled' ? 'Enable' : 'Disable'}
+                              confirmLabel={u.status === 'disabled' ? 'Confirm enable?' : 'Confirm disable?'}
+                              disabled={u.username === currentUsername}
+                              title={
+                                u.username === currentUsername
+                                  ? 'You cannot disable your own account'
+                                  : u.auth_source === 'oidc'
+                                    ? 'Blocks sign-in even if the IdP still authorizes this user'
+                                    : undefined
+                              }
+                              onConfirm={() => setDisabled(u, u.status !== 'disabled')}
+                            />
+                            <ConfirmButton
+                              label="Delete"
+                              confirmLabel={u.auth_source === 'oidc' ? 'Confirm? SSO can re-enroll' : 'Confirm delete?'}
+                              disabled={u.username === currentUsername}
+                              title={
+                                u.username === currentUsername
+                                  ? 'You cannot delete your own account'
+                                  : u.auth_source === 'oidc'
+                                    ? 'Deleting does not revoke IdP access — a still-authorized user is re-provisioned on next SSO login. Disable to revoke.'
+                                    : undefined
+                              }
+                              onConfirm={() => remove(u)}
+                            />
+                          </>
+                        )}
                       </td>
                     </tr>
                   ))}

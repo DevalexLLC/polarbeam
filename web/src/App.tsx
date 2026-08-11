@@ -233,7 +233,12 @@ export default function App() {
         ) : route.view === 'agents' ? (
           <Agents onAuthError={onAuthError} />
         ) : route.view === 'settings' ? (
-          <Settings tab={route.tab} isAdmin={user.role === 'admin'} onAuthError={onAuthError} />
+          <Settings
+            tab={route.tab}
+            isAdmin={user.role === 'admin'}
+            username={user.username}
+            onAuthError={onAuthError}
+          />
         ) : route.view === 'about' ? (
           <About version={serverVersion} />
         ) : (

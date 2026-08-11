@@ -416,6 +416,15 @@ export interface UsersResponse {
   login_months: LoginMonth[]
 }
 
+// POST /api/v1/users — the generated password is returned exactly once and
+// never persisted in cleartext.
+export interface UserCreateResponse {
+  id: string
+  username: string
+  role: 'admin' | 'viewer'
+  password: string
+}
+
 // GET/PUT /api/v1/settings/oidc (admin-only). The client secret is
 // write-only: reads carry only client_secret_set.
 export interface OIDCSettings {

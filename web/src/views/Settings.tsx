@@ -38,10 +38,12 @@ const TAB_INTRO: Record<SettingsTab, string> = {
 export default function Settings({
   tab,
   isAdmin,
+  username,
   onAuthError,
 }: {
   tab: SettingsTab
   isAdmin: boolean
+  username: string
   onAuthError: (err: unknown) => void
 }) {
   const [settings, setSettings] = useState<SettingsResponse | null>(null)
@@ -101,7 +103,7 @@ export default function Settings({
       {tab === 'authentication' ? (
         <OIDCSettingsPanel isAdmin={isAdmin} onAuthError={onAuthError} />
       ) : tab === 'users' ? (
-        <UsersPanel isAdmin={isAdmin} onAuthError={onAuthError} />
+        <UsersPanel isAdmin={isAdmin} currentUsername={username} onAuthError={onAuthError} />
       ) : tab === 'sites' ? (
         <SitesPanel isAdmin={isAdmin} onAuthError={onAuthError} />
       ) : tab === 'enrollment' ? (
