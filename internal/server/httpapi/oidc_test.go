@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/devalexllc/polarbeam/internal/server/oidcauth"
 	"github.com/devalexllc/polarbeam/internal/server/store"
 )
@@ -39,7 +41,10 @@ func (p *fakeProvider) Exchange(_ context.Context, code, verifier, nonce string)
 
 // fakeProviders implements OIDCProviders without any discovery.
 type fakeProviders struct {
-	provider    *fakeProvider
+	provider *fakeProvider
+	// settings returned alongside the provider (the row it was built from);
+	// nil defaults to enabledSettings().
+	settings    *store.OIDCSettings
 	providerErr error
 	testInfo    *oidcauth.DiscoveryInfo
 	testErr     error
@@ -50,7 +55,11 @@ func (f *fakeProviders) Provider(context.Context) (oidcauth.Provider, *store.OID
 	if f.providerErr != nil {
 		return nil, nil, f.providerErr
 	}
-	return f.provider, &store.OIDCSettings{Enabled: true}, nil
+	s := f.settings
+	if s == nil {
+		s = enabledSettings()
+	}
+	return f.provider, s, nil
 }
 
 func (f *fakeProviders) Test(context.Context, store.OIDCSettings) (*oidcauth.DiscoveryInfo, error) {
@@ -59,9 +68,13 @@ func (f *fakeProviders) Test(context.Context, store.OIDCSettings) (*oidcauth.Dis
 
 func (f *fakeProviders) Invalidate() { f.invalidated++ }
 
+// testIssuer matches enabledSettings().Issuer: the issuer half of the
+// (issuer, subject) identity key.
+const testIssuer = "https://idp.example/realms/x"
+
 func enabledSettings() *store.OIDCSettings {
 	return &store.OIDCSettings{
-		Enabled: true, Issuer: "https://idp.example/realms/x", ClientID: "polarbeam",
+		Enabled: true, Issuer: testIssuer, ClientID: "polarbeam",
 		ClientSecret: "sekrit", RedirectURL: "https://dash.example/api/v1/auth/oidc/callback",
 		Scopes: []string{"openid", "profile"}, UsernameClaim: "preferred_username",
 		RoleClaim: "groups", AdminValues: []string{"polarbeam-admins"},
@@ -210,8 +223,9 @@ func stateCookie(value string) *http.Cookie {
 
 func TestOIDCCallbackHappyPath(t *testing.T) {
 	f := newFakeDB()
+	f.oidcSettings = enabledSettings()
 	fp := &fakeProviders{provider: &fakeProvider{
-		claims: &oidcauth.Claims{Subject: "sub-1", Username: "alice@corp", Role: "admin"},
+		claims: &oidcauth.Claims{Issuer: testIssuer, Subject: "sub-1", Username: "alice@corp", Role: "admin"},
 	}}
 	h := newTestAPIWithProviders(t, f, fp)
 
@@ -240,7 +254,7 @@ func TestOIDCCallbackHappyPath(t *testing.T) {
 		t.Errorf("state cookie not cleared: %+v", cleared)
 	}
 
-	u := f.oidcUsers["sub-1"]
+	u := f.oidcUsers[oidcKey(testIssuer, "sub-1")]
 	if u == nil || u.Username != "alice@corp" || u.Role != "admin" {
 		t.Fatalf("JIT user = %+v", u)
 	}
@@ -257,9 +271,10 @@ func TestOIDCCallbackHappyPath(t *testing.T) {
 
 func TestOIDCCallbackRoleRefreshKeepsDisabled(t *testing.T) {
 	f := newFakeDB()
-	f.addOIDCUser("sub-1", "old-name", "admin", false)
+	f.oidcSettings = enabledSettings()
+	f.addOIDCUser(testIssuer, "sub-1", "old-name", "admin", false)
 	fp := &fakeProviders{provider: &fakeProvider{
-		claims: &oidcauth.Claims{Subject: "sub-1", Username: "new-name", Role: "viewer"},
+		claims: &oidcauth.Claims{Issuer: testIssuer, Subject: "sub-1", Username: "new-name", Role: "viewer"},
 	}}
 	h := newTestAPIWithProviders(t, f, fp)
 
@@ -267,8 +282,92 @@ func TestOIDCCallbackRoleRefreshKeepsDisabled(t *testing.T) {
 	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/" {
 		t.Fatalf("callback = %d %q", w.Code, w.Header().Get("Location"))
 	}
-	if u := f.oidcUsers["sub-1"]; u.Username != "new-name" || u.Role != "viewer" {
+	if u := f.oidcUsers[oidcKey(testIssuer, "sub-1")]; u.Username != "new-name" || u.Role != "viewer" {
 		t.Errorf("user not refreshed from IdP: %+v", u)
+	}
+}
+
+// TestOIDCCallbackScopedToIssuer pins the identity key: subjects are unique
+// only within an issuer, so the same sub from a different provider must
+// provision a distinct user instead of taking over the existing row (and
+// its role and live sessions).
+func TestOIDCCallbackScopedToIssuer(t *testing.T) {
+	f := newFakeDB()
+	old := f.addOIDCUser("https://old-idp.example", "sub-1", "old-admin", "admin", false)
+	// The configuration now points at the new provider.
+	cur := enabledSettings()
+	cur.Issuer = "https://new-idp.example"
+	f.oidcSettings = cur
+	fp := &fakeProviders{
+		provider: &fakeProvider{
+			claims: &oidcauth.Claims{Issuer: "https://new-idp.example", Subject: "sub-1", Username: "eve", Role: "viewer"},
+		},
+		settings: cur,
+	}
+	h := newTestAPIWithProviders(t, f, fp)
+
+	w := callback(t, h, "?code=c&state=st", stateCookie("st.n.v"))
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/" {
+		t.Fatalf("callback = %d %q: %s", w.Code, w.Header().Get("Location"), w.Body)
+	}
+
+	nu := f.oidcUsers[oidcKey("https://new-idp.example", "sub-1")]
+	if nu == nil || nu.ID == old.ID {
+		t.Fatalf("same sub from a new issuer must create a distinct user, got %+v", nu)
+	}
+	if ou := f.oidcUsers[oidcKey("https://old-idp.example", "sub-1")]; ou.Username != "old-admin" || ou.Role != "admin" {
+		t.Errorf("old-issuer user must be untouched: %+v", ou)
+	}
+
+	// The minted session belongs to the new-issuer identity.
+	var session *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == sessionCookie {
+			session = c
+		}
+	}
+	req := httptest.NewRequest("GET", "/api/v1/auth/me", nil)
+	req.AddCookie(session)
+	mw := httptest.NewRecorder()
+	h.ServeHTTP(mw, req)
+	if mw.Code != http.StatusOK || !strings.Contains(mw.Body.String(), `"eve"`) {
+		t.Errorf("me with new-issuer session = %d %s, want eve", mw.Code, mw.Body)
+	}
+}
+
+// TestOIDCCallbackProviderChangedMidFlight pins the race guard: a callback
+// holds its provider across the code exchange's IdP round-trips, so an admin
+// can switch providers — revoking every SSO session — while it is in flight.
+// The late callback must not mint a fresh old-provider session behind the
+// revocation.
+func TestOIDCCallbackProviderChangedMidFlight(t *testing.T) {
+	f := newFakeDB()
+	// The stored settings already point at the NEW provider, as after a
+	// settings PUT that landed during this callback's exchange...
+	cur := enabledSettings()
+	cur.Issuer = "https://new-idp.example"
+	f.oidcSettings = cur
+	// ...but the request still holds the OLD provider and its claims.
+	fp := &fakeProviders{
+		provider: &fakeProvider{
+			claims: &oidcauth.Claims{Issuer: testIssuer, Subject: "sub-1", Username: "fed", Role: "admin"},
+		},
+		settings: enabledSettings(),
+	}
+	h := newTestAPIWithProviders(t, f, fp)
+
+	w := callback(t, h, "?code=c&state=st", stateCookie("st.n.v"))
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/#/sso-error=config" {
+		t.Fatalf("stale-provider callback = %d %q, want 303 to sso-error=config: %s",
+			w.Code, w.Header().Get("Location"), w.Body)
+	}
+	for _, c := range w.Result().Cookies() {
+		if c.Name == sessionCookie {
+			t.Error("stale-provider callback must not set a session cookie")
+		}
+	}
+	if len(f.sessions) != 0 {
+		t.Errorf("sessions = %d, want none", len(f.sessions))
 	}
 }
 
@@ -297,8 +396,8 @@ func TestOIDCCallbackFailures(t *testing.T) {
 			provider: &fakeProvider{exchangeErr: &oidcauth.ClaimsError{}},
 			wantCode: "claims"},
 		{name: "disabled user", query: "?code=c&state=st", cookie: stateCookie("st.n.v"),
-			provider: &fakeProvider{claims: &oidcauth.Claims{Subject: "sub-9", Username: "m", Role: "viewer"}},
-			presetDB: func(f *fakeDB) { f.addOIDCUser("sub-9", "m", "viewer", true) },
+			provider: &fakeProvider{claims: &oidcauth.Claims{Issuer: testIssuer, Subject: "sub-9", Username: "m", Role: "viewer"}},
+			presetDB: func(f *fakeDB) { f.addOIDCUser(testIssuer, "sub-9", "m", "viewer", true) },
 			wantCode: "disabled"},
 	}
 	for _, tc := range cases {
@@ -309,7 +408,7 @@ func TestOIDCCallbackFailures(t *testing.T) {
 			}
 			p := tc.provider
 			if p == nil {
-				p = &fakeProvider{claims: &oidcauth.Claims{Subject: "s", Username: "u", Role: "viewer"}}
+				p = &fakeProvider{claims: &oidcauth.Claims{Issuer: testIssuer, Subject: "s", Username: "u", Role: "viewer"}}
 			}
 			h := newTestAPIWithProviders(t, f, &fakeProviders{provider: p})
 
@@ -376,7 +475,7 @@ func TestLocalLoginUnaffectedByOIDC(t *testing.T) {
 
 func TestFederatedUserCannotPasswordLogin(t *testing.T) {
 	f := newFakeDB()
-	f.addOIDCUser("sub-1", "fed", "viewer", false) // empty password hash
+	f.addOIDCUser(testIssuer, "sub-1", "fed", "viewer", false) // empty password hash
 	h := newTestAPI(t, f)
 
 	fed := doLogin(t, h, "fed", "anything")
@@ -596,6 +695,161 @@ func TestOIDCSettingsSecretScopedToProvider(t *testing.T) {
 	body["enabled"] = true
 	if w := doSettings(t, h, "PUT", "/api/v1/settings/oidc", body, cookie, csrf); w.Code != http.StatusOK {
 		t.Fatalf("same-provider edit with kept secret = %d: %s", w.Code, w.Body)
+	}
+}
+
+// TestOIDCSettingsProviderChangeRevokesSSOSessions pins the session rule
+// paired with the identity key: re-pointing the config at a different
+// provider signs out every SSO session (their roles came from the old IdP)
+// while local break-glass sessions survive.
+func TestOIDCSettingsProviderChangeRevokesSSOSessions(t *testing.T) {
+	ssoLogin := func(t *testing.T, h http.Handler) *http.Cookie {
+		t.Helper()
+		w := callback(t, h, "?code=c&state=st", stateCookie("st.n.v"))
+		if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/" {
+			t.Fatalf("sso login = %d %q: %s", w.Code, w.Header().Get("Location"), w.Body)
+		}
+		for _, c := range w.Result().Cookies() {
+			if c.Name == sessionCookie {
+				return c
+			}
+		}
+		t.Fatal("sso login set no session cookie")
+		return nil
+	}
+	me := func(t *testing.T, h http.Handler, cookie *http.Cookie) int {
+		t.Helper()
+		req := httptest.NewRequest("GET", "/api/v1/auth/me", nil)
+		req.AddCookie(cookie)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w.Code
+	}
+
+	for _, tc := range []struct {
+		name       string
+		mutate     func(m map[string]any)
+		wantRevoke bool
+	}{
+		{"issuer change", func(m map[string]any) {
+			m["issuer"] = "https://other-idp.example/realms/y"
+			m["client_secret"] = "fresh" // provider change demands a new secret
+		}, true},
+		{"client_id change", func(m map[string]any) {
+			m["client_id"] = "other-client"
+			m["client_secret"] = "fresh"
+		}, true},
+		{"same-provider edit", func(m map[string]any) {
+			m["admin_values"] = []string{"some-group"}
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeDB()
+			f.oidcSettings = enabledSettings()
+			fp := &fakeProviders{provider: &fakeProvider{
+				claims: &oidcauth.Claims{Issuer: testIssuer, Subject: "sub-1", Username: "fed", Role: "viewer"},
+			}}
+			h := newTestAPIWithProviders(t, f, fp)
+			ssoCookie := ssoLogin(t, h)
+			adminCookie, csrf := adminAndCookie(t, h, f)
+
+			body := oidcSettingsBody()
+			tc.mutate(body)
+			w := doSettings(t, h, "PUT", "/api/v1/settings/oidc", body, adminCookie, csrf)
+			if w.Code != http.StatusOK {
+				t.Fatalf("put = %d: %s", w.Code, w.Body)
+			}
+
+			wantSSO := http.StatusOK
+			if tc.wantRevoke {
+				wantSSO = http.StatusUnauthorized
+			}
+			if got := me(t, h, ssoCookie); got != wantSSO {
+				t.Errorf("sso session after put = %d, want %d", got, wantSSO)
+			}
+			if got := me(t, h, adminCookie); got != http.StatusOK {
+				t.Errorf("local session after put = %d, want 200 (break-glass must survive)", got)
+			}
+			var out struct {
+				Warnings []string `json:"warnings"`
+			}
+			json.Unmarshal(w.Body.Bytes(), &out)
+			warned := false
+			for _, warning := range out.Warnings {
+				if strings.Contains(warning, "signed out") {
+					warned = true
+				}
+			}
+			if warned != tc.wantRevoke {
+				t.Errorf("sign-out warning present = %v, want %v (warnings: %v)", warned, tc.wantRevoke, out.Warnings)
+			}
+		})
+	}
+}
+
+// raceToProviderB simulates a concurrent settings write landing between a
+// PUT's validation (which read snapshot A) and its store transaction: the
+// stored row now points at provider B and a B login has committed a session.
+func raceToProviderB(f *fakeDB) {
+	f.beforeUpdateOIDCSettings = func() {
+		b := enabledSettings()
+		b.Issuer = "https://b-idp.example"
+		f.oidcSettings = b
+		u := f.addOIDCUser("https://b-idp.example", "sub-b", "bee", "admin", false)
+		f.sessions["b-tok"] = &store.SessionInfo{
+			ID: uuid.New(), UserID: u.ID, Username: "bee", Role: "admin",
+			ExpiresAt: time.Now().Add(time.Hour),
+		}
+	}
+}
+
+// TestOIDCSettingsStaleSnapshotStillRevokes pins the in-transaction
+// provider-change decision: with two writes based on the same snapshot A,
+// one switches A→B and a B login commits; the other writes A back. Its
+// handler-level comparison (A == A) sees no change, so only the store —
+// comparing against the row it locked — can catch the switch and revoke the
+// B-issued session.
+func TestOIDCSettingsStaleSnapshotStillRevokes(t *testing.T) {
+	f := newFakeDB()
+	f.oidcSettings = enabledSettings() // provider A, the snapshot this PUT reads
+	h := newTestAPI(t, f)
+	cookie, csrf := adminAndCookie(t, h, f)
+	raceToProviderB(f)
+
+	body := oidcSettingsBody() // issuer/client_id A — "unchanged" vs the snapshot
+	body["client_secret"] = "fresh"
+	w := doSettings(t, h, "PUT", "/api/v1/settings/oidc", body, cookie, csrf)
+	if w.Code != http.StatusOK {
+		t.Fatalf("put = %d: %s", w.Code, w.Body)
+	}
+	if _, alive := f.sessions["b-tok"]; alive {
+		t.Error("B-issued session survived the stale write back to A")
+	}
+	if !strings.Contains(w.Body.String(), "signed out") {
+		t.Errorf("response must warn about the sign-out: %s", w.Body)
+	}
+}
+
+// TestOIDCSettingsStaleKeptSecretConflicts: same race, but the stale write
+// keeps the stored secret. Applying it would submit provider B's secret to
+// provider A, so the write must be rejected outright — leaving B's
+// configuration, secret, and sessions intact and consistent.
+func TestOIDCSettingsStaleKeptSecretConflicts(t *testing.T) {
+	f := newFakeDB()
+	f.oidcSettings = enabledSettings()
+	h := newTestAPI(t, f)
+	cookie, csrf := adminAndCookie(t, h, f)
+	raceToProviderB(f)
+
+	w := doSettings(t, h, "PUT", "/api/v1/settings/oidc", oidcSettingsBody(), cookie, csrf) // secret kept
+	if w.Code != http.StatusConflict {
+		t.Fatalf("stale put with kept secret = %d, want 409: %s", w.Code, w.Body)
+	}
+	if f.oidcSettings.Issuer != "https://b-idp.example" {
+		t.Errorf("rejected write must not change settings, issuer = %q", f.oidcSettings.Issuer)
+	}
+	if _, alive := f.sessions["b-tok"]; !alive {
+		t.Error("rejected write must not revoke the still-valid B session")
 	}
 }
 

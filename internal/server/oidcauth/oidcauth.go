@@ -27,7 +27,10 @@ var ErrDisabled = errors.New("oidc is disabled")
 
 // Claims is the dashboard identity extracted from a verified ID token. Role
 // is already mapped to admin|viewer — handlers never see raw IdP claims.
+// Issuer is the verified iss of the token that produced these claims:
+// subjects are unique only within an issuer, so identities are scoped to it.
 type Claims struct {
+	Issuer   string
 	Subject  string
 	Username string
 	Role     string

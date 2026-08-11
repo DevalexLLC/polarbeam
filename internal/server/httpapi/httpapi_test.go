@@ -44,7 +44,11 @@ type fakeDB struct {
 	joinTokens  []store.JoinTokenInfo
 
 	oidcSettings *store.OIDCSettings
-	oidcUsers    map[string]*store.UserInfo // key: oidc subject
+	oidcUsers    map[string]*store.UserInfo // key: oidcKey(issuer, subject)
+	// beforeUpdateOIDCSettings, when set, runs at the top of
+	// UpdateOIDCSettings — the seam for simulating a concurrent settings
+	// write landing between the handler's read and the store transaction.
+	beforeUpdateOIDCSettings func()
 
 	pairSummary          *store.PairSummaryRow
 	pairSeries           []store.SeriesBucket
@@ -186,36 +190,67 @@ func (f *fakeDB) GetOIDCSettings(_ context.Context) (*store.OIDCSettings, error)
 	return f.oidcSettings, nil
 }
 
-func (f *fakeDB) UpdateOIDCSettings(_ context.Context, o store.OIDCSettings, keepSecret bool) (*store.OIDCSettings, error) {
-	if keepSecret {
-		o.ClientSecret = ""
-		if f.oidcSettings != nil {
-			o.ClientSecret = f.oidcSettings.ClientSecret
+func (f *fakeDB) UpdateOIDCSettings(ctx context.Context, o store.OIDCSettings, keepSecret bool) (*store.OIDCSettings, int64, error) {
+	if f.beforeUpdateOIDCSettings != nil {
+		f.beforeUpdateOIDCSettings()
+	}
+	// Mirrors the store: the provider-change decision is made against the
+	// CURRENT stored row, never a caller-supplied snapshot.
+	cur, _ := f.GetOIDCSettings(ctx)
+	providerChanged := cur.Issuer != o.Issuer || cur.ClientID != o.ClientID
+	if providerChanged && keepSecret && cur.ClientSecret != "" {
+		return nil, 0, store.ErrConcurrentProviderChange
+	}
+	var revoked int64
+	if providerChanged {
+		for k, s := range f.sessions {
+			for _, u := range f.oidcUsers {
+				if u.ID == s.UserID {
+					delete(f.sessions, k)
+					revoked++
+					break
+				}
+			}
 		}
+	}
+	if keepSecret {
+		o.ClientSecret = cur.ClientSecret
 	}
 	o.UpdatedAt = time.Now()
 	f.oidcSettings = &o
-	return f.oidcSettings, nil
+	return f.oidcSettings, revoked, nil
 }
 
+// oidcKey mirrors the store's composite identity key: subjects are unique
+// only within an issuer.
+func oidcKey(issuer, subject string) string { return issuer + "\x00" + subject }
+
 // addOIDCUser pre-provisions a federated user (empty password hash).
-func (f *fakeDB) addOIDCUser(subject, username, role string, disabled bool) *store.UserInfo {
+func (f *fakeDB) addOIDCUser(issuer, subject, username, role string, disabled bool) *store.UserInfo {
 	u := &store.UserInfo{
 		ID: uuid.New(), Username: username, Role: role, Disabled: disabled, AuthSource: "oidc",
 	}
-	f.oidcUsers[subject] = u
+	f.oidcUsers[oidcKey(issuer, subject)] = u
 	f.users[username] = u
 	return u
 }
 
-func (f *fakeDB) UpsertOIDCUser(_ context.Context, subject, username, role string) (*store.UserInfo, error) {
-	if u := f.oidcUsers[subject]; u != nil {
+func (f *fakeDB) UpsertOIDCUser(_ context.Context, issuer, subject, username, role string) (*store.UserInfo, error) {
+	if u := f.oidcUsers[oidcKey(issuer, subject)]; u != nil {
 		// Username/role track the IdP; disabled survives (revocation lever).
 		u.Username, u.Role = username, role
 		return u, nil
 	}
-	u := f.addOIDCUser(subject, username, role, false)
+	u := f.addOIDCUser(issuer, subject, username, role, false)
 	return u, nil
+}
+
+func (f *fakeDB) CreateOIDCSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrf string, expiresAt time.Time, issuer, clientID string) error {
+	cur, _ := f.GetOIDCSettings(ctx)
+	if !cur.Enabled || cur.Issuer != issuer || cur.ClientID != clientID {
+		return store.ErrProviderChanged
+	}
+	return f.CreateSession(ctx, userID, tokenHash, csrf, expiresAt)
 }
 
 var testDist = fstest.MapFS{

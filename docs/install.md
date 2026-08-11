@@ -862,19 +862,19 @@ regardless of the OIDC configuration or the provider's availability, so a
 local admin is always your break-glass access. Configure at least one local
 admin before enabling SSO.
 
-If you are adding SSO to a control plane installed from an earlier
-release, upgrade it first using the standard procedure under
-[Upgrades](#upgrades) — new images, then `migrate`, then recreate the
-services. SSO ships as migration `0011`, which runs in a single
-transaction and makes exactly these schema changes: on `users` it relaxes
-`password_hash` to nullable (federated accounts have none), adds
-`auth_source` (`NOT NULL DEFAULT 'local'`), adds the nullable
-`oidc_subject` with a partial unique index, and adds a CHECK enforcing
-one credential shape per row; it also creates the new `oidc_settings`
-table with its single seeded, disabled row. No existing row is modified
-or deleted — every pre-upgrade user already satisfies the new constraints
-as a `local` account — and until an admin enables SSO nothing behaves
-differently.
+The SSO schema (`users.auth_source`, `users.oidc_subject`, the
+`oidc_settings` table) ships with the base schema, so a fresh install
+needs no extra steps. If you are upgrading a control plane installed from
+v0.1.0, use the standard procedure under [Upgrades](#upgrades) — new
+images, then `migrate`, then recreate the services. The upgrade includes
+migration `0005`, which runs in a single transaction and scopes federated
+identities to their provider: it adds `users.oidc_issuer`, attributes
+existing federated accounts to the currently configured issuer, replaces
+the unique index on the bare subject with one on `(issuer, subject)`, and
+signs out every SSO session once (subjects are only unique within an
+issuer, so pre-upgrade sessions cannot be attributed with certainty).
+Local accounts and their sessions are untouched; SSO users simply sign in
+again.
 
 SSO is the one feature that makes the server perform outbound HTTP:
 discovery, token, and key fetches to the identity provider at login time,
@@ -923,13 +923,13 @@ network/TLS error. Saving applies immediately — no restart.
 ### Semantics worth knowing
 
 - Federated users are created on first successful login, keyed on the
-  provider's immutable `sub` claim — renaming a user at the IdP renames it
-  here on the next login instead of creating a duplicate. If the username
-  is already taken by another account, the federated account instead gets
-  a deterministic `-<8 hex>` suffix derived from the subject. (If that
-  exact suffixed name is also taken — practically only when someone
-  pre-created it on purpose — the login fails loudly rather than guessing
-  further.)
+  pair of issuer and the provider's immutable `sub` claim — renaming a
+  user at the IdP renames it here on the next login instead of creating a
+  duplicate. If the username is already taken by another account, the
+  federated account instead gets a deterministic `-<8 hex>` suffix
+  derived from the issuer and subject. (If that exact suffixed name is
+  also taken — practically only when someone pre-created it on purpose —
+  the login fails loudly rather than guessing further.)
 - Username and role are refreshed from the IdP at every login, and the
   refreshed role takes effect immediately for **all** of that user's open
   dashboard sessions — sessions read the user row on every request, so a
@@ -947,10 +947,19 @@ network/TLS error. Saving applies immediately — no restart.
   survives re-login attempts.
 - Federated users cannot sign in with a password; the local form treats
   them as unknown users.
-- Changing the issuer to a different provider re-maps federated accounts
-  by subject only. Subjects are provider-scoped, so when switching
-  providers, disable or delete the old federated users rather than
-  assuming they are inert.
+- Changing the issuer or client ID signs out every SSO session
+  immediately (their roles came from the previous provider); local
+  sessions are unaffected. An SSO login already in flight across the
+  switch fails loudly instead of completing — it authenticated against
+  the previous provider. Accounts from the previous provider stay in
+  the database but are unreachable — identities are scoped to the issuer,
+  so nobody can sign in to them through the new provider. To tidy them
+  up:
+
+  ```sh
+  docker compose exec timescaledb psql -U polarbeam -d polarbeam -c \
+    "DELETE FROM users WHERE auth_source = 'oidc' AND oidc_issuer <> '<current issuer>'"
+  ```
 - The client secret lives in the `oidc_settings` table and therefore in
   database backups. Treat backups accordingly, and rotate the secret at
   the provider if a backup leaks.

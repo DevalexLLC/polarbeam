@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 
 	"github.com/devalexllc/polarbeam/internal/server/auth"
@@ -153,7 +154,7 @@ func (a *api) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	prov, _, err := a.providers.Provider(r.Context())
+	prov, cfg, err := a.providers.Provider(r.Context())
 	if err != nil {
 		c := "provider"
 		if errors.Is(err, oidcauth.ErrDisabled) {
@@ -174,7 +175,7 @@ func (a *api) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := a.db.UpsertOIDCUser(r.Context(), claims.Subject, claims.Username, claims.Role)
+	user, err := a.db.UpsertOIDCUser(r.Context(), claims.Issuer, claims.Subject, claims.Username, claims.Role)
 	if err != nil {
 		fail("internal", "upsert oidc user", err)
 		return
@@ -185,7 +186,19 @@ func (a *api) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		fail("disabled", "user is disabled", errors.New("subject "+claims.Subject))
 		return
 	}
-	if _, err := a.issueSession(w, r, user); err != nil {
+	// The session insert revalidates cfg's provider identity inside its own
+	// transaction: this request has been holding cfg since before Exchange's
+	// IdP round-trips, and an admin may have switched providers (revoking
+	// every SSO session) in that window. Minting unchecked would hand the
+	// old provider's user a fresh session that outlives the revocation.
+	create := func(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time) error {
+		return a.db.CreateOIDCSession(ctx, userID, tokenHash, csrfToken, expiresAt, cfg.Issuer, cfg.ClientID)
+	}
+	if _, err := a.issueSession(w, r, user, create); err != nil {
+		if errors.Is(err, store.ErrProviderChanged) {
+			fail("config", "provider changed during login", err)
+			return
+		}
 		fail("internal", "issue session", err)
 		return
 	}
@@ -390,10 +403,27 @@ func (a *api) handleOIDCSettingsPut(w http.ResponseWriter, r *http.Request) {
 	}
 	o := in.settings()
 	o.UpdatedBy = sessionFrom(r.Context()).Username
-	out, err := a.db.UpdateOIDCSettings(r.Context(), o, in.ClientSecret == "")
+	// A different issuer or client is a different provider (the same rule
+	// that forces a fresh client_secret above): sessions issued under the
+	// old provider must not carry over. The store detects the switch against
+	// the row it locks — not against `current`, which may be stale by now —
+	// and revokes in the same transaction as the settings write, so neither
+	// a login whose code exchange straddles the switch nor a concurrent
+	// settings write can leave a stale session behind (CreateOIDCSession
+	// re-checks the provider under a share lock on the same row).
+	out, revoked, err := a.db.UpdateOIDCSettings(r.Context(), o, in.ClientSecret == "")
+	if errors.Is(err, store.ErrConcurrentProviderChange) {
+		writeError(w, http.StatusConflict,
+			"settings changed concurrently: the stored client_secret belongs to a different provider; reload and enter a new client_secret")
+		return
+	}
 	if err != nil {
 		internalError(w, "update oidc settings", err)
 		return
+	}
+	if revoked > 0 {
+		slog.Info("httpapi: oidc provider changed; revoked sso sessions", "count", revoked)
+		warnings = append(warnings, "identity provider changed: all single sign-on sessions were signed out")
 	}
 	// The next start/callback rebuilds the provider from the new row —
 	// settings apply without a restart.

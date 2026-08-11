@@ -163,5 +163,5 @@ func (p *realProvider) Exchange(ctx context.Context, code, pkceVerifier, expecte
 	if err := idToken.Claims(&all); err != nil {
 		return nil, fmt.Errorf("decode id_token claims: %w", err)
 	}
-	return mapClaims(p.usernameClaim, p.roleClaim, p.adminValues, idToken.Subject, all)
+	return mapClaims(p.usernameClaim, p.roleClaim, p.adminValues, idToken.Issuer, idToken.Subject, all)
 }
