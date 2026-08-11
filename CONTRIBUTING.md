@@ -1,13 +1,25 @@
 # Contributing to PolarBEAM
 
+By participating in this project you agree to abide by the
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## Licensing of contributions
 
 PolarBEAM is licensed under AGPL-3.0-only, and Devalex LLC additionally
 offers commercial licensing exceptions. That dual-licensing model only
-works while Devalex LLC holds the full copyright, so external
-contributions require a signed contributor license agreement (CLA)
-assigning or broadly licensing the contribution to Devalex LLC before a
-pull request can merge. Open an issue to request the CLA text.
+works while Devalex LLC can relicense the whole codebase, so contributions
+are accepted **only** under the project's contributor license agreement:
+
+- **Individuals:** [CLA.md](CLA.md). You retain ownership of your
+  contribution and grant Devalex LLC a broad license, including the right
+  to relicense. Signing is automated — on your first pull request, a
+  status check asks you to post the comment
+  `I have read the CLA Document and I hereby sign the CLA`. You sign once;
+  it covers all future contributions.
+- **On behalf of an employer:** your employer additionally executes the
+  [Entity CLA](CLA-ENTITY.md) by email.
+
+A pull request cannot merge until its author has signed.
 
 ## Commits
 
@@ -22,10 +34,15 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 ## Pull requests
 
 `main` accepts no direct pushes — not from contributors, not from
-maintainers. Every change lands through a pull request whose checks pass:
-`offline-build` (the air-gap gate), `web-lint`, and one `docker-build` per
-image. Reviews are not required, so a maintainer can self-merge once CI is
-green; force-pushes and branch deletion are blocked outright.
+maintainers. Every change lands through a pull request whose required
+checks pass: `offline-build` (the air-gap gate), `web-lint`, and
+`docker-build (server)` / `docker-build (agent)` / `docker-build (proxy)`.
+Reviews are not required, so a maintainer can self-merge once CI is green;
+force-pushes and branch deletion are blocked outright.
+
+For pull requests from forks, GitHub Actions runs only after a maintainer
+approves the workflow run — expect a short delay before CI starts on your
+first PRs.
 
 ## Ground rules
 
