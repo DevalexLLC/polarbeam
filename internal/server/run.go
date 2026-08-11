@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pires/go-proxyproto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
@@ -106,6 +107,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return fmt.Errorf("listen grpc %s: %w", cfg.Listen.GRPC, err)
 	}
+	grpcLis = maybeProxyProto(grpcLis, cfg.Listen.ProxyProtocol)
 	grpcServer := grpc.NewServer(
 		grpc.Creds(credentials.NewTLS(grpcTLS)),
 		grpc.MaxRecvMsgSize(16<<20),
@@ -127,6 +129,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return fmt.Errorf("listen http %s: %w", cfg.Listen.HTTP, err)
 	}
+	httpLis = maybeProxyProto(httpLis, cfg.Listen.ProxyProtocol)
 	httpServer := &http.Server{
 		Handler:           httpapi.New(st, web.Dist()),
 		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{dashboardCert}},
@@ -135,11 +138,11 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 	errCh := make(chan error, 2)
 	go func() {
-		slog.Info("gRPC listening", "addr", cfg.Listen.GRPC, "hostname", cfg.Listen.GRPCHostname)
+		slog.Info("gRPC listening", "addr", cfg.Listen.GRPC, "hostname", cfg.Listen.GRPCHostname, "proxy_protocol", cfg.Listen.ProxyProtocol)
 		errCh <- grpcServer.Serve(grpcLis)
 	}()
 	go func() {
-		slog.Info("dashboard listening", "addr", cfg.Listen.HTTP)
+		slog.Info("dashboard listening", "addr", cfg.Listen.HTTP, "proxy_protocol", cfg.Listen.ProxyProtocol)
 		err := httpServer.ServeTLS(httpLis, "", "")
 		if !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
@@ -263,5 +266,26 @@ func (p *grpcCertProvider) rotate(ctx context.Context, authority *ca.CA, dir, ho
 		p.cert = cert
 		p.mu.Unlock()
 		slog.Info("rotated gRPC server certificate", "hostname", hostname, "not_after", cert.Leaf.NotAfter)
+	}
+}
+
+// maybeProxyProto wraps lis so the PROXY protocol header sent by the edge
+// proxy becomes each connection's RemoteAddr. REQUIRE, not lenient: a missing
+// header means a misconfigured proxy and must fail loudly, and an optional
+// header would let any network peer spoof its address past the login rate
+// limiter. The header precedes the TLS handshake, so both TLS listeners
+// (dashboard HTTPS, agent mTLS gRPC) wrap transparently.
+func maybeProxyProto(lis net.Listener, enabled bool) net.Listener {
+	if !enabled {
+		return lis
+	}
+	return &proxyproto.Listener{
+		Listener: lis,
+		ConnPolicy: func(proxyproto.ConnPolicyOptions) (proxyproto.Policy, error) {
+			return proxyproto.REQUIRE, nil
+		},
+		// Bounds the header read so a peer that connects and stalls
+		// cannot hold an accept slot open indefinitely.
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 }

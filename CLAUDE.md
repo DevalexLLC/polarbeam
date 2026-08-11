@@ -23,7 +23,10 @@ Full design + milestone plan: `docs/architecture.md`.
   both Go build stages and `docs/airgap-build.md` pinned to that exact version.
 - **Control plane is containers-only** (proxy + server + TimescaleDB via
   compose). The nginx proxy does SNI passthrough on 443 — it never terminates
-  TLS; agent mTLS is verified end-to-end in the Go server.
+  TLS; agent mTLS is verified end-to-end in the Go server. It prepends a
+  PROXY protocol v1 header on both routes; the server requires the header
+  when `listen.proxy_protocol` is on (default off, shipped configs enable
+  it) so rate limiting and enrollment see real client addresses.
 - **The agent is a single static Go binary** (`CGO_ENABLED=0`), no runtime
   deps, shipped ONLY as a container image (`deploy/docker/agent.Dockerfile`,
   `--target release`; the default target is the dev overlay image). The

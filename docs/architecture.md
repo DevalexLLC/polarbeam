@@ -137,8 +137,8 @@ browsers ──HTTPS────▶ │ nginx     │  SNI: lh.example ───
                        └─through)──┘
 ```
 
-- The proxy is nginx's stream module doing **SNI-based TCP passthrough** — it never terminates TLS, so agent client-cert verification stays end-to-end in the Go server (mTLS is not broken by the proxy) and no browser client-cert picker is triggered (different SNI names route to different internal listeners). Both agents and the dashboard share :443 externally.
-- The server binary keeps two internal listeners (gRPC+mTLS, dashboard HTTPS) — it still works proxy-less for dev, and operators may substitute their own SNI-capable proxy (haproxy, traefik) since passthrough is generic.
+- The proxy is nginx's stream module doing **SNI-based TCP passthrough** — it never terminates TLS, so agent client-cert verification stays end-to-end in the Go server (mTLS is not broken by the proxy) and no browser client-cert picker is triggered (different SNI names route to different internal listeners). Both agents and the dashboard share :443 externally. It prepends a **PROXY protocol v1 header** on both routes so the server sees real client addresses (per-IP login rate limiting; enrollment observed source) — passthrough alone preserves TLS, not the TCP source address.
+- The server binary keeps two internal listeners (gRPC+mTLS, dashboard HTTPS) — it still works proxy-less for dev (`listen.proxy_protocol: false`, the default), and operators may substitute their own SNI-capable proxy (haproxy, traefik) since passthrough is generic, provided it also sends PROXY protocol to both backends (or the knob is turned off, degrading login rate limiting to one shared bucket).
 - TimescaleDB is never exposed outside the compose network.
 - Admin CLI runs inside the container: `docker compose exec server polarbeam-server token create …` (Makefile wrappers provided).
 

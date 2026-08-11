@@ -221,6 +221,15 @@ SNI = <grpc-name>  -> server:8443  (agent gRPC and mTLS)
 all other SNI      -> server:8080  (dashboard HTTPS)
 ```
 
+On both routes the proxy prepends a PROXY protocol v1 header carrying the
+real client address, and the server requires it (`listen.proxy_protocol:
+true` in `server.yaml`). This is what keys login rate limiting per client
+instead of per proxy. If you replace the bundled proxy, the replacement must
+also send PROXY protocol to both backends (haproxy: `send-proxy` /
+`send-proxy-v2`; traefik: `proxyProtocol` on the TCP service) — or set
+`listen.proxy_protocol: false` and accept that every dashboard login then
+shares one rate-limit bucket.
+
 ### 4.2 Create `server.yaml`
 
 Copy and protect the server example. The file is bind-mounted into the
@@ -241,6 +250,7 @@ listen:
   grpc: ':8443'
   grpc_hostname: <grpc-name>
   http: ':8080'
+  proxy_protocol: true
 
 db:
   url: postgres://polarbeam:<generated-hex-password>@timescaledb:5432/polarbeam
@@ -553,9 +563,11 @@ The fields mean:
 
 The enrollment command also takes `--probe-address`. This is not the control
 plane address. It is the IP address or DNS name other agents should probe when
-this agent participates in a mesh. Always supply it in the standard proxied
-deployment: the control plane otherwise sees the nginx proxy as the connection
-source and records the wrong address.
+this agent participates in a mesh. Always supply it: without it the control
+plane falls back to the observed connection source — with the bundled proxy's
+PROXY protocol that is the agent's real egress address rather than the proxy,
+but an egress address is still usually a NAT boundary, not the address other
+sites can probe.
 
 ## 7. Create an enrollment token
 
@@ -1006,6 +1018,24 @@ not. Recheck all three gRPC-name settings and DNS. The proxy must pass TLS
 through; an upstream load balancer that terminates and replaces TLS breaks
 agent mTLS unless it is specifically configured for TCP passthrough.
 
+### Neither dashboard nor agents can connect (PROXY protocol mismatch)
+
+The proxy and the server must agree on `listen.proxy_protocol`. Every
+combination of disagreement fails immediately and loudly, never silently:
+
+- Proxy sends the header, `proxy_protocol: false` (or an old server binary):
+  the header bytes corrupt the TLS handshake — browsers show a protocol
+  error, agents log handshake failures, for every connection.
+- Proxy does not send it, `proxy_protocol: true`: the server rejects every
+  connection at the header read.
+- Old server binary with the new key in `server.yaml`: startup fails naming
+  `listen.proxy_protocol` as an unknown key.
+
+The bundled proxy and `server.example.yaml` enable it together. Note that
+with the knob on, connecting to the server while bypassing the proxy (for
+example `curl https://server:8080` from inside the compose network) is
+rejected by design — debug through the proxy.
+
 ### Agents connect but mesh results are absent or target the proxy
 
 The agent was probably enrolled without the correct `--probe-address`.
@@ -1120,6 +1150,11 @@ automatically — the explicit `migrate` step below is mandatory, and the
 system enforces it: a new server started against an unmigrated database
 refuses to run with `preflight: database schema is behind … run
 'polarbeam-server migrate' first` instead of limping or touching data.
+
+Read the release notes before starting: a release may add required
+`server.yaml` keys (for example `listen.proxy_protocol: true`, which the
+proxy and server must agree on). Apply such config edits before the final
+recreate step so the new containers start against a matching configuration.
 
 Work from the compose directory on the control-plane host:
 

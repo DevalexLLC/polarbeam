@@ -38,6 +38,19 @@ func TestLoadValidAppliesDefaults(t *testing.T) {
 	if cfg.Log.Level != "info" {
 		t.Fatalf("default log level not applied: %q", cfg.Log.Level)
 	}
+	if cfg.Listen.ProxyProtocol {
+		t.Fatal("listen.proxy_protocol must default to false (proxy-less deployments)")
+	}
+}
+
+func TestLoadProxyProtocol(t *testing.T) {
+	cfg, err := Load(write(t, strings.Replace(valid, "listen:\n", "listen:\n  proxy_protocol: true\n", 1)))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Listen.ProxyProtocol {
+		t.Fatal("listen.proxy_protocol: true not applied")
+	}
 }
 
 func TestLoadUnknownKeyNamed(t *testing.T) {

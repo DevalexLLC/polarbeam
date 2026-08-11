@@ -64,10 +64,13 @@ func (s *Server) Enroll(ctx context.Context, req *pb.EnrollRequest) (*pb.EnrollR
 				probeAddress = host
 			}
 		}
-		// Behind the SNI-passthrough proxy the observed source is the
-		// PROXY, not the agent — mesh probes against it would be wrong.
+		// With listen.proxy_protocol the observed source is the agent's
+		// real pre-proxy egress address; without it, behind the
+		// SNI-passthrough proxy, it is the PROXY itself. Either way it is
+		// an egress address, not necessarily probeable (NAT), so
+		// --probe-address remains the recommendation.
 		slog.Warn("enrollment without --probe-address: falling back to observed source, "+
-			"which is the proxy's address in proxied deployments",
+			"which may be a NAT egress or (without listen.proxy_protocol) the proxy's address",
 			"observed", probeAddress, "hostname", req.GetHostname())
 	}
 

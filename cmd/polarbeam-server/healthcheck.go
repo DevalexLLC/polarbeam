@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"fmt"
@@ -9,6 +10,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/pires/go-proxyproto"
 )
 
 // cmdHealthcheck probes the dashboard's unauthenticated /healthz endpoint and
@@ -38,23 +41,43 @@ func cmdHealthcheck(args []string) error {
 	if err != nil {
 		return err
 	}
-	return probeHealth(target, *timeout)
+	return probeHealth(target, *timeout, cfg.Listen.ProxyProtocol)
 }
 
 // probeHealth GETs target and reports anything short of a complete 200
 // response — transport failure, non-200 status, or a body that stalls or
 // truncates — as an error.
-func probeHealth(target string, timeout time.Duration) error {
+//
+// With listen.proxy_protocol the listener REQUIREs a PROXY header on every
+// connection, this loopback probe included, so the probe acts as its own
+// one-hop proxy: it writes a header naming itself as the source before the
+// Transport starts TLS.
+func probeHealth(target string, timeout time.Duration, proxyProto bool) error {
+	transport := &http.Transport{
+		// The dashboard certificate is operator-supplied and its SANs
+		// name the public hostname, not the loopback address dialed
+		// here; in dev it is self-signed outright. This is a liveness
+		// probe over loopback, not a trust decision — agent mTLS,
+		// which is one, verifies in full.
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12},
+	}
+	if proxyProto {
+		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			conn, err := (&net.Dialer{}).DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			header := proxyproto.HeaderProxyFromAddrs(1, conn.LocalAddr(), conn.RemoteAddr())
+			if _, err := header.WriteTo(conn); err != nil {
+				conn.Close()
+				return nil, fmt.Errorf("write PROXY header: %w", err)
+			}
+			return conn, nil
+		}
+	}
 	client := &http.Client{
-		Timeout: timeout,
-		Transport: &http.Transport{
-			// The dashboard certificate is operator-supplied and its SANs
-			// name the public hostname, not the loopback address dialed
-			// here; in dev it is self-signed outright. This is a liveness
-			// probe over loopback, not a trust decision — agent mTLS,
-			// which is one, verifies in full.
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12},
-		},
+		Timeout:   timeout,
+		Transport: transport,
 	}
 	resp, err := client.Get(target)
 	if err != nil {

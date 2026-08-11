@@ -7,6 +7,12 @@ listen:
   # gRPC server certificate with this SAN.
   grpc_hostname: grpc.polarbeam.example.com
   http: ":8080"   # dashboard HTTPS       (proxy routes everything else here)
+  # The bundled proxy prepends a PROXY protocol header on both routes so the
+  # server sees real client addresses (per-IP login rate limiting). Set false
+  # ONLY when replacing the proxy with one that does not send the header, or
+  # when running proxy-less — with it false behind a passthrough proxy, all
+  # dashboard logins share one rate-limit bucket.
+  proxy_protocol: true
 
 db:
   # In the compose stack the hostname is the service name.

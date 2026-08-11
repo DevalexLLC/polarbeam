@@ -50,6 +50,9 @@ github.com/jackc/puddle/v2
 github.com/jackc/puddle/v2/internal/genstack
 # github.com/kr/text v0.2.0
 ## explicit
+# github.com/pires/go-proxyproto v0.15.0
+## explicit; go 1.25.0
+github.com/pires/go-proxyproto
 # github.com/rogpeppe/go-internal v1.16.0
 ## explicit; go 1.25
 # golang.org/x/crypto v0.54.0
