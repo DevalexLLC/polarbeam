@@ -75,9 +75,9 @@ A version tag (`vX.Y.Z`) triggers `.github/workflows/release.yml`:
 
 ## Rebuilding everything without leaving the machine
 
-Prerequisites beyond this repository and Go:
+Prerequisites beyond this repository and Go 1.26.5:
 
-- Docker with the base images already present (`golang:1.26-alpine`,
+- Docker with the base images already present (`golang:1.26.5-alpine`,
   `alpine:3.22`, `nginx:1.29-alpine`) and an Alpine package source for
   `libcap` (see above). `timescale/timescaledb-ha:pg16-all` is needed to
   *run* a stack but is no longer part of any release artifact.
