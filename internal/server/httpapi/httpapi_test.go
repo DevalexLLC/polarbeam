@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -126,6 +127,64 @@ type recordedLogin struct {
 
 func (f *fakeDB) RecordLogin(_ context.Context, userID uuid.UUID, username, role, authSource string) error {
 	f.logins = append(f.logins, recordedLogin{UserID: userID, Username: username, Role: role, AuthSource: authSource})
+	return nil
+}
+
+func (f *fakeDB) CreateUser(_ context.Context, username, passwordHash, role string) (uuid.UUID, error) {
+	if f.users[username] != nil {
+		return uuid.Nil, fmt.Errorf("user %q already exists%w", username, store.ErrConflict)
+	}
+	u := &store.UserInfo{ID: uuid.New(), Username: username, PasswordHash: passwordHash, Role: role, AuthSource: "local"}
+	f.users[username] = u
+	return u.ID, nil
+}
+
+func (f *fakeDB) userByID(id uuid.UUID) *store.UserInfo {
+	for _, u := range f.users {
+		if u.ID == id {
+			return u
+		}
+	}
+	return nil
+}
+
+// lastActiveAdminGuard mirrors the store's refusal to disable or delete the
+// only enabled admin.
+func (f *fakeDB) lastActiveAdminGuard(target *store.UserInfo, verb string) error {
+	if target.Role != "admin" || target.Disabled {
+		return nil
+	}
+	for _, u := range f.users {
+		if u.ID != target.ID && u.Role == "admin" && !u.Disabled {
+			return nil
+		}
+	}
+	return fmt.Errorf("cannot %s the last enabled admin%w", verb, store.ErrConflict)
+}
+
+func (f *fakeDB) SetUserDisabled(_ context.Context, id uuid.UUID, disabled bool) error {
+	u := f.userByID(id)
+	if u == nil {
+		return fmt.Errorf("user %s does not exist%w", id, store.ErrNotFound)
+	}
+	if disabled {
+		if err := f.lastActiveAdminGuard(u, "disable"); err != nil {
+			return err
+		}
+	}
+	u.Disabled = disabled
+	return nil
+}
+
+func (f *fakeDB) DeleteUser(_ context.Context, id uuid.UUID) error {
+	u := f.userByID(id)
+	if u == nil {
+		return fmt.Errorf("user %s does not exist%w", id, store.ErrNotFound)
+	}
+	if err := f.lastActiveAdminGuard(u, "delete"); err != nil {
+		return err
+	}
+	delete(f.users, u.Username)
 	return nil
 }
 

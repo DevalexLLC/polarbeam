@@ -34,6 +34,9 @@ type DB interface {
 	RecordLogin(ctx context.Context, userID uuid.UUID, username, role, authSource string) error
 	ListUserAccounts(ctx context.Context, f store.UserAccountFilter) ([]store.UserAccountInfo, int64, error)
 	MonthlyLoginStats(ctx context.Context, months int) ([]store.LoginMonthStat, error)
+	CreateUser(ctx context.Context, username, passwordHash, role string) (uuid.UUID, error)
+	SetUserDisabled(ctx context.Context, id uuid.UUID, disabled bool) error
+	DeleteUser(ctx context.Context, id uuid.UUID) error
 
 	ListSites(ctx context.Context) ([]store.SiteInfo, error)
 	ListSitesConfig(ctx context.Context) ([]store.SiteAdminInfo, error)
@@ -184,8 +187,11 @@ func newHandler(sdb DB, static fs.FS, providers OIDCProviders) http.Handler {
 	// precedent).
 	mux.Handle("GET /api/v1/config/tokens", adminWrite(a.handleTokensGet))
 	// Account inventory (usernames, roles, login history) is admin-only for
-	// the same reason.
+	// the same reason; so are the account mutations.
 	mux.Handle("GET /api/v1/users", adminWrite(a.handleUsersGet))
+	mux.Handle("POST /api/v1/users", adminWrite(a.handleUserPost))
+	mux.Handle("PUT /api/v1/users/{id}", adminWrite(a.handleUserPut))
+	mux.Handle("DELETE /api/v1/users/{id}", adminWrite(a.handleUserDelete))
 	mux.Handle("POST /api/v1/config/tokens", adminWrite(a.handleTokenPost))
 	mux.Handle("DELETE /api/v1/config/tokens/{id}", adminWrite(a.handleTokenDelete))
 	mux.Handle("GET /api/v1/pairs/{a}/{b}", a.withSession(a.handlePair))

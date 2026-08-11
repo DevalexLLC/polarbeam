@@ -8,6 +8,8 @@
 package httpapi
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"slices"
@@ -15,6 +17,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/devalexllc/polarbeam/internal/server/auth"
 	"github.com/devalexllc/polarbeam/internal/server/store"
 )
 
@@ -124,4 +129,105 @@ func (a *api) handleUsersGet(w http.ResponseWriter, r *http.Request) {
 		"total":        total,
 		"login_months": monthsOut,
 	})
+}
+
+// handleUserPost creates a local account. The password is generated
+// server-side and returned exactly once — no weak admin-chosen credentials,
+// and the cleartext never touches the database (same posture as join
+// tokens). SSO accounts are never created here: they JIT-provision at
+// first login.
+func (a *api) handleUserPost(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Username string `json:"username"`
+		Role     string `json:"role"`
+	}
+	if !decodeStrict(w, r, &in) {
+		return
+	}
+	var problems []string
+	if strings.TrimSpace(in.Username) == "" {
+		problems = append(problems, "username is required")
+	}
+	if in.Role != "admin" && in.Role != "viewer" {
+		problems = append(problems, "role must be one of: admin, viewer")
+	}
+	if len(problems) > 0 {
+		writeError(w, http.StatusBadRequest, strings.Join(problems, "; "))
+		return
+	}
+
+	// 18 random bytes -> 24 base64url chars, comfortably past the CLI's
+	// 8-char minimum.
+	raw := make([]byte, 18)
+	if _, err := rand.Read(raw); err != nil {
+		internalError(w, "generate password", err)
+		return
+	}
+	password := base64.RawURLEncoding.EncodeToString(raw)
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		internalError(w, "hash password", err)
+		return
+	}
+	id, err := a.db.CreateUser(r.Context(), strings.TrimSpace(in.Username), hash, in.Role)
+	if err != nil {
+		writeStoreError(w, "create user", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"id":       id.String(),
+		"username": strings.TrimSpace(in.Username),
+		"role":     in.Role,
+		"password": password,
+	})
+}
+
+// userIDParam parses the {id} path segment, refusing to act on the caller's
+// own account — self-disable locks the admin out mid-session and
+// self-delete is never what anyone meant.
+func (a *api) userIDParam(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "user id must be a UUID")
+		return uuid.Nil, false
+	}
+	if s := sessionFrom(r.Context()); s != nil && s.UserID == id {
+		writeError(w, http.StatusConflict, "you cannot disable or delete your own account")
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+func (a *api) handleUserPut(w http.ResponseWriter, r *http.Request) {
+	id, ok := a.userIDParam(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		Disabled *bool `json:"disabled"`
+	}
+	if !decodeStrict(w, r, &in) {
+		return
+	}
+	if in.Disabled == nil {
+		writeError(w, http.StatusBadRequest, "disabled is required")
+		return
+	}
+	if err := a.db.SetUserDisabled(r.Context(), id, *in.Disabled); err != nil {
+		writeStoreError(w, "set user disabled", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{})
+}
+
+func (a *api) handleUserDelete(w http.ResponseWriter, r *http.Request) {
+	id, ok := a.userIDParam(w, r)
+	if !ok {
+		return
+	}
+	if err := a.db.DeleteUser(r.Context(), id); err != nil {
+		writeStoreError(w, "delete user", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{})
 }

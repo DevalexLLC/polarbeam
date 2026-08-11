@@ -45,12 +45,104 @@ func (s *Store) CreateUser(ctx context.Context, username, passwordHash, role str
 		username, passwordHash, role).Scan(&id)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-		return uuid.Nil, fmt.Errorf("user %q already exists", username)
+		return uuid.Nil, conflictf("user %q already exists", username)
 	}
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("create user: %w", err)
 	}
 	return id, nil
+}
+
+// lockUserAndActiveAdmins locks the target row AND every enabled admin row
+// FOR UPDATE inside tx, then reports the target's state and how many OTHER
+// enabled admins exist. Locking the whole enabled-admin set (not just the
+// target) is what makes the last-admin guard race-proof: two admins
+// concurrently disabling each other would otherwise each count the
+// still-uncommitted caller and both succeed (write skew under READ
+// COMMITTED). The ORDER BY gives concurrent transactions one lock order,
+// so they serialize instead of deadlocking.
+func lockUserAndActiveAdmins(ctx context.Context, tx pgx.Tx, id uuid.UUID) (role string, disabled bool, otherAdmins int64, err error) {
+	rows, err := tx.Query(ctx, `
+		SELECT id, role, disabled FROM users
+		 WHERE id = $1 OR (role = 'admin' AND NOT disabled)
+		 ORDER BY id
+		 FOR UPDATE`, id)
+	if err != nil {
+		return "", false, 0, err
+	}
+	defer rows.Close()
+
+	found := false
+	for rows.Next() {
+		var rowID uuid.UUID
+		var rowRole string
+		var rowDisabled bool
+		if err := rows.Scan(&rowID, &rowRole, &rowDisabled); err != nil {
+			return "", false, 0, err
+		}
+		if rowID == id {
+			found, role, disabled = true, rowRole, rowDisabled
+		} else if rowRole == "admin" && !rowDisabled {
+			otherAdmins++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", false, 0, err
+	}
+	if !found {
+		return "", false, 0, notFoundf("user %s does not exist", id)
+	}
+	return role, disabled, otherAdmins, nil
+}
+
+// SetUserDisabled flips a user's disabled flag. Disabling the last enabled
+// admin is refused — recovery would need container CLI access. Disabled
+// users lose their sessions on their next request (session lookups check
+// the flag); enabling is always allowed.
+func (s *Store) SetUserDisabled(ctx context.Context, id uuid.UUID, disabled bool) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("set user disabled %s: %w", id, err)
+	}
+	defer tx.Rollback(ctx)
+
+	role, cur, otherAdmins, err := lockUserAndActiveAdmins(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if disabled && !cur && role == "admin" && otherAdmins == 0 {
+		return conflictf("cannot disable the last enabled admin")
+	}
+	if _, err := tx.Exec(ctx, `UPDATE users SET disabled = $2 WHERE id = $1`, id, disabled); err != nil {
+		return fmt.Errorf("set user disabled %s: %w", id, err)
+	}
+	return tx.Commit(ctx)
+}
+
+// DeleteUser removes a user; their sessions cascade away immediately and
+// their sign-in history remains as a deleted identity (login_events has no
+// FK by design). Deleting the last enabled admin is refused, same as
+// disabling it. Deleting an SSO user does NOT revoke IdP access — a still-
+// authorized user is JIT-provisioned a fresh account on next login;
+// disabling is the revocation lever.
+func (s *Store) DeleteUser(ctx context.Context, id uuid.UUID) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("delete user %s: %w", id, err)
+	}
+	defer tx.Rollback(ctx)
+
+	role, disabled, otherAdmins, err := lockUserAndActiveAdmins(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if role == "admin" && !disabled && otherAdmins == 0 {
+		return conflictf("cannot delete the last enabled admin")
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM users WHERE id = $1`, id); err != nil {
+		return fmt.Errorf("delete user %s: %w", id, err)
+	}
+	return tx.Commit(ctx)
 }
 
 // GetUserByUsername returns the user or (nil, nil) when the username is

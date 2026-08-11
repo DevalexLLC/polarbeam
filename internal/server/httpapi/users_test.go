@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/devalexllc/polarbeam/internal/server/auth"
 	"github.com/devalexllc/polarbeam/internal/server/store"
 )
 
@@ -209,6 +210,118 @@ func TestUsersParamValidation(t *testing.T) {
 		if !strings.Contains(msg, want) {
 			t.Errorf("error %q missing %q", msg, want)
 		}
+	}
+}
+
+func TestUserCreate(t *testing.T) {
+	f := newFakeDB()
+	h := newTestAPI(t, f)
+	cookie, csrf := configLogin(t, h, f, "admin")
+
+	// Viewer and CSRF-less requests are rejected before the handler.
+	viewerCookie, viewerCSRF := configLogin(t, h, f, "viewer")
+	if w := doConfig(t, h, "POST", "/api/v1/users", `{"username":"dave","role":"viewer"}`, viewerCookie, viewerCSRF); w.Code != http.StatusForbidden {
+		t.Errorf("viewer create = %d, want 403", w.Code)
+	}
+	if w := doConfig(t, h, "POST", "/api/v1/users", `{"username":"dave","role":"viewer"}`, cookie, ""); w.Code != http.StatusForbidden {
+		t.Errorf("create without CSRF = %d, want 403", w.Code)
+	}
+
+	w := doConfig(t, h, "POST", "/api/v1/users", `{"username":"dave","role":"viewer"}`, cookie, csrf)
+	if w.Code != http.StatusOK {
+		t.Fatalf("create = %d: %s", w.Code, w.Body)
+	}
+	var created struct {
+		ID       string `json:"id"`
+		Username string `json:"username"`
+		Role     string `json:"role"`
+		Password string `json:"password"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatalf("bad body: %v", err)
+	}
+	if created.Username != "dave" || created.Role != "viewer" || len(created.Password) < 20 {
+		t.Errorf("created = %+v", created)
+	}
+	// The generated password is real: it verifies against the stored hash,
+	// and the cleartext was never persisted.
+	u := f.users["dave"]
+	if u == nil {
+		t.Fatal("dave not stored")
+	}
+	if ok, err := auth.VerifyPassword(created.Password, u.PasswordHash); err != nil || !ok {
+		t.Errorf("generated password does not verify: ok=%v err=%v", ok, err)
+	}
+
+	if w := doConfig(t, h, "POST", "/api/v1/users", `{"username":"dave","role":"viewer"}`, cookie, csrf); w.Code != http.StatusConflict {
+		t.Errorf("duplicate create = %d, want 409: %s", w.Code, w.Body)
+	}
+	if w := doConfig(t, h, "POST", "/api/v1/users", `{"username":"","role":"root"}`, cookie, csrf); w.Code != http.StatusBadRequest {
+		t.Errorf("invalid create = %d, want 400", w.Code)
+	} else {
+		msg := errBody(t, w)
+		for _, want := range []string{"username is required", "role must be"} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("error %q missing %q", msg, want)
+			}
+		}
+	}
+	// Unknown fields are client bugs, never dropped.
+	if w := doConfig(t, h, "POST", "/api/v1/users", `{"username":"eve","role":"viewer","password":"mine"}`, cookie, csrf); w.Code != http.StatusBadRequest {
+		t.Errorf("unknown field = %d, want 400", w.Code)
+	}
+}
+
+func TestUserDisableAndDelete(t *testing.T) {
+	f := newFakeDB()
+	h := newTestAPI(t, f)
+	cookie, csrf := configLogin(t, h, f, "admin")
+	f.addUser("bob", "hunter22222", "viewer", false)
+	bob := f.users["bob"]
+	self := f.users["user-admin"]
+
+	// Disable bob, then re-enable him.
+	if w := doConfig(t, h, "PUT", "/api/v1/users/"+bob.ID.String(), `{"disabled":true}`, cookie, csrf); w.Code != http.StatusOK {
+		t.Fatalf("disable bob = %d: %s", w.Code, w.Body)
+	}
+	if !f.users["bob"].Disabled {
+		t.Error("bob not disabled")
+	}
+	if w := doConfig(t, h, "PUT", "/api/v1/users/"+bob.ID.String(), `{"disabled":false}`, cookie, csrf); w.Code != http.StatusOK {
+		t.Fatalf("enable bob = %d: %s", w.Code, w.Body)
+	}
+	if f.users["bob"].Disabled {
+		t.Error("bob still disabled")
+	}
+
+	// Self-service lockout is refused before the store is consulted.
+	if w := doConfig(t, h, "PUT", "/api/v1/users/"+self.ID.String(), `{"disabled":true}`, cookie, csrf); w.Code != http.StatusConflict {
+		t.Errorf("self disable = %d, want 409: %s", w.Code, w.Body)
+	}
+	if w := doConfig(t, h, "DELETE", "/api/v1/users/"+self.ID.String(), "", cookie, csrf); w.Code != http.StatusConflict {
+		t.Errorf("self delete = %d, want 409: %s", w.Code, w.Body)
+	}
+
+	// Validation.
+	if w := doConfig(t, h, "PUT", "/api/v1/users/not-a-uuid", `{"disabled":true}`, cookie, csrf); w.Code != http.StatusBadRequest {
+		t.Errorf("bad uuid = %d, want 400", w.Code)
+	}
+	if w := doConfig(t, h, "PUT", "/api/v1/users/"+bob.ID.String(), `{}`, cookie, csrf); w.Code != http.StatusBadRequest {
+		t.Errorf("missing disabled = %d, want 400", w.Code)
+	}
+	if w := doConfig(t, h, "PUT", "/api/v1/users/"+uuid.New().String(), `{"disabled":true}`, cookie, csrf); w.Code != http.StatusNotFound {
+		t.Errorf("unknown id disable = %d, want 404", w.Code)
+	}
+
+	// Delete bob; his row is gone, a second delete 404s.
+	if w := doConfig(t, h, "DELETE", "/api/v1/users/"+bob.ID.String(), "", cookie, csrf); w.Code != http.StatusOK {
+		t.Fatalf("delete bob = %d: %s", w.Code, w.Body)
+	}
+	if f.users["bob"] != nil {
+		t.Error("bob still present after delete")
+	}
+	if w := doConfig(t, h, "DELETE", "/api/v1/users/"+bob.ID.String(), "", cookie, csrf); w.Code != http.StatusNotFound {
+		t.Errorf("second delete = %d, want 404", w.Code)
 	}
 }
 
