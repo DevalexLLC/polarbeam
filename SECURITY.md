@@ -65,7 +65,13 @@ with a pointer here, so please read this list first.
   checked on every RPC and by a 30-second sweep over live streams.
 - **The reverse proxy never terminates TLS.** It is SNI passthrough on
   443; agent mTLS is verified end to end inside the Go server, so the
-  proxy is deliberately not a trust boundary.
+  proxy is deliberately not a trust boundary for identity. It is,
+  however, the authoritative source of client addresses: it prepends a
+  PROXY protocol header that the server honors only when
+  `listen.proxy_protocol` is enabled. That is safe because the server's
+  ports are reachable only on the private compose network; exposing
+  8080/8443 directly while the knob is on would let anyone spoof client
+  addresses — the install guide forbids exposing them.
 - **The development stack ships known credentials.** The dev overlay
   seeds a dashboard login and self-signed certificates so `make up` works
   offline. It is for development only and must never be deployed;

@@ -31,8 +31,12 @@ done
 echo "bootstrap: seeding probe config"
 polarbeam-server target add --config "$CONFIG" \
     --name pg --address timescaledb --port 5432
+# Via the proxy, not server:8080 directly: with listen.proxy_protocol the
+# server rejects connections lacking a PROXY header, and going through the
+# proxy exercises the real production path anyway. SNI "proxy" is not the
+# gRPC SNI, so the default route lands on the dashboard.
 polarbeam-server target add --config "$CONFIG" \
-    --name dashboard --url https://server:8080/
+    --name dashboard --url https://proxy/
 
 # Plain assignment so a probe-list failure aborts the script (set -e) instead
 # of vanishing into a pipeline and reading as "already seeded".

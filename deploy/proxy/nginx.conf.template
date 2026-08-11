@@ -2,7 +2,8 @@
 #
 # TLS is NEVER terminated here. Agents' mTLS client-certificate verification
 # happens end-to-end in polarbeam-server; the proxy only inspects the
-# cleartext SNI in the ClientHello and routes the TCP stream:
+# cleartext SNI in the ClientHello and routes the TCP stream, prepending a
+# PROXY protocol v1 header so the server sees real client addresses:
 #
 #   ${POLARBEAM_GRPC_SNI}  -> server:8443  (agent gRPC, mTLS)
 #   anything else           -> server:8080  (dashboard HTTPS)
@@ -11,7 +12,9 @@
 # defined environment variables (POLARBEAM_GRPC_SNI, defaulted in the
 # proxy image), leaving nginx runtime $variables untouched, and renders
 # /etc/nginx/nginx.conf at start. Any SNI-capable proxy (haproxy,
-# traefik) can replace this image — passthrough is generic.
+# traefik) can replace this image — passthrough is generic, but the
+# replacement must also send PROXY protocol to both backends (or the
+# operator sets listen.proxy_protocol: false in server.yaml).
 
 user nginx;
 worker_processes auto;
@@ -44,6 +47,11 @@ stream {
         listen 443;
         ssl_preread on;
         proxy_pass $backend;
+        # Prepend a PROXY protocol v1 header on both routes so the server
+        # sees real client addresses (per-IP login rate limiting; the
+        # enrollment observed source). polarbeam-server must run with
+        # listen.proxy_protocol: true — both shipped configs do.
+        proxy_protocol on;
         proxy_connect_timeout 5s;
         # Long-lived agent config streams must not be idled out by the
         # proxy. gRPC keepalive pings flow every ~60s in both directions,

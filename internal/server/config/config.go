@@ -31,6 +31,13 @@ type Listen struct {
 	GRPCHostname string `yaml:"grpc_hostname"`
 	// HTTP is the dashboard HTTPS listener.
 	HTTP string `yaml:"http"`
+	// ProxyProtocol makes BOTH listeners require a PROXY protocol v1/v2
+	// header on every connection and adopt its source as the client
+	// address (login rate-limit keying, enrollment observed source). The
+	// bundled nginx proxy sends the header on both routes; enable this iff
+	// the fronting proxy does. When true, direct connections (no header)
+	// are rejected. Leave false for proxy-less deployments.
+	ProxyProtocol bool `yaml:"proxy_protocol"`
 }
 
 type DB struct {

@@ -206,9 +206,13 @@ func requireRole(role string, next http.Handler) http.Handler {
 	})
 }
 
-// clientIP is the rate-limit key. The SNI proxy is a TCP passthrough, so
-// RemoteAddr is the real client address (no X-Forwarded-For to trust or
-// spoof).
+// clientIP is the rate-limit key. RemoteAddr is the real client address only
+// proxy-less or when listen.proxy_protocol makes the listener adopt the
+// PROXY-header source; behind a passthrough proxy without it, every request
+// carries the proxy's address and this limiter degenerates into one global
+// bucket for the whole deployment — which is why the shipped compose configs
+// enable the knob. X-Forwarded-For can never exist here (the proxy does not
+// terminate TLS), so there is no header to trust or spoof.
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pires/go-proxyproto"
 )
 
 func TestHealthURL(t *testing.T) {
@@ -56,7 +58,7 @@ func TestProbeHealth(t *testing.T) {
 		w.Write([]byte("ok\n"))
 	}))
 	defer ok.Close()
-	if err := probeHealth(ok.URL+"/healthz", 5*time.Second); err != nil {
+	if err := probeHealth(ok.URL+"/healthz", 5*time.Second, false); err != nil {
 		t.Fatalf("probeHealth on a healthy server: %v", err)
 	}
 
@@ -65,7 +67,7 @@ func TestProbeHealth(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer down.Close()
-	if err := probeHealth(down.URL+"/healthz", 5*time.Second); err == nil {
+	if err := probeHealth(down.URL+"/healthz", 5*time.Second, false); err == nil {
 		t.Error("probeHealth on a 503: want error, got nil")
 	}
 
@@ -82,7 +84,7 @@ func TestProbeHealth(t *testing.T) {
 		<-r.Context().Done()
 	}))
 	defer stalled.Close()
-	if err := probeHealth(stalled.URL+"/healthz", 1*time.Second); err == nil {
+	if err := probeHealth(stalled.URL+"/healthz", 1*time.Second, false); err == nil {
 		t.Error("probeHealth against a server stalled mid-body: want error, got nil")
 	}
 
@@ -90,7 +92,32 @@ func TestProbeHealth(t *testing.T) {
 	closed := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	url := closed.URL
 	closed.Close()
-	if err := probeHealth(url+"/healthz", 2*time.Second); err == nil {
+	if err := probeHealth(url+"/healthz", 2*time.Second, false); err == nil {
 		t.Error("probeHealth against a closed listener: want error, got nil")
+	}
+}
+
+// TestProbeHealthProxyProtocol mirrors the listen.proxy_protocol server: the
+// listener REQUIREs a PROXY header before TLS, so the probe must send one —
+// and a probe that does not (knob mismatch) must fail loudly, not hang.
+func TestProbeHealthProxyProtocol(t *testing.T) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok\n"))
+	}))
+	srv.Listener = &proxyproto.Listener{
+		Listener: srv.Listener,
+		ConnPolicy: func(proxyproto.ConnPolicyOptions) (proxyproto.Policy, error) {
+			return proxyproto.REQUIRE, nil
+		},
+		ReadHeaderTimeout: time.Second,
+	}
+	srv.StartTLS()
+	defer srv.Close()
+
+	if err := probeHealth(srv.URL+"/healthz", 5*time.Second, true); err != nil {
+		t.Fatalf("probeHealth with PROXY header against a REQUIRE listener: %v", err)
+	}
+	if err := probeHealth(srv.URL+"/healthz", 5*time.Second, false); err == nil {
+		t.Error("probeHealth without PROXY header against a REQUIRE listener: want error, got nil")
 	}
 }

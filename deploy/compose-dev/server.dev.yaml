@@ -3,6 +3,7 @@ listen:
   grpc: ":8443"
   grpc_hostname: grpc.polarbeam.local
   http: ":8080"
+  proxy_protocol: true
 db:
   url: postgres://polarbeam:polarbeam-dev@timescaledb:5432/polarbeam
 tls:
