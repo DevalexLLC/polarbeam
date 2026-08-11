@@ -3,7 +3,7 @@
 #
 # The build stage runs on the BUILD platform and cross-compiles via
 # GOOS/GOARCH — multi-arch buildx never emulates the Go compiler.
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine AS build
 ARG VERSION=dev
 ARG COMMIT=none
 ARG TARGETOS TARGETARCH

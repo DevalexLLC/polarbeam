@@ -82,7 +82,7 @@ Go modules (vendor/)
 ================================================================================
 
 --------------------------------------------------------------------------------
-codeberg.org/miekg/dns v0.6.86
+codeberg.org/miekg/dns v0.6.90
 --------------------------------------------------------------------------------
 
 [codeberg.org/miekg/dns/LICENSE]
@@ -758,7 +758,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 --------------------------------------------------------------------------------
-golang.org/x/net v0.56.0
+golang.org/x/net v0.57.0
 --------------------------------------------------------------------------------
 
 [golang.org/x/net/LICENSE]
@@ -962,7 +962,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 --------------------------------------------------------------------------------
-google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478
+google.golang.org/genproto/googleapis/rpc v0.0.0-20260810153831-ec0a7760b754
 --------------------------------------------------------------------------------
 
 [google.golang.org/genproto/googleapis/rpc/LICENSE]
@@ -1171,7 +1171,7 @@ google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478
    limitations under the License.
 
 --------------------------------------------------------------------------------
-google.golang.org/grpc v1.82.1
+google.golang.org/grpc v1.83.0
 --------------------------------------------------------------------------------
 
 [google.golang.org/grpc/LICENSE]
@@ -1396,7 +1396,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 --------------------------------------------------------------------------------
-google.golang.org/protobuf v1.36.11
+google.golang.org/protobuf v1.36.12
 --------------------------------------------------------------------------------
 
 [google.golang.org/protobuf/LICENSE]

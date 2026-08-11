@@ -19,6 +19,8 @@ Full design + milestone plan: `docs/architecture.md`.
   New Go deps: `make vendor` in the same change. Never add a build step that
   fetches anything — the dev/build environment IS online, but the
   `offline-build` CI gate and the air-gap bundle must keep working without it.
+  The minimum Go version includes the security patch level in `go.mod`; keep
+  both Go build stages and `docs/airgap-build.md` pinned to that exact version.
 - **Control plane is containers-only** (proxy + server + TimescaleDB via
   compose). The nginx proxy does SNI passthrough on 443 — it never terminates
   TLS; agent mTLS is verified end-to-end in the Go server.

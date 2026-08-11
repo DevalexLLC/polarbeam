@@ -9,7 +9,7 @@
 # with cap_add: [NET_RAW] (required on runtimes whose default bounding set
 # drops it, e.g. podman; the binary also carries the file capability for
 # runtimes that honor it).
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine AS build
 ARG VERSION=dev
 ARG COMMIT=none
 ARG TARGETOS TARGETARCH
