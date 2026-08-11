@@ -386,6 +386,36 @@ export interface AuthProviders {
   oidc: { enabled: boolean }
 }
 
+// GET /api/v1/users (admin-only) — dashboard accounts with their
+// login-event aggregates, plus monthly sign-in totals for the activity
+// chart. Deleted identities are reconstructed from sign-in audit snapshots
+// and carry a null created_at. The list is filtered and paged server-side
+// (q, role, status, source, limit, offset); total ignores the page window.
+export interface UserAccount {
+  id: string
+  username: string
+  role: 'admin' | 'viewer'
+  auth_source: 'local' | 'oidc'
+  status: 'active' | 'disabled' | 'deleted'
+  login_count: number
+  last_login_at: string | null // null = never logged in
+  created_at: string | null // null = deleted identity
+}
+
+export interface LoginMonth {
+  month: string // "YYYY-MM", a UTC calendar month — never parse with Date
+  total: number
+  local: number
+  oidc: number
+  unique_users: number
+}
+
+export interface UsersResponse {
+  users: UserAccount[]
+  total: number
+  login_months: LoginMonth[]
+}
+
 // GET/PUT /api/v1/settings/oidc (admin-only). The client secret is
 // write-only: reads carry only client_secret_set.
 export interface OIDCSettings {

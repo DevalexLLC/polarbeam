@@ -8,6 +8,7 @@ import ProbesPanel from '../components/ProbesPanel'
 import SitesPanel from '../components/SitesPanel'
 import TargetsPanel from '../components/TargetsPanel'
 import ThresholdSettingsPanel from '../components/ThresholdSettings'
+import UsersPanel from '../components/UsersPanel'
 import type { SettingsResponse } from '../types'
 
 const POLL_MS = 30_000
@@ -19,6 +20,7 @@ const TABS: Array<{ tab: SettingsTab; href: string; label: string }> = [
   { tab: 'meshes', href: '#/settings/meshes', label: 'Meshes' },
   { tab: 'probes', href: '#/settings/probes', label: 'Probes' },
   { tab: 'enrollment', href: '#/settings/enrollment', label: 'Enrollment' },
+  { tab: 'users', href: '#/settings/users', label: 'Users' },
   { tab: 'authentication', href: '#/settings/authentication', label: 'Authentication' },
 ]
 
@@ -29,6 +31,7 @@ const TAB_INTRO: Record<SettingsTab, string> = {
   meshes: 'Site groups whose members probe each other in both directions.',
   probes: 'The measurement workload pushed to every affected agent within ~30 seconds.',
   enrollment: 'Single-use join tokens that enroll new agents into a site.',
+  users: 'Dashboard accounts across local and single sign-on, with sign-in activity.',
   authentication: 'Optional single sign-on via an OpenID Connect provider. Local accounts always keep working.',
 }
 
@@ -97,6 +100,8 @@ export default function Settings({
       </nav>
       {tab === 'authentication' ? (
         <OIDCSettingsPanel isAdmin={isAdmin} onAuthError={onAuthError} />
+      ) : tab === 'users' ? (
+        <UsersPanel isAdmin={isAdmin} onAuthError={onAuthError} />
       ) : tab === 'sites' ? (
         <SitesPanel isAdmin={isAdmin} onAuthError={onAuthError} />
       ) : tab === 'enrollment' ? (

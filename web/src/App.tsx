@@ -15,7 +15,15 @@ import Settings from './views/Settings'
 
 // Hash routing stays dependency-free and preserves the original route names
 // as aliases, so bookmarks survive the information-architecture cleanup.
-export type SettingsTab = 'thresholds' | 'sites' | 'targets' | 'meshes' | 'probes' | 'enrollment' | 'authentication'
+export type SettingsTab =
+  | 'thresholds'
+  | 'sites'
+  | 'targets'
+  | 'meshes'
+  | 'probes'
+  | 'enrollment'
+  | 'users'
+  | 'authentication'
 
 const SETTINGS_TABS: SettingsTab[] = [
   'thresholds',
@@ -24,6 +32,7 @@ const SETTINGS_TABS: SettingsTab[] = [
   'meshes',
   'probes',
   'enrollment',
+  'users',
   'authentication',
 ]
 
