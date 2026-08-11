@@ -5,6 +5,7 @@ import (
 	stdtls "crypto/tls"
 	"errors"
 	"net"
+	stdhttp "net/http"
 	"net/http/httptest"
 	"strconv"
 	"syscall"
@@ -218,6 +219,75 @@ func TestHTTPSInsecureAndClassExpect(t *testing.T) {
 	res = HTTP{}.Run(context.Background(), httpSpec(srv.URL, map[string]string{"http.expect_status": "4xx"}))
 	if res.Status != pb.ProbeStatus_PROBE_STATUS_TLS_FAILURE {
 		t.Errorf("status = %v (error %q), want TLS_FAILURE", res.Status, res.Error)
+	}
+}
+
+func TestHTTPTruncatedBody(t *testing.T) {
+	// Declare a 1000-byte body, send a fragment, drop the connection: the
+	// probe must fail loud instead of reporting a received response.
+	srv := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		conn, bufrw, err := w.(stdhttp.Hijacker).Hijack()
+		if err != nil {
+			t.Errorf("hijack: %v", err)
+			return
+		}
+		bufrw.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\nshort")
+		bufrw.Flush()
+		conn.Close()
+	}))
+	defer srv.Close()
+
+	res := HTTP{}.Run(context.Background(), httpSpec(srv.URL, nil))
+	if res.Status != pb.ProbeStatus_PROBE_STATUS_ERROR {
+		t.Errorf("status = %v (error %q), want ERROR", res.Status, res.Error)
+	}
+	if res.Error == "" {
+		t.Error("truncated body must carry an error message")
+	}
+	if res.Received != 0 {
+		t.Errorf("received = %d, want 0", res.Received)
+	}
+}
+
+func TestHTTPStalledBody(t *testing.T) {
+	// Headers arrive, then the body never does: the run deadline must turn
+	// the stalled read into TIMEOUT, not OK.
+	srv := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		w.Header().Set("Content-Length", "1000")
+		w.WriteHeader(stdhttp.StatusOK)
+		w.(stdhttp.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	res := HTTP{}.Run(ctx, httpSpec(srv.URL, nil))
+	if res.Status != pb.ProbeStatus_PROBE_STATUS_TIMEOUT {
+		t.Errorf("status = %v (error %q), want TIMEOUT", res.Status, res.Error)
+	}
+	if res.Received != 0 {
+		t.Errorf("received = %d, want 0", res.Received)
+	}
+	if res.Timings.TtfbUs < 0 {
+		t.Error("headers arrived, ttfb must be measured")
+	}
+}
+
+func TestHTTPBodyCapIsOK(t *testing.T) {
+	// A body larger than httpBodyLimit stops at the cap via clean EOF; that
+	// is success, not a read error.
+	srv := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		w.Write(make([]byte, 2*httpBodyLimit))
+	}))
+	defer srv.Close()
+
+	res := HTTP{}.Run(context.Background(), httpSpec(srv.URL, nil))
+	if res.Status != pb.ProbeStatus_PROBE_STATUS_OK {
+		t.Fatalf("status = %v, error = %q", res.Status, res.Error)
+	}
+	if res.Received != 1 {
+		t.Errorf("received = %d, want 1", res.Received)
 	}
 }
 
