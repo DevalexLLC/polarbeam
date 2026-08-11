@@ -81,9 +81,11 @@ func TestWorkersRunOnCadence(t *testing.T) {
 	waitFor(t, 2*time.Second, func() bool {
 		return prober.count("a") >= 3 && prober.count("b") >= 3
 	}, "workers did not run repeatedly")
-	if sunk.Load() < 6 {
-		t.Errorf("sink received %d results, want >= 6", sunk.Load())
-	}
+	// The prober's run count increments before its result reaches the sink,
+	// so the sink may still be one delivery behind here.
+	waitFor(t, 2*time.Second, func() bool {
+		return sunk.Load() >= 6
+	}, "sink did not receive 6 results")
 }
 
 func TestApplyDiffSemantics(t *testing.T) {
