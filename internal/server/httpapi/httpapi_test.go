@@ -43,6 +43,10 @@ type fakeDB struct {
 	siteConfigs []store.SiteAdminInfo
 	joinTokens  []store.JoinTokenInfo
 
+	userAccounts []store.UserAccountInfo
+	loginMonths  []store.LoginMonthStat
+	logins       []recordedLogin // appended by RecordLogin
+
 	oidcSettings *store.OIDCSettings
 	oidcUsers    map[string]*store.UserInfo // key: oidcKey(issuer, subject)
 	// beforeUpdateOIDCSettings, when set, runs at the top of
@@ -74,6 +78,7 @@ func (f *fakeDB) addUser(username, password, role string, disabled bool) {
 	}
 	f.users[username] = &store.UserInfo{
 		ID: uuid.New(), Username: username, PasswordHash: hash, Role: role, Disabled: disabled,
+		AuthSource: "local",
 	}
 }
 
@@ -111,6 +116,53 @@ func (f *fakeDB) DeleteSessionByTokenHash(_ context.Context, tokenHash []byte) e
 }
 
 func (f *fakeDB) DeleteExpiredSessions(_ context.Context) (int64, error) { return 0, nil }
+
+type recordedLogin struct {
+	UserID     uuid.UUID
+	Username   string
+	Role       string
+	AuthSource string
+}
+
+func (f *fakeDB) RecordLogin(_ context.Context, userID uuid.UUID, username, role, authSource string) error {
+	f.logins = append(f.logins, recordedLogin{UserID: userID, Username: username, Role: role, AuthSource: authSource})
+	return nil
+}
+
+// ListUserAccounts mirrors the store's filter semantics (substring match,
+// exact enums, offset/limit window, total ignoring the window) so handler
+// tests exercise the query-parameter plumbing.
+func (f *fakeDB) ListUserAccounts(_ context.Context, flt store.UserAccountFilter) ([]store.UserAccountInfo, int64, error) {
+	var matched []store.UserAccountInfo
+	for _, a := range f.userAccounts {
+		if flt.Query != "" && !strings.Contains(strings.ToLower(a.Username), strings.ToLower(flt.Query)) {
+			continue
+		}
+		if flt.Role != "" && a.Role != flt.Role {
+			continue
+		}
+		if flt.Status != "" && a.Status != flt.Status {
+			continue
+		}
+		if flt.Source != "" && a.AuthSource != flt.Source {
+			continue
+		}
+		matched = append(matched, a)
+	}
+	total := int64(len(matched))
+	if flt.Offset >= len(matched) {
+		return nil, total, nil
+	}
+	matched = matched[flt.Offset:]
+	if flt.Limit > 0 && len(matched) > flt.Limit {
+		matched = matched[:flt.Limit]
+	}
+	return matched, total, nil
+}
+
+func (f *fakeDB) MonthlyLoginStats(_ context.Context, _ int) ([]store.LoginMonthStat, error) {
+	return f.loginMonths, nil
+}
 
 func (f *fakeDB) ListSites(_ context.Context) ([]store.SiteInfo, error) { return f.sites, nil }
 func (f *fakeDB) ListAgents(_ context.Context) ([]store.AgentListInfo, error) {

@@ -922,6 +922,13 @@ network/TLS error. Saving applies immediately — no restart.
 
 ### Semantics worth knowing
 
+- **Settings → Users** (admin-only) lists every account — local and
+  federated — with its role, auth source, sign-in count, last sign-in,
+  and a 12-month sign-in activity chart, filterable by username, role,
+  status, and source. Deleted accounts stay listed (status "Deleted",
+  last-known details) as long as their sign-in history is retained. The
+  view is read-only; account changes still go through the CLI and SQL
+  levers described here.
 - Federated users are created on first successful login, keyed on the
   pair of issuer and the provider's immutable `sub` claim — renaming a
   user at the IdP renames it here on the next login instead of creating a

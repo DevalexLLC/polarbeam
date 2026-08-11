@@ -31,6 +31,9 @@ type DB interface {
 	TouchSession(ctx context.Context, id uuid.UUID) error
 	DeleteSessionByTokenHash(ctx context.Context, tokenHash []byte) error
 	DeleteExpiredSessions(ctx context.Context) (int64, error)
+	RecordLogin(ctx context.Context, userID uuid.UUID, username, role, authSource string) error
+	ListUserAccounts(ctx context.Context, f store.UserAccountFilter) ([]store.UserAccountInfo, int64, error)
+	MonthlyLoginStats(ctx context.Context, months int) ([]store.LoginMonthStat, error)
 
 	ListSites(ctx context.Context) ([]store.SiteInfo, error)
 	ListSitesConfig(ctx context.Context) ([]store.SiteAdminInfo, error)
@@ -180,6 +183,9 @@ func newHandler(sdb DB, static fs.FS, providers OIDCProviders) http.Handler {
 	// credentials metadata, not viewer material (GET /settings/oidc
 	// precedent).
 	mux.Handle("GET /api/v1/config/tokens", adminWrite(a.handleTokensGet))
+	// Account inventory (usernames, roles, login history) is admin-only for
+	// the same reason.
+	mux.Handle("GET /api/v1/users", adminWrite(a.handleUsersGet))
 	mux.Handle("POST /api/v1/config/tokens", adminWrite(a.handleTokenPost))
 	mux.Handle("DELETE /api/v1/config/tokens/{id}", adminWrite(a.handleTokenDelete))
 	mux.Handle("GET /api/v1/pairs/{a}/{b}", a.withSession(a.handlePair))

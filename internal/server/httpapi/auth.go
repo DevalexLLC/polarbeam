@@ -145,6 +145,11 @@ func (a *api) issueSession(w http.ResponseWriter, r *http.Request, user *store.U
 	if err := create(r.Context(), user.ID, tokenHash, csrf, expires); err != nil {
 		return "", fmt.Errorf("create session: %w", err)
 	}
+	// Audit metrics must never lock an authenticated user out; the session
+	// is already committed (same posture as the cleanup warn above).
+	if err := a.db.RecordLogin(r.Context(), user.ID, user.Username, user.Role, user.AuthSource); err != nil {
+		slog.Warn("httpapi: record login", "err", err)
+	}
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
