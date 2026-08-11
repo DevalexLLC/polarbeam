@@ -130,11 +130,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("listen http %s: %w", cfg.Listen.HTTP, err)
 	}
 	httpLis = maybeProxyProto(httpLis, cfg.Listen.ProxyProtocol)
-	httpServer := &http.Server{
-		Handler:           httpapi.New(st, web.Dist()),
-		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{dashboardCert}},
-		ReadHeaderTimeout: 10 * time.Second,
-	}
+	httpServer := newDashboardServer(httpapi.New(st, web.Dist()), dashboardCert)
 
 	errCh := make(chan error, 2)
 	go func() {
@@ -266,6 +262,23 @@ func (p *grpcCertProvider) rotate(ctx context.Context, authority *ca.CA, dir, ho
 		p.cert = cert
 		p.mu.Unlock()
 		slog.Info("rotated gRPC server certificate", "hostname", hostname, "not_after", cert.Leaf.NotAfter)
+	}
+}
+
+// newDashboardServer builds the dashboard HTTPS server. The read timeouts
+// bound the whole request read (slowloris/slow-body defence — the SNI
+// passthrough proxy cannot; httpapi caps body size, so 30 s is generous).
+// IdleTimeout is explicit because with ReadTimeout set and IdleTimeout
+// zero, ReadTimeout would govern keepalive idle too and churn the SPA's
+// polling connections. WriteTimeout stays unset: history queries and asset
+// downloads may legitimately outlast any request-read bound.
+func newDashboardServer(handler http.Handler, cert tls.Certificate) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}},
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       2 * time.Minute,
 	}
 }
 

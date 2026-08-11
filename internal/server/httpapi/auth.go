@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -50,7 +51,26 @@ func (a *api) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Username == "" || req.Password == "" {
+	dec := json.NewDecoder(r.Body)
+	if err := dec.Decode(&req); err != nil {
+		if isBodyTooLarge(w, err) {
+			return
+		}
+		writeError(w, http.StatusBadRequest, "username and password are required")
+		return
+	}
+	// Exactly one JSON value, like decodeStrict: a single Decode stops at
+	// the object's end, so without this read-to-EOF a request with no
+	// declared Content-Length could smuggle unbounded trailing data past
+	// the body cap.
+	if err := dec.Decode(new(json.RawMessage)); err != io.EOF {
+		if isBodyTooLarge(w, err) {
+			return
+		}
+		writeError(w, http.StatusBadRequest, "username and password are required")
+		return
+	}
+	if req.Username == "" || req.Password == "" {
 		writeError(w, http.StatusBadRequest, "username and password are required")
 		return
 	}

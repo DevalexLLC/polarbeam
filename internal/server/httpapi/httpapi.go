@@ -16,6 +16,12 @@ import (
 	"github.com/devalexllc/polarbeam/internal/server/store"
 )
 
+// maxRequestBody caps every request body (the SNI-passthrough proxy cannot,
+// so this is the only enforcement point). Without it an unauthenticated
+// client could stream an unbounded login body. The largest legitimate body
+// is a few KB (OIDC test's ca_pem), so 1 MiB is generous headroom.
+const maxRequestBody = 1 << 20
+
 // DB is the subset of *store.Store the dashboard needs. It is an interface
 // so handler tests run offline against a fake instead of a live PostgreSQL.
 type DB interface {
@@ -189,7 +195,24 @@ func newHandler(sdb DB, static fs.FS, providers OIDCProviders) http.Handler {
 
 	mux.Handle("/", staticHandler(static))
 
-	return withAPIHeaders(mux)
+	return withAPIHeaders(withBodyLimit(mux))
+}
+
+// withBodyLimit caps request bodies at maxRequestBody. A declared
+// Content-Length over the cap is rejected before any read; otherwise
+// overflow surfaces as *http.MaxBytesError from the handler's read (which
+// therefore must read to EOF — a decode that stops early would leave
+// oversized trailing data unmeasured), and the connection is closed after
+// the response.
+func withBodyLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ContentLength > maxRequestBody {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+		next.ServeHTTP(w, r)
+	})
 }
 
 // withAPIHeaders sets response headers common to the API namespace.

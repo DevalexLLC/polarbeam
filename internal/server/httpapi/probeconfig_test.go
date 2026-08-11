@@ -251,6 +251,20 @@ func TestConfigAuth(t *testing.T) {
 	}
 }
 
+// TestConfigBodyTooLarge proves the body-limit middleware wraps the
+// authenticated admin routes too, via decodeStrict's 413 mapping.
+func TestConfigBodyTooLarge(t *testing.T) {
+	f := newFakeDB()
+	h := newTestAPI(t, f)
+	cookie, csrf := configLogin(t, h, f, "admin")
+
+	body := `{"name":"` + strings.Repeat("a", maxRequestBody) + `"}`
+	w := doConfig(t, h, "POST", "/api/v1/config/targets", body, cookie, csrf)
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("oversized target body = %d, want 413: %s", w.Code, w.Body)
+	}
+}
+
 func TestConfigTargetValidationAndConflict(t *testing.T) {
 	f := newFakeDB()
 	h := newTestAPI(t, f)
