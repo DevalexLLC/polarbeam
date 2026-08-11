@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 
 	"github.com/devalexllc/polarbeam/internal/server/auth"
@@ -153,7 +154,7 @@ func (a *api) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	prov, _, err := a.providers.Provider(r.Context())
+	prov, cfg, err := a.providers.Provider(r.Context())
 	if err != nil {
 		c := "provider"
 		if errors.Is(err, oidcauth.ErrDisabled) {
@@ -185,7 +186,19 @@ func (a *api) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		fail("disabled", "user is disabled", errors.New("subject "+claims.Subject))
 		return
 	}
-	if _, err := a.issueSession(w, r, user); err != nil {
+	// The session insert revalidates cfg's provider identity inside its own
+	// transaction: this request has been holding cfg since before Exchange's
+	// IdP round-trips, and an admin may have switched providers (revoking
+	// every SSO session) in that window. Minting unchecked would hand the
+	// old provider's user a fresh session that outlives the revocation.
+	create := func(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time) error {
+		return a.db.CreateOIDCSession(ctx, userID, tokenHash, csrfToken, expiresAt, cfg.Issuer, cfg.ClientID)
+	}
+	if _, err := a.issueSession(w, r, user, create); err != nil {
+		if errors.Is(err, store.ErrProviderChanged) {
+			fail("config", "provider changed during login", err)
+			return
+		}
 		fail("internal", "issue session", err)
 		return
 	}
@@ -388,29 +401,24 @@ func (a *api) handleOIDCSettingsPut(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, strings.Join(problems, "; "))
 		return
 	}
-	// A different issuer or client is a different provider (the same rule
-	// that forces a fresh client_secret above): sessions issued under the
-	// old provider must not carry over. Revoke BEFORE persisting — if the
-	// delete fails the settings stay unchanged, so a retried PUT still sees
-	// the provider change and re-fires. Update-first would compare equal on
-	// retry and leave the stale sessions alive.
-	if in.Issuer != current.Issuer || in.ClientID != current.ClientID {
-		n, err := a.db.DeleteOIDCSessions(r.Context())
-		if err != nil {
-			internalError(w, "revoke oidc sessions", err)
-			return
-		}
-		if n > 0 {
-			slog.Info("httpapi: oidc provider changed; revoked sso sessions", "count", n)
-			warnings = append(warnings, "identity provider changed: all single sign-on sessions were signed out")
-		}
-	}
 	o := in.settings()
 	o.UpdatedBy = sessionFrom(r.Context()).Username
-	out, err := a.db.UpdateOIDCSettings(r.Context(), o, in.ClientSecret == "")
+	// A different issuer or client is a different provider (the same rule
+	// that forces a fresh client_secret above): sessions issued under the
+	// old provider must not carry over. The store revokes them in the same
+	// transaction as the settings write, under the settings row lock, so a
+	// login whose code exchange straddles this switch cannot slip a stale
+	// session past the revocation (CreateOIDCSession re-checks the provider
+	// under a share lock on the same row).
+	providerChanged := in.Issuer != current.Issuer || in.ClientID != current.ClientID
+	out, revoked, err := a.db.UpdateOIDCSettings(r.Context(), o, in.ClientSecret == "", providerChanged)
 	if err != nil {
 		internalError(w, "update oidc settings", err)
 		return
+	}
+	if revoked > 0 {
+		slog.Info("httpapi: oidc provider changed; revoked sso sessions", "count", revoked)
+		warnings = append(warnings, "identity provider changed: all single sign-on sessions were signed out")
 	}
 	// The next start/callback rebuilds the provider from the new row —
 	// settings apply without a restart.

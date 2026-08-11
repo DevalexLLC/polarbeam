@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -59,8 +60,37 @@ func (s *Store) GetOIDCSettings(ctx context.Context) (*OIDCSettings, error) {
 // the stored row. With keepSecret the stored client_secret survives (the PUT
 // convention: an empty secret in the request means "unchanged"); the handler
 // validates first, so the table CHECK firing here is a bug and stays loud.
-func (s *Store) UpdateOIDCSettings(ctx context.Context, o OIDCSettings, keepSecret bool) (*OIDCSettings, error) {
-	out, err := scanOIDCSettings(s.pool.QueryRow(ctx, `
+// With revokeSSO (a provider switch) every federated user's session is
+// deleted in the same transaction, after taking the settings row lock. The
+// lock pairs with CreateOIDCSession's share lock: a login racing the switch
+// either commits first — and its session is deleted here — or blocks until
+// this commits, re-reads the new provider identity, and fails. Either way no
+// old-provider session survives. Returns the number of sessions revoked.
+func (s *Store) UpdateOIDCSettings(ctx context.Context, o OIDCSettings, keepSecret, revokeSSO bool) (*OIDCSettings, int64, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, 0, fmt.Errorf("update oidc settings: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Lock before deleting, not just at the UPDATE: otherwise the delete
+	// could run while a racing CreateOIDCSession holds the share lock, and
+	// that login's session — committed while our UPDATE waits — would
+	// survive the revocation below.
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM oidc_settings WHERE id FOR UPDATE`); err != nil {
+		return nil, 0, fmt.Errorf("update oidc settings: %w", err)
+	}
+	var revoked int64
+	if revokeSSO {
+		tag, err := tx.Exec(ctx, `
+			DELETE FROM sessions USING users
+			 WHERE sessions.user_id = users.id AND users.auth_source = 'oidc'`)
+		if err != nil {
+			return nil, 0, fmt.Errorf("update oidc settings: revoke sso sessions: %w", err)
+		}
+		revoked = tag.RowsAffected()
+	}
+	out, err := scanOIDCSettings(tx.QueryRow(ctx, `
 		UPDATE oidc_settings
 		   SET enabled = $1, issuer = $2, client_id = $3,
 		       client_secret = CASE WHEN $12 THEN client_secret ELSE $4 END,
@@ -74,9 +104,49 @@ func (s *Store) UpdateOIDCSettings(ctx context.Context, o OIDCSettings, keepSecr
 		o.Scopes, o.UsernameClaim, o.RoleClaim, o.AdminValues, o.CAPEM,
 		o.UpdatedBy, keepSecret))
 	if err != nil {
-		return nil, fmt.Errorf("update oidc settings: %w", err)
+		return nil, 0, fmt.Errorf("update oidc settings: %w", err)
 	}
-	return out, nil
+	if err := tx.Commit(ctx); err != nil {
+		return nil, 0, fmt.Errorf("update oidc settings: %w", err)
+	}
+	return out, revoked, nil
+}
+
+// ErrProviderChanged is returned by CreateOIDCSession when the configured
+// provider is no longer the (enabled) one that authenticated the user.
+var ErrProviderChanged = errors.New("oidc provider configuration changed during login")
+
+// CreateOIDCSession stores a session for a federated user, but only after
+// re-checking — under a share lock on the settings row — that the provider
+// that authenticated the user (issuer + client_id) is still the configured,
+// enabled one. The callback holds its provider across the whole code
+// exchange (seconds of IdP round-trips), so an admin can switch providers
+// and revoke every SSO session inside that window; an unchecked insert would
+// then resurrect old-provider access for a full session TTL. The share lock
+// pairs with UpdateOIDCSettings's exclusive lock — see there.
+func (s *Store) CreateOIDCSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time, issuer, clientID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("create oidc session: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var enabled bool
+	var curIssuer, curClientID string
+	if err := tx.QueryRow(ctx,
+		`SELECT enabled, issuer, client_id FROM oidc_settings WHERE id FOR SHARE`).
+		Scan(&enabled, &curIssuer, &curClientID); err != nil {
+		return fmt.Errorf("create oidc session: %w", err)
+	}
+	if !enabled || curIssuer != issuer || curClientID != clientID {
+		return ErrProviderChanged
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO sessions (token_hash, user_id, csrf_token, expires_at) VALUES ($1, $2, $3, $4)`,
+		tokenHash, userID, csrfToken, expiresAt); err != nil {
+		return fmt.Errorf("create oidc session: %w", err)
+	}
+	return tx.Commit(ctx)
 }
 
 // UpsertOIDCUser JIT-provisions (or refreshes) a federated user keyed on the

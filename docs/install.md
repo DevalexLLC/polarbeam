@@ -949,7 +949,9 @@ network/TLS error. Saving applies immediately — no restart.
   them as unknown users.
 - Changing the issuer or client ID signs out every SSO session
   immediately (their roles came from the previous provider); local
-  sessions are unaffected. Accounts from the previous provider stay in
+  sessions are unaffected. An SSO login already in flight across the
+  switch fails loudly instead of completing — it authenticated against
+  the previous provider. Accounts from the previous provider stay in
   the database but are unreachable — identities are scoped to the issuer,
   so nobody can sign in to them through the new provider. To tidy them
   up:

@@ -186,7 +186,19 @@ func (f *fakeDB) GetOIDCSettings(_ context.Context) (*store.OIDCSettings, error)
 	return f.oidcSettings, nil
 }
 
-func (f *fakeDB) UpdateOIDCSettings(_ context.Context, o store.OIDCSettings, keepSecret bool) (*store.OIDCSettings, error) {
+func (f *fakeDB) UpdateOIDCSettings(_ context.Context, o store.OIDCSettings, keepSecret, revokeSSO bool) (*store.OIDCSettings, int64, error) {
+	var revoked int64
+	if revokeSSO {
+		for k, s := range f.sessions {
+			for _, u := range f.oidcUsers {
+				if u.ID == s.UserID {
+					delete(f.sessions, k)
+					revoked++
+					break
+				}
+			}
+		}
+	}
 	if keepSecret {
 		o.ClientSecret = ""
 		if f.oidcSettings != nil {
@@ -195,7 +207,7 @@ func (f *fakeDB) UpdateOIDCSettings(_ context.Context, o store.OIDCSettings, kee
 	}
 	o.UpdatedAt = time.Now()
 	f.oidcSettings = &o
-	return f.oidcSettings, nil
+	return f.oidcSettings, revoked, nil
 }
 
 // oidcKey mirrors the store's composite identity key: subjects are unique
@@ -222,18 +234,12 @@ func (f *fakeDB) UpsertOIDCUser(_ context.Context, issuer, subject, username, ro
 	return u, nil
 }
 
-func (f *fakeDB) DeleteOIDCSessions(_ context.Context) (int64, error) {
-	var n int64
-	for k, s := range f.sessions {
-		for _, u := range f.oidcUsers {
-			if u.ID == s.UserID {
-				delete(f.sessions, k)
-				n++
-				break
-			}
-		}
+func (f *fakeDB) CreateOIDCSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrf string, expiresAt time.Time, issuer, clientID string) error {
+	cur, _ := f.GetOIDCSettings(ctx)
+	if !cur.Enabled || cur.Issuer != issuer || cur.ClientID != clientID {
+		return store.ErrProviderChanged
 	}
-	return n, nil
+	return f.CreateSession(ctx, userID, tokenHash, csrf, expiresAt)
 }
 
 var testDist = fstest.MapFS{

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/devalexllc/polarbeam/internal/server/auth"
 	"github.com/devalexllc/polarbeam/internal/server/store"
@@ -97,7 +100,7 @@ func (a *api) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	csrf, err := a.issueSession(w, r, user)
+	csrf, err := a.issueSession(w, r, user, a.db.CreateSession)
 	if err != nil {
 		internalError(w, "issue session", err)
 		return
@@ -109,13 +112,19 @@ func (a *api) handleLogin(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// sessionCreator inserts the session row. Local login passes the DB's
+// CreateSession directly; the OIDC callback passes a closure over
+// CreateOIDCSession so the provider identity is revalidated inside the
+// insert's transaction (the code exchange can straddle a provider switch).
+type sessionCreator func(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time) error
+
 // issueSession mints a session for an already-authenticated user and sets
 // the session cookie; local login and the OIDC callback share it (the
 // callback redirects instead of writing JSON, so the response body is the
 // caller's). The Strict cookie is fine even on the callback's cross-site
 // redirect: browsers accept Set-Cookie there, and nothing before the SPA's
 // same-site /api fetches needs the cookie sent.
-func (a *api) issueSession(w http.ResponseWriter, r *http.Request, user *store.UserInfo) (csrf string, err error) {
+func (a *api) issueSession(w http.ResponseWriter, r *http.Request, user *store.UserInfo, create sessionCreator) (csrf string, err error) {
 	// Opportunistic cleanup keeps the sessions table bounded without a
 	// background job; expired rows are invisible to lookups either way.
 	if n, err := a.db.DeleteExpiredSessions(r.Context()); err != nil {
@@ -133,7 +142,7 @@ func (a *api) issueSession(w http.ResponseWriter, r *http.Request, user *store.U
 		return "", fmt.Errorf("mint csrf token: %w", err)
 	}
 	expires := time.Now().Add(sessionTTL)
-	if err := a.db.CreateSession(r.Context(), user.ID, tokenHash, csrf, expires); err != nil {
+	if err := create(r.Context(), user.ID, tokenHash, csrf, expires); err != nil {
 		return "", fmt.Errorf("create session: %w", err)
 	}
 

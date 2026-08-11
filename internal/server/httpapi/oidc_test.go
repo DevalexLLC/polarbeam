@@ -39,7 +39,10 @@ func (p *fakeProvider) Exchange(_ context.Context, code, verifier, nonce string)
 
 // fakeProviders implements OIDCProviders without any discovery.
 type fakeProviders struct {
-	provider    *fakeProvider
+	provider *fakeProvider
+	// settings returned alongside the provider (the row it was built from);
+	// nil defaults to enabledSettings().
+	settings    *store.OIDCSettings
 	providerErr error
 	testInfo    *oidcauth.DiscoveryInfo
 	testErr     error
@@ -50,7 +53,11 @@ func (f *fakeProviders) Provider(context.Context) (oidcauth.Provider, *store.OID
 	if f.providerErr != nil {
 		return nil, nil, f.providerErr
 	}
-	return f.provider, &store.OIDCSettings{Enabled: true}, nil
+	s := f.settings
+	if s == nil {
+		s = enabledSettings()
+	}
+	return f.provider, s, nil
 }
 
 func (f *fakeProviders) Test(context.Context, store.OIDCSettings) (*oidcauth.DiscoveryInfo, error) {
@@ -214,6 +221,7 @@ func stateCookie(value string) *http.Cookie {
 
 func TestOIDCCallbackHappyPath(t *testing.T) {
 	f := newFakeDB()
+	f.oidcSettings = enabledSettings()
 	fp := &fakeProviders{provider: &fakeProvider{
 		claims: &oidcauth.Claims{Issuer: testIssuer, Subject: "sub-1", Username: "alice@corp", Role: "admin"},
 	}}
@@ -261,6 +269,7 @@ func TestOIDCCallbackHappyPath(t *testing.T) {
 
 func TestOIDCCallbackRoleRefreshKeepsDisabled(t *testing.T) {
 	f := newFakeDB()
+	f.oidcSettings = enabledSettings()
 	f.addOIDCUser(testIssuer, "sub-1", "old-name", "admin", false)
 	fp := &fakeProviders{provider: &fakeProvider{
 		claims: &oidcauth.Claims{Issuer: testIssuer, Subject: "sub-1", Username: "new-name", Role: "viewer"},
@@ -283,9 +292,16 @@ func TestOIDCCallbackRoleRefreshKeepsDisabled(t *testing.T) {
 func TestOIDCCallbackScopedToIssuer(t *testing.T) {
 	f := newFakeDB()
 	old := f.addOIDCUser("https://old-idp.example", "sub-1", "old-admin", "admin", false)
-	fp := &fakeProviders{provider: &fakeProvider{
-		claims: &oidcauth.Claims{Issuer: "https://new-idp.example", Subject: "sub-1", Username: "eve", Role: "viewer"},
-	}}
+	// The configuration now points at the new provider.
+	cur := enabledSettings()
+	cur.Issuer = "https://new-idp.example"
+	f.oidcSettings = cur
+	fp := &fakeProviders{
+		provider: &fakeProvider{
+			claims: &oidcauth.Claims{Issuer: "https://new-idp.example", Subject: "sub-1", Username: "eve", Role: "viewer"},
+		},
+		settings: cur,
+	}
 	h := newTestAPIWithProviders(t, f, fp)
 
 	w := callback(t, h, "?code=c&state=st", stateCookie("st.n.v"))
@@ -314,6 +330,42 @@ func TestOIDCCallbackScopedToIssuer(t *testing.T) {
 	h.ServeHTTP(mw, req)
 	if mw.Code != http.StatusOK || !strings.Contains(mw.Body.String(), `"eve"`) {
 		t.Errorf("me with new-issuer session = %d %s, want eve", mw.Code, mw.Body)
+	}
+}
+
+// TestOIDCCallbackProviderChangedMidFlight pins the race guard: a callback
+// holds its provider across the code exchange's IdP round-trips, so an admin
+// can switch providers — revoking every SSO session — while it is in flight.
+// The late callback must not mint a fresh old-provider session behind the
+// revocation.
+func TestOIDCCallbackProviderChangedMidFlight(t *testing.T) {
+	f := newFakeDB()
+	// The stored settings already point at the NEW provider, as after a
+	// settings PUT that landed during this callback's exchange...
+	cur := enabledSettings()
+	cur.Issuer = "https://new-idp.example"
+	f.oidcSettings = cur
+	// ...but the request still holds the OLD provider and its claims.
+	fp := &fakeProviders{
+		provider: &fakeProvider{
+			claims: &oidcauth.Claims{Issuer: testIssuer, Subject: "sub-1", Username: "fed", Role: "admin"},
+		},
+		settings: enabledSettings(),
+	}
+	h := newTestAPIWithProviders(t, f, fp)
+
+	w := callback(t, h, "?code=c&state=st", stateCookie("st.n.v"))
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/#/sso-error=config" {
+		t.Fatalf("stale-provider callback = %d %q, want 303 to sso-error=config: %s",
+			w.Code, w.Header().Get("Location"), w.Body)
+	}
+	for _, c := range w.Result().Cookies() {
+		if c.Name == sessionCookie {
+			t.Error("stale-provider callback must not set a session cookie")
+		}
+	}
+	if len(f.sessions) != 0 {
+		t.Errorf("sessions = %d, want none", len(f.sessions))
 	}
 }
 
