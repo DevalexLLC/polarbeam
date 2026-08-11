@@ -24,10 +24,11 @@ jobs:
       # One image at a time: three legs pushing concurrently write a dozen
       # ghcr manifests (2 tags x 2 arches x 3 images) inside a few seconds,
       # which trips GitHub's SECONDARY rate limit — a burst throttle,
-      # unrelated to the hourly API quota. Observed on v0.3.0: the agent
-      # leg's :latest push 403'd with "exceeded a secondary rate limit"
-      # AFTER its :v0.3.0 manifest had landed, failing the job and skipping
-      # release/bundle/publish. Costs ~2 min of wall clock on a tag build.
+      # unrelated to the hourly API quota. Observed on a pre-release test
+      # tag: the agent leg's :latest push 403'd with "exceeded a secondary
+      # rate limit" AFTER its versioned manifest had landed, failing the
+      # job and skipping release/bundle/publish. Costs ~2 min of wall
+      # clock on a tag build.
       max-parallel: 1
       matrix:
         include:
