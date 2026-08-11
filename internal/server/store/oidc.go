@@ -56,32 +56,54 @@ func (s *Store) GetOIDCSettings(ctx context.Context) (*OIDCSettings, error) {
 	return o, nil
 }
 
+// ErrConcurrentProviderChange is returned by UpdateOIDCSettings when a
+// request that keeps the stored client_secret turns out — against the locked
+// row — to be switching providers: its validation ran against a snapshot
+// another write has since replaced. Keeping the secret would hand one
+// provider's credential to another; the caller must re-read and resubmit.
+var ErrConcurrentProviderChange = errors.New("oidc settings changed concurrently; a new client_secret is required")
+
 // UpdateOIDCSettings replaces the OIDC configuration atomically and returns
 // the stored row. With keepSecret the stored client_secret survives (the PUT
 // convention: an empty secret in the request means "unchanged"); the handler
 // validates first, so the table CHECK firing here is a bug and stays loud.
-// With revokeSSO (a provider switch) every federated user's session is
-// deleted in the same transaction, after taking the settings row lock. The
-// lock pairs with CreateOIDCSession's share lock: a login racing the switch
-// either commits first — and its session is deleted here — or blocks until
-// this commits, re-reads the new provider identity, and fails. Either way no
-// old-provider session survives. Returns the number of sessions revoked.
-func (s *Store) UpdateOIDCSettings(ctx context.Context, o OIDCSettings, keepSecret, revokeSSO bool) (*OIDCSettings, int64, error) {
+// A provider switch (issuer or client_id differing from the STORED row)
+// additionally deletes every federated user's session in the same
+// transaction. The comparison is made against the row locked here — never
+// against the handler's earlier read, which can be stale: with two writes
+// based on the same snapshot A, one switches A→B, a B login commits, and the
+// other writes A back while its snapshot comparison sees "unchanged" — its
+// skipped revocation would leave the B-issued session alive under an A
+// configuration. The row lock pairs with CreateOIDCSession's share lock: a
+// login racing the switch either commits first — and its session is deleted
+// here — or blocks until this commits, re-reads the new provider identity,
+// and fails. Either way no old-provider session survives. Returns the number
+// of sessions revoked.
+func (s *Store) UpdateOIDCSettings(ctx context.Context, o OIDCSettings, keepSecret bool) (*OIDCSettings, int64, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, 0, fmt.Errorf("update oidc settings: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
-	// Lock before deleting, not just at the UPDATE: otherwise the delete
-	// could run while a racing CreateOIDCSession holds the share lock, and
-	// that login's session — committed while our UPDATE waits — would
-	// survive the revocation below.
-	if _, err := tx.Exec(ctx, `SELECT 1 FROM oidc_settings WHERE id FOR UPDATE`); err != nil {
+	// Lock before deciding and deleting, not just at the UPDATE: otherwise
+	// the delete could run while a racing CreateOIDCSession holds the share
+	// lock, and that login's session — committed while our UPDATE waits —
+	// would survive the revocation below.
+	var curIssuer, curClientID, curSecret string
+	if err := tx.QueryRow(ctx,
+		`SELECT issuer, client_id, client_secret FROM oidc_settings WHERE id FOR UPDATE`).
+		Scan(&curIssuer, &curClientID, &curSecret); err != nil {
 		return nil, 0, fmt.Errorf("update oidc settings: %w", err)
 	}
+	providerChanged := curIssuer != o.Issuer || curClientID != o.ClientID
+	if providerChanged && keepSecret && curSecret != "" {
+		// The validation-layer rule (a provider switch demands a fresh
+		// secret), re-checked against the authoritative row.
+		return nil, 0, ErrConcurrentProviderChange
+	}
 	var revoked int64
-	if revokeSSO {
+	if providerChanged {
 		tag, err := tx.Exec(ctx, `
 			DELETE FROM sessions USING users
 			 WHERE sessions.user_id = users.id AND users.auth_source = 'oidc'`)

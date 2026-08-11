@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/devalexllc/polarbeam/internal/server/oidcauth"
 	"github.com/devalexllc/polarbeam/internal/server/store"
 )
@@ -782,6 +784,72 @@ func TestOIDCSettingsProviderChangeRevokesSSOSessions(t *testing.T) {
 				t.Errorf("sign-out warning present = %v, want %v (warnings: %v)", warned, tc.wantRevoke, out.Warnings)
 			}
 		})
+	}
+}
+
+// raceToProviderB simulates a concurrent settings write landing between a
+// PUT's validation (which read snapshot A) and its store transaction: the
+// stored row now points at provider B and a B login has committed a session.
+func raceToProviderB(f *fakeDB) {
+	f.beforeUpdateOIDCSettings = func() {
+		b := enabledSettings()
+		b.Issuer = "https://b-idp.example"
+		f.oidcSettings = b
+		u := f.addOIDCUser("https://b-idp.example", "sub-b", "bee", "admin", false)
+		f.sessions["b-tok"] = &store.SessionInfo{
+			ID: uuid.New(), UserID: u.ID, Username: "bee", Role: "admin",
+			ExpiresAt: time.Now().Add(time.Hour),
+		}
+	}
+}
+
+// TestOIDCSettingsStaleSnapshotStillRevokes pins the in-transaction
+// provider-change decision: with two writes based on the same snapshot A,
+// one switches A→B and a B login commits; the other writes A back. Its
+// handler-level comparison (A == A) sees no change, so only the store —
+// comparing against the row it locked — can catch the switch and revoke the
+// B-issued session.
+func TestOIDCSettingsStaleSnapshotStillRevokes(t *testing.T) {
+	f := newFakeDB()
+	f.oidcSettings = enabledSettings() // provider A, the snapshot this PUT reads
+	h := newTestAPI(t, f)
+	cookie, csrf := adminAndCookie(t, h, f)
+	raceToProviderB(f)
+
+	body := oidcSettingsBody() // issuer/client_id A — "unchanged" vs the snapshot
+	body["client_secret"] = "fresh"
+	w := doSettings(t, h, "PUT", "/api/v1/settings/oidc", body, cookie, csrf)
+	if w.Code != http.StatusOK {
+		t.Fatalf("put = %d: %s", w.Code, w.Body)
+	}
+	if _, alive := f.sessions["b-tok"]; alive {
+		t.Error("B-issued session survived the stale write back to A")
+	}
+	if !strings.Contains(w.Body.String(), "signed out") {
+		t.Errorf("response must warn about the sign-out: %s", w.Body)
+	}
+}
+
+// TestOIDCSettingsStaleKeptSecretConflicts: same race, but the stale write
+// keeps the stored secret. Applying it would submit provider B's secret to
+// provider A, so the write must be rejected outright — leaving B's
+// configuration, secret, and sessions intact and consistent.
+func TestOIDCSettingsStaleKeptSecretConflicts(t *testing.T) {
+	f := newFakeDB()
+	f.oidcSettings = enabledSettings()
+	h := newTestAPI(t, f)
+	cookie, csrf := adminAndCookie(t, h, f)
+	raceToProviderB(f)
+
+	w := doSettings(t, h, "PUT", "/api/v1/settings/oidc", oidcSettingsBody(), cookie, csrf) // secret kept
+	if w.Code != http.StatusConflict {
+		t.Fatalf("stale put with kept secret = %d, want 409: %s", w.Code, w.Body)
+	}
+	if f.oidcSettings.Issuer != "https://b-idp.example" {
+		t.Errorf("rejected write must not change settings, issuer = %q", f.oidcSettings.Issuer)
+	}
+	if _, alive := f.sessions["b-tok"]; !alive {
+		t.Error("rejected write must not revoke the still-valid B session")
 	}
 }
 

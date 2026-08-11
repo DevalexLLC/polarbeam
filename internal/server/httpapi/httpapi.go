@@ -75,7 +75,7 @@ type DB interface {
 	CurrentPaths(ctx context.Context, srcAgents, dstTargets []uuid.UUID) ([]store.CurrentPath, error)
 
 	GetOIDCSettings(ctx context.Context) (*store.OIDCSettings, error)
-	UpdateOIDCSettings(ctx context.Context, o store.OIDCSettings, keepSecret, revokeSSO bool) (*store.OIDCSettings, int64, error)
+	UpdateOIDCSettings(ctx context.Context, o store.OIDCSettings, keepSecret bool) (*store.OIDCSettings, int64, error)
 	UpsertOIDCUser(ctx context.Context, issuer, subject, username, role string) (*store.UserInfo, error)
 	CreateOIDCSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time, issuer, clientID string) error
 }

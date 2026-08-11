@@ -405,13 +405,18 @@ func (a *api) handleOIDCSettingsPut(w http.ResponseWriter, r *http.Request) {
 	o.UpdatedBy = sessionFrom(r.Context()).Username
 	// A different issuer or client is a different provider (the same rule
 	// that forces a fresh client_secret above): sessions issued under the
-	// old provider must not carry over. The store revokes them in the same
-	// transaction as the settings write, under the settings row lock, so a
-	// login whose code exchange straddles this switch cannot slip a stale
-	// session past the revocation (CreateOIDCSession re-checks the provider
-	// under a share lock on the same row).
-	providerChanged := in.Issuer != current.Issuer || in.ClientID != current.ClientID
-	out, revoked, err := a.db.UpdateOIDCSettings(r.Context(), o, in.ClientSecret == "", providerChanged)
+	// old provider must not carry over. The store detects the switch against
+	// the row it locks — not against `current`, which may be stale by now —
+	// and revokes in the same transaction as the settings write, so neither
+	// a login whose code exchange straddles the switch nor a concurrent
+	// settings write can leave a stale session behind (CreateOIDCSession
+	// re-checks the provider under a share lock on the same row).
+	out, revoked, err := a.db.UpdateOIDCSettings(r.Context(), o, in.ClientSecret == "")
+	if errors.Is(err, store.ErrConcurrentProviderChange) {
+		writeError(w, http.StatusConflict,
+			"settings changed concurrently: the stored client_secret belongs to a different provider; reload and enter a new client_secret")
+		return
+	}
 	if err != nil {
 		internalError(w, "update oidc settings", err)
 		return
