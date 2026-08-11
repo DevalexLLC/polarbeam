@@ -112,9 +112,17 @@ Full design + milestone plan: `docs/architecture.md`.
   with no bypass actors, so even the repo owner cannot push to it. Work on a
   branch, open a PR, merge once CI is green (no approval required — a
   maintainer can self-merge). The five checks are required BY NAME
-  (`offline-build`, `web-lint`, and the three `docker-build` matrix legs),
-  so renaming a CI job strands every PR on a check that no longer reports —
-  update the ruleset in the same change. Already committed to `main`
+  (`offline-build`, `web-lint`, `docker-build (server)`,
+  `docker-build (agent)`, `docker-build (proxy)` — the matrix legs carry an
+  explicit `name:` for this), so renaming a CI job strands every PR on a
+  check that no longer reports — update the ruleset in the same change.
+  A separate `cla.yml` (pull_request_target, org-forked CLA Assistant at
+  `DevalexLLC/cla-assistant-action`) blocks external PRs until the author
+  signs `CLA.md`; signatures live on the unprotected `cla-signatures`
+  branch. Never add a checkout of PR code to that workflow.
+  Actions hygiene: every `uses:` is pinned to a full commit SHA (the repo
+  setting requires it) with a trailing `# vX.Y.Z` comment; Dependabot bumps
+  both together. Already committed to `main`
   locally? `git switch -c <branch>` (the commits follow), then
   `git branch -f main origin/main` to rewind main.
 - `docs/install.md` is the zero-to-working-system operator guide: online image

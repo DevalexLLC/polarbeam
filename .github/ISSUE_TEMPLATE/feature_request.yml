@@ -1,0 +1,32 @@
+name: Feature request
+description: Propose an enhancement or new capability.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: >-
+        Describe the operational need, not just the feature — it often
+        suggests a better solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: >-
+        Scale (sites/targets), air-gapped or connected deployment, anything
+        else that shapes the design. Note PolarBEAM's hard constraint:
+        runtime binaries make no network calls beyond what an operator
+        explicitly configures, and builds are fully offline.
