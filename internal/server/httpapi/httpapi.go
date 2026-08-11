@@ -198,11 +198,18 @@ func newHandler(sdb DB, static fs.FS, providers OIDCProviders) http.Handler {
 	return withAPIHeaders(withBodyLimit(mux))
 }
 
-// withBodyLimit caps request bodies at maxRequestBody. Overflow surfaces as
-// *http.MaxBytesError from the handler's read, and the connection is closed
-// after the response.
+// withBodyLimit caps request bodies at maxRequestBody. A declared
+// Content-Length over the cap is rejected before any read; otherwise
+// overflow surfaces as *http.MaxBytesError from the handler's read (which
+// therefore must read to EOF — a decode that stops early would leave
+// oversized trailing data unmeasured), and the connection is closed after
+// the response.
 func withBodyLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ContentLength > maxRequestBody {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 		next.ServeHTTP(w, r)
 	})

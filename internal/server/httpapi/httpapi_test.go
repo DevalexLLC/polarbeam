@@ -336,6 +336,46 @@ func TestLoginBodyTooLarge(t *testing.T) {
 	}
 }
 
+// TestLoginBodyLimitBypass pins the paths where a body carries a complete
+// valid login object up front: a single Decode would stop at the object's
+// end and never read the oversized remainder, bypassing the cap.
+func TestLoginBodyLimitBypass(t *testing.T) {
+	valid := `{"username":"alice","password":"hunter22222"}`
+	cases := []struct {
+		name string
+		body io.Reader
+		want int
+	}{
+		// strings.Reader sets Content-Length: the declared-length check
+		// must reject without reading.
+		{"declared length over cap", strings.NewReader(valid + strings.Repeat(" ", maxRequestBody+1)), http.StatusRequestEntityTooLarge},
+		// The struct wrapper hides the reader type so no Content-Length is
+		// declared (chunked-style): only the post-object EOF check can
+		// surface the overflow.
+		{"undeclared length over cap", struct{ io.Reader }{strings.NewReader(valid + strings.Repeat(" ", maxRequestBody+1))}, http.StatusRequestEntityTooLarge},
+		{"trailing data under cap", strings.NewReader(valid + " {}"), http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeDB()
+			f.addUser("alice", "hunter22222", "admin", false)
+			h := newTestAPI(t, f)
+
+			req := httptest.NewRequest("POST", "/api/v1/auth/login", tc.body)
+			req.RemoteAddr = "203.0.113.7:1234"
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+
+			if w.Code != tc.want {
+				t.Fatalf("code = %d, want %d: %s", w.Code, tc.want, w.Body)
+			}
+			if len(w.Result().Cookies()) != 0 {
+				t.Error("rejected login must not set cookies")
+			}
+		})
+	}
+}
+
 // loginAndCookie logs in and returns the session cookie + CSRF token.
 func loginAndCookie(t *testing.T, h http.Handler, f *fakeDB) (*http.Cookie, string) {
 	t.Helper()
