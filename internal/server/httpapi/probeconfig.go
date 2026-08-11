@@ -22,18 +22,35 @@ import (
 
 // decodeStrict decodes exactly one JSON object, rejecting unknown fields
 // (a client bug or version skew — never silently dropped) and trailing
-// data. It writes the 400 itself; callers bail on false.
+// data. It writes the 400/413 itself; callers bail on false.
 func decodeStrict(w http.ResponseWriter, r *http.Request, v any) bool {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
+		if isBodyTooLarge(w, err) {
+			return false
+		}
 		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
 		return false
 	}
 	if err := dec.Decode(new(json.RawMessage)); err != io.EOF {
+		if isBodyTooLarge(w, err) {
+			return false
+		}
 		writeError(w, http.StatusBadRequest, "invalid body: trailing data after JSON object")
 		return false
 	}
+	return true
+}
+
+// isBodyTooLarge writes a 413 and reports true when err is the body-limit
+// middleware's overflow (withBodyLimit); any other error is the caller's.
+func isBodyTooLarge(w http.ResponseWriter, err error) bool {
+	var mbe *http.MaxBytesError
+	if !errors.As(err, &mbe) {
+		return false
+	}
+	writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
 	return true
 }
 

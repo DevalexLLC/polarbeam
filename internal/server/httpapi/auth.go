@@ -50,7 +50,14 @@ func (a *api) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Username == "" || req.Password == "" {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if isBodyTooLarge(w, err) {
+			return
+		}
+		writeError(w, http.StatusBadRequest, "username and password are required")
+		return
+	}
+	if req.Username == "" || req.Password == "" {
 		writeError(w, http.StatusBadRequest, "username and password are required")
 		return
 	}

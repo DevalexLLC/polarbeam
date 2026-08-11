@@ -1,9 +1,7 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -82,18 +80,7 @@ func (a *api) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) handleSettingsPut(w http.ResponseWriter, r *http.Request) {
 	var in thresholdsJSON
-	dec := json.NewDecoder(r.Body)
-	// An unknown key is a client bug (or a client newer than the server) —
-	// reject it rather than silently dropping the field.
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&in); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid settings body: "+err.Error())
-		return
-	}
-	// Exactly one JSON value: trailing data after the object is a malformed
-	// request, not something to silently ignore on a mutating endpoint.
-	if err := dec.Decode(new(json.RawMessage)); err != io.EOF {
-		writeError(w, http.StatusBadRequest, "invalid settings body: trailing data after JSON object")
+	if !decodeStrict(w, r, &in) {
 		return
 	}
 	if err := validateThresholds(in); err != nil {

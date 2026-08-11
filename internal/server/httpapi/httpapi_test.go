@@ -317,6 +317,25 @@ func TestLoginRateLimit(t *testing.T) {
 	}
 }
 
+func TestLoginBodyTooLarge(t *testing.T) {
+	f := newFakeDB()
+	f.addUser("alice", "hunter22222", "admin", false)
+	h := newTestAPI(t, f)
+
+	body := `{"username":"` + strings.Repeat("a", maxRequestBody) + `","password":"hunter22222"}`
+	req := httptest.NewRequest("POST", "/api/v1/auth/login", strings.NewReader(body))
+	req.RemoteAddr = "203.0.113.7:1234"
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized login = %d, want 413: %s", w.Code, w.Body)
+	}
+	if len(w.Result().Cookies()) != 0 {
+		t.Error("413 must not set cookies")
+	}
+}
+
 // loginAndCookie logs in and returns the session cookie + CSRF token.
 func loginAndCookie(t *testing.T, h http.Handler, f *fakeDB) (*http.Cookie, string) {
 	t.Helper()
