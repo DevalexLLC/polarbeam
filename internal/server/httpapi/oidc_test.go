@@ -259,6 +259,10 @@ func TestOIDCCallbackHappyPath(t *testing.T) {
 		t.Fatalf("JIT user = %+v", u)
 	}
 
+	if len(f.logins) != 1 || f.logins[0].AuthSource != "oidc" || f.logins[0].Role != "admin" || f.logins[0].UserID != u.ID {
+		t.Errorf("recorded logins = %+v, want one oidc admin event for the JIT user", f.logins)
+	}
+
 	// The minted session works for /auth/me.
 	req := httptest.NewRequest("GET", "/api/v1/auth/me", nil)
 	req.AddCookie(session)
@@ -368,6 +372,9 @@ func TestOIDCCallbackProviderChangedMidFlight(t *testing.T) {
 	}
 	if len(f.sessions) != 0 {
 		t.Errorf("sessions = %d, want none", len(f.sessions))
+	}
+	if len(f.logins) != 0 {
+		t.Errorf("recorded logins = %d, want none (event only after the session commits)", len(f.logins))
 	}
 }
 

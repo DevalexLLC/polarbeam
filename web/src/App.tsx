@@ -15,7 +15,15 @@ import Settings from './views/Settings'
 
 // Hash routing stays dependency-free and preserves the original route names
 // as aliases, so bookmarks survive the information-architecture cleanup.
-export type SettingsTab = 'thresholds' | 'sites' | 'targets' | 'meshes' | 'probes' | 'enrollment' | 'authentication'
+export type SettingsTab =
+  | 'thresholds'
+  | 'sites'
+  | 'targets'
+  | 'meshes'
+  | 'probes'
+  | 'enrollment'
+  | 'users'
+  | 'authentication'
 
 const SETTINGS_TABS: SettingsTab[] = [
   'thresholds',
@@ -24,6 +32,7 @@ const SETTINGS_TABS: SettingsTab[] = [
   'meshes',
   'probes',
   'enrollment',
+  'users',
   'authentication',
 ]
 
@@ -224,7 +233,12 @@ export default function App() {
         ) : route.view === 'agents' ? (
           <Agents onAuthError={onAuthError} />
         ) : route.view === 'settings' ? (
-          <Settings tab={route.tab} isAdmin={user.role === 'admin'} onAuthError={onAuthError} />
+          <Settings
+            tab={route.tab}
+            isAdmin={user.role === 'admin'}
+            username={user.username}
+            onAuthError={onAuthError}
+          />
         ) : route.view === 'about' ? (
           <About version={serverVersion} />
         ) : (

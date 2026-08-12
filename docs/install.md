@@ -922,6 +922,15 @@ network/TLS error. Saving applies immediately — no restart.
 
 ### Semantics worth knowing
 
+- **Settings → Users** (admin-only) lists every account — local and
+  federated — with its role, auth source, sign-in count, last sign-in,
+  and a 12-month sign-in activity chart, filterable by username, role,
+  status, and source. Deleted accounts stay listed (status "Deleted",
+  last-known details) as long as their sign-in history is retained.
+  Admins can also create local users there (the password is generated
+  and shown once), and disable, re-enable, or delete accounts — you
+  cannot act on your own account, and the last enabled admin is
+  protected. The CLI (`user add`) and SQL levers below keep working.
 - Federated users are created on first successful login, keyed on the
   pair of issuer and the provider's immutable `sub` claim — renaming a
   user at the IdP renames it here on the next login instead of creating a
@@ -935,8 +944,11 @@ network/TLS error. Saving applies immediately — no restart.
   dashboard sessions — sessions read the user row on every request, so a
   demotion (or promotion) at the IdP lands everywhere as soon as the user
   next completes an SSO login.
-- To revoke one federated user's access without touching the IdP, set its
-  `disabled` flag (same lever as local users; there is no CLI for it yet):
+- To revoke one federated user's access without touching the IdP, disable
+  it in Settings → Users, or set its `disabled` flag directly (same lever
+  as local users). Note that *deleting* a federated user does not revoke
+  access: a user the IdP still authorizes is re-provisioned a fresh
+  account on their next SSO login — disabling is the revocation lever.
 
   ```sh
   docker compose exec timescaledb psql -U polarbeam -d polarbeam -c \

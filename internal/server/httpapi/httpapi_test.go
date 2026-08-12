@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -43,6 +44,10 @@ type fakeDB struct {
 	siteConfigs []store.SiteAdminInfo
 	joinTokens  []store.JoinTokenInfo
 
+	userAccounts []store.UserAccountInfo
+	loginMonths  []store.LoginMonthStat
+	logins       []recordedLogin // appended by RecordLogin
+
 	oidcSettings *store.OIDCSettings
 	oidcUsers    map[string]*store.UserInfo // key: oidcKey(issuer, subject)
 	// beforeUpdateOIDCSettings, when set, runs at the top of
@@ -74,6 +79,7 @@ func (f *fakeDB) addUser(username, password, role string, disabled bool) {
 	}
 	f.users[username] = &store.UserInfo{
 		ID: uuid.New(), Username: username, PasswordHash: hash, Role: role, Disabled: disabled,
+		AuthSource: "local",
 	}
 }
 
@@ -111,6 +117,116 @@ func (f *fakeDB) DeleteSessionByTokenHash(_ context.Context, tokenHash []byte) e
 }
 
 func (f *fakeDB) DeleteExpiredSessions(_ context.Context) (int64, error) { return 0, nil }
+
+type recordedLogin struct {
+	UserID     uuid.UUID
+	Username   string
+	Role       string
+	AuthSource string
+}
+
+// RecordLogin snapshots from the user row like the store's INSERT..SELECT.
+func (f *fakeDB) RecordLogin(_ context.Context, userID uuid.UUID) error {
+	u := f.userByID(userID)
+	if u == nil {
+		return fmt.Errorf("record login: user %s vanished before the event was written", userID)
+	}
+	f.logins = append(f.logins, recordedLogin{UserID: userID, Username: u.Username, Role: u.Role, AuthSource: u.AuthSource})
+	return nil
+}
+
+func (f *fakeDB) CreateUser(_ context.Context, username, passwordHash, role string) (uuid.UUID, error) {
+	if f.users[username] != nil {
+		return uuid.Nil, fmt.Errorf("user %q already exists%w", username, store.ErrConflict)
+	}
+	u := &store.UserInfo{ID: uuid.New(), Username: username, PasswordHash: passwordHash, Role: role, AuthSource: "local"}
+	f.users[username] = u
+	return u.ID, nil
+}
+
+func (f *fakeDB) userByID(id uuid.UUID) *store.UserInfo {
+	for _, u := range f.users {
+		if u.ID == id {
+			return u
+		}
+	}
+	return nil
+}
+
+// lastActiveAdminGuard mirrors the store's refusal to disable or delete the
+// only enabled admin.
+func (f *fakeDB) lastActiveAdminGuard(target *store.UserInfo, verb string) error {
+	if target.Role != "admin" || target.Disabled {
+		return nil
+	}
+	for _, u := range f.users {
+		if u.ID != target.ID && u.Role == "admin" && !u.Disabled {
+			return nil
+		}
+	}
+	return fmt.Errorf("cannot %s the last enabled admin%w", verb, store.ErrConflict)
+}
+
+func (f *fakeDB) SetUserDisabled(_ context.Context, id uuid.UUID, disabled bool) error {
+	u := f.userByID(id)
+	if u == nil {
+		return fmt.Errorf("user %s does not exist%w", id, store.ErrNotFound)
+	}
+	if disabled {
+		if err := f.lastActiveAdminGuard(u, "disable"); err != nil {
+			return err
+		}
+	}
+	u.Disabled = disabled
+	return nil
+}
+
+func (f *fakeDB) DeleteUser(_ context.Context, id uuid.UUID) error {
+	u := f.userByID(id)
+	if u == nil {
+		return fmt.Errorf("user %s does not exist%w", id, store.ErrNotFound)
+	}
+	if err := f.lastActiveAdminGuard(u, "delete"); err != nil {
+		return err
+	}
+	delete(f.users, u.Username)
+	return nil
+}
+
+// ListUserAccounts mirrors the store's filter semantics (substring match,
+// exact enums, offset/limit window, total ignoring the window) so handler
+// tests exercise the query-parameter plumbing.
+func (f *fakeDB) ListUserAccounts(_ context.Context, flt store.UserAccountFilter) ([]store.UserAccountInfo, int64, error) {
+	var matched []store.UserAccountInfo
+	for _, a := range f.userAccounts {
+		if flt.Query != "" && !strings.Contains(strings.ToLower(a.Username), strings.ToLower(flt.Query)) {
+			continue
+		}
+		if flt.Role != "" && a.Role != flt.Role {
+			continue
+		}
+		if flt.Status != "" && a.Status != flt.Status {
+			continue
+		}
+		if flt.Source != "" && a.AuthSource != flt.Source {
+			continue
+		}
+		matched = append(matched, a)
+	}
+	total := int64(len(matched))
+	if flt.Offset >= len(matched) {
+		return nil, total, nil
+	}
+	matched = matched[flt.Offset:]
+	if flt.Limit > 0 && len(matched) > flt.Limit {
+		matched = matched[:flt.Limit]
+	}
+	return matched, total, nil
+}
+
+func (f *fakeDB) MonthlyLoginStats(_ context.Context, _ int) ([]store.LoginMonthStat, error) {
+	return f.loginMonths, nil
+}
 
 func (f *fakeDB) ListSites(_ context.Context) ([]store.SiteInfo, error) { return f.sites, nil }
 func (f *fakeDB) ListAgents(_ context.Context) ([]store.AgentListInfo, error) {

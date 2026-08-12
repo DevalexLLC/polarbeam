@@ -26,6 +26,12 @@
   --series-a: #2a78d6; /* outbound beam, categorical slot 1 */
   --series-b: #d55181; /* return beam, categorical slot 5 */
 
+  /* Settings → Users sign-in chart: local wears the accent, SSO the slot-5
+     magenta. Validated as a categorical pair (CVD ΔE ≥ 17, ≥3:1 contrast)
+     on both surfaces. */
+  --chart-local: var(--accent);
+  --chart-oidc: var(--series-b);
+
   --status-ok: #0ca30c;
   --status-degraded: #8a6100;
   --status-down: #b4232d;
@@ -75,6 +81,10 @@
   --focus: #818cf8;
 
   --series-a: #3987e5;
+
+  /* The dark accent (#818cf8, OKLCH L 0.68) sits just above the chart-mark
+     lightness band, so the chart takes the nearest passing indigo step. */
+  --chart-local: #7b87f7;
 
   --status-degraded: #ffc247;
   --status-down: #ff6b72;
@@ -2714,6 +2724,149 @@ td.fleet-uptime {
    flips underneath the strip instead of rendering off-screen. */
 .strip-tip-below {
   transform: translate(-50%, 10px);
+}
+
+/* Settings → Users: monthly sign-in chart (stacked local/SSO bars, hover
+   card via .strip-tip like the fleet strips). */
+.login-bars {
+  display: block;
+  width: 100%;
+  height: 140px;
+  margin-top: 0.5rem;
+}
+
+.login-bar-local {
+  fill: var(--chart-local);
+}
+.login-bar-oidc {
+  fill: var(--chart-oidc);
+}
+.login-bar-zero {
+  fill: var(--border-strong);
+}
+
+.login-bars-labels {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  margin-top: 0.35rem;
+  color: var(--ink-3);
+  font-size: 0.72rem;
+  text-align: center;
+}
+
+.login-bars-legend {
+  display: flex;
+  gap: 1rem;
+  margin-top: 0.6rem;
+  color: var(--ink-2);
+  font-size: 0.8rem;
+}
+
+.login-bars-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.swatch.chart-local {
+  background: var(--chart-local);
+}
+.swatch.chart-oidc {
+  background: var(--chart-oidc);
+}
+
+/* Accounts table controls: search + segmented filters above, pager below. */
+.users-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.users-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.users-pager-buttons {
+  display: inline-flex;
+  gap: 0.5rem;
+}
+
+.users-pager .secondary-button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+/* Row actions: a real table cell (config-actions' flex breaks table-cell
+   layout and jumbles row borders), right-aligned flat text buttons instead
+   of outlined ones — two outlined buttons per row read as chrome. */
+td.users-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+td.users-actions .inline-confirm {
+  min-height: 0;
+  padding: 0.15rem 0.4rem;
+  border: none;
+  background: none;
+  color: var(--ink-2);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+td.users-actions .inline-confirm:hover {
+  color: var(--ink);
+  background: none;
+  text-decoration: underline;
+}
+
+td.users-actions .inline-confirm.armed {
+  color: var(--status-down);
+  background: none;
+}
+
+td.users-actions .inline-confirm:disabled {
+  color: var(--ink-3);
+  opacity: 0.55;
+  text-decoration: none;
+}
+
+/* Create-user modal: native <dialog> wearing the card look. */
+.users-dialog {
+  margin: auto;
+  width: min(26rem, calc(100vw - 2rem));
+  padding: 1.25rem 1.4rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.users-dialog::backdrop {
+  background: rgb(0 0 0 / 0.45);
+}
+
+.users-dialog h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+}
+
+.users-dialog .section-intro {
+  margin: 0 0 1rem;
+}
+
+.users-dialog-foot {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 1.1rem;
 }
 
 .status-marker {
