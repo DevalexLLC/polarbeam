@@ -299,7 +299,18 @@ export default function OIDCSettingsPanel({
           provider&apos;s stable subject. Local accounts — including the seeded admin — always keep working as
           break-glass access, whatever the state of the provider.
         </p>
-        <div className="config-form">
+        {/* A real form, not a div: the client secret is a password field,
+            and outside a form Chrome logs a DOM warning and password
+            managers cannot associate the field. Submit = Save, so Enter in
+            a text field saves once the form is dirty (the disabled default
+            button blocks implicit submission until then). */}
+        <form
+          className="config-form"
+          onSubmit={(e) => {
+            e.preventDefault()
+            void save()
+          }}
+        >
           <label className="oidc-enable">
             <input
               type="checkbox"
@@ -383,12 +394,12 @@ export default function OIDCSettingsPanel({
               <button type="button" className="secondary-button" onClick={test} disabled={testing || saving}>
                 {testing ? 'Testing…' : 'Test connection'}
               </button>
-              <button className="primary" onClick={save} disabled={saving || !dirty}>
+              <button type="submit" className="primary" disabled={saving || !dirty}>
                 {saving ? 'Saving…' : 'Save'}
               </button>
             </span>
           </div>
-        </div>
+        </form>
       </section>
     </>
   )
