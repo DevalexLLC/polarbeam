@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import { MAP_DOTS, MAP_VIEW_H, MAP_VIEW_W } from '../assets/mapGeo'
 import { fmtLatency } from '../format'
 import { projectMap } from '../geo'
+import { bubbleRadius, declutter, type DeclutterNode } from '../mapLayout'
 import { directionSeverity, SEVERITY_LABEL, worst, type Severity } from '../severity'
 import type { MatrixCell, Site, ThresholdSettings } from '../types'
 
@@ -39,6 +40,17 @@ function newStats(): SiteStats {
   }
 }
 
+interface PlacedSite {
+  site: Site
+  x: number // display center after declutter — markers AND the info card use this
+  y: number
+  anchorX: number // true projection — what the leader mark points back to
+  anchorY: number
+  r: number
+  hitR: number
+  displaced: boolean // shifted far enough to warrant an anchor mark
+}
+
 export default function WorldMap({
   sites,
   cells,
@@ -69,7 +81,7 @@ export default function WorldMap({
   // would only invent a second vocabulary for one concept.
   /* oxlint-disable no-shadow */
   const { placed, unplaced, siteSeverity, siteStats } = useMemo(() => {
-    const placed = sites.filter((s) => s.latitude != null && s.longitude != null)
+    const withCoords = sites.filter((s) => s.latitude != null && s.longitude != null)
     const unplaced = sites.filter((s) => s.latitude == null || s.longitude == null)
 
     // Every site's severity folds all cells touching it in either direction,
@@ -125,6 +137,40 @@ export default function WorldMap({
       }
     }
     for (const stats of siteStats.values()) stats.peers.sort()
+
+    // Declutter layout, last because radii need each site's degree. The
+    // name sort is the determinism anchor: declutter's output must not
+    // depend on API response ordering. Stability across refreshes is free —
+    // degree comes from pair topology, not per-refresh measurements, so
+    // routine polling reproduces identical layouts.
+    // toSorted would be cleaner but needs the ES2023 lib; sorting a fresh
+    // copy mutates nothing the caller sees.
+    // oxlint-disable-next-line unicorn/no-array-sort
+    const ordered = [...withCoords].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    const nodes: DeclutterNode[] = ordered.map((s) => {
+      const { x, y } = projectMap(s.longitude!, s.latitude!)
+      return { x, y, hitR: Math.max(12, bubbleRadius(siteStats.get(s.name)!.degree)) }
+    })
+    const laidOut = declutter(nodes, { w: MAP_VIEW_W, h: MAP_VIEW_H })
+    const layoutByName = new Map<string, PlacedSite>()
+    ordered.forEach((s, i) => {
+      const r = bubbleRadius(siteStats.get(s.name)!.degree)
+      // The 3 px threshold keeps sub-visible nudges and float noise from
+      // sprouting anchor marks.
+      const displaced = Math.hypot(laidOut[i].x - nodes[i].x, laidOut[i].y - nodes[i].y) > 3
+      layoutByName.set(s.name, {
+        site: s,
+        x: laidOut[i].x,
+        y: laidOut[i].y,
+        anchorX: nodes[i].x,
+        anchorY: nodes[i].y,
+        r,
+        hitR: nodes[i].hitR,
+        displaced,
+      })
+    })
+    // Back in the original sites order so DOM and tab order are unchanged.
+    const placed = withCoords.map((s) => layoutByName.get(s.name)!)
     return { placed, unplaced, siteSeverity, siteStats }
   }, [sites, cells, thresholds])
   /* oxlint-enable no-shadow */
@@ -178,10 +224,14 @@ export default function WorldMap({
 
   const togglePin = (name: string) => setPinned((p) => (p === name ? null : name))
   // The pinned site holds the info card open; hover previews another site.
-  const shownSite = placed.find((s) => s.name === (hovered ?? pinned)) ?? null
-  const shownPoint = shownSite ? projectMap(shownSite.longitude!, shownSite.latitude!) : null
-  const shownStats = shownSite ? siteStats.get(shownSite.name) : null
-  const shownSev = shownSite ? sevOf(shownSite.name) : null
+  // The card anchors to the DISPLAY position, not the raw projection — a
+  // decluttered bubble may sit a nudge away from its city, and the card
+  // must stay attached to the bubble the pointer is on.
+  const shown = placed.find((p) => p.site.name === (hovered ?? pinned)) ?? null
+  const shownSite = shown ? shown.site : null
+  const shownPoint = shown ? { x: shown.x, y: shown.y } : null
+  const shownStats = shown ? siteStats.get(shown.site.name) : null
+  const shownSev = shown ? sevOf(shown.site.name) : null
 
   return (
     <>
@@ -194,11 +244,23 @@ export default function WorldMap({
         >
           <rect className="map-bg" width={MAP_VIEW_W} height={MAP_VIEW_H} onClick={() => setPinned(null)} />
           <path className="map-dotgrid" d={DOT_GRID_D} />
-          {placed.map((s) => {
-            const { x, y } = projectMap(s.longitude!, s.latitude!)
+          {/* A nudged bubble no longer sits exactly on its city; the anchor
+              dot keeps the map honest about the true projected location.
+              Decorative only (each site's aria-label already names it), and
+              painted under the markers so it never intercepts events. */}
+          <g className="map-leaders" aria-hidden="true">
+            {placed
+              .filter((p) => p.displaced)
+              .map((p) => (
+                <g key={p.site.name}>
+                  <line className="map-leader" x1={p.anchorX} y1={p.anchorY} x2={p.x} y2={p.y} />
+                  <circle className="map-anchor-dot" cx={p.anchorX} cy={p.anchorY} r={1.8} />
+                </g>
+              ))}
+          </g>
+          {placed.map((p) => {
+            const { site: s, x, y, r } = p
             const sev = sevOf(s.name)
-            const stats = siteStats.get(s.name) ?? newStats()
-            const r = Math.max(9, Math.min(24, 8 + 3.5 * Math.sqrt(stats.degree)))
             const title = `${s.display_name || s.name} · ${SEVERITY_LABEL[sev]}${s.location ? ` · ${s.location}` : ''}`
             return (
               <g
@@ -221,7 +283,7 @@ export default function WorldMap({
                 }}
               >
                 <title>{title}</title>
-                <circle className="map-site-hit" cx={x} cy={y} r={Math.max(12, r)} />
+                <circle className="map-site-hit" cx={x} cy={y} r={p.hitR} />
                 <circle className="map-bubble" cx={x} cy={y} r={r} />
                 <circle className="map-bubble-core" cx={x} cy={y} r={3} />
                 {pinned === s.name && <circle className="map-selection" cx={x} cy={y} r={r + 3.5} />}
