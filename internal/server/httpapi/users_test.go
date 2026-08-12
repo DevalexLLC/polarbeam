@@ -325,6 +325,111 @@ func TestUserDisableAndDelete(t *testing.T) {
 	}
 }
 
+// sessionCountFor counts stored sessions belonging to a user.
+func (f *fakeDB) sessionCountFor(id uuid.UUID) int {
+	n := 0
+	for _, s := range f.sessions {
+		if s.UserID == id {
+			n++
+		}
+	}
+	return n
+}
+
+func TestUserResetPassword(t *testing.T) {
+	f := newFakeDB()
+	h := newTestAPI(t, f)
+	cookie, csrf := configLogin(t, h, f, "admin")
+	f.addUser("bob", "hunter22222", "viewer", false)
+	bob := f.users["bob"]
+	oldHash := bob.PasswordHash
+	self := f.users["user-admin"]
+
+	// Give bob a live session so the reset has something to invalidate.
+	if w := doLogin(t, h, "bob", "hunter22222"); w.Code != http.StatusOK {
+		t.Fatalf("bob login = %d: %s", w.Code, w.Body)
+	}
+	if f.sessionCountFor(bob.ID) != 1 {
+		t.Fatalf("bob sessions = %d, want 1", f.sessionCountFor(bob.ID))
+	}
+
+	// Viewer and CSRF-less requests are rejected before the handler.
+	viewerCookie, viewerCSRF := configLogin(t, h, f, "viewer")
+	if w := doConfig(t, h, "POST", "/api/v1/users/"+bob.ID.String()+"/reset-password", "", viewerCookie, viewerCSRF); w.Code != http.StatusForbidden {
+		t.Errorf("viewer reset = %d, want 403", w.Code)
+	}
+	if w := doConfig(t, h, "POST", "/api/v1/users/"+bob.ID.String()+"/reset-password", "", cookie, ""); w.Code != http.StatusForbidden {
+		t.Errorf("reset without CSRF = %d, want 403", w.Code)
+	}
+	if f.sessionCountFor(bob.ID) != 1 {
+		t.Fatalf("rejected resets must not touch sessions")
+	}
+
+	w := doConfig(t, h, "POST", "/api/v1/users/"+bob.ID.String()+"/reset-password", "", cookie, csrf)
+	if w.Code != http.StatusOK {
+		t.Fatalf("reset = %d: %s", w.Code, w.Body)
+	}
+	var reset struct {
+		ID       string `json:"id"`
+		Username string `json:"username"`
+		Role     string `json:"role"`
+		Password string `json:"password"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &reset); err != nil {
+		t.Fatalf("bad body: %v", err)
+	}
+	if reset.ID != bob.ID.String() || reset.Username != "bob" || reset.Role != "viewer" || len(reset.Password) < 20 {
+		t.Errorf("reset = %+v", reset)
+	}
+	if ok, err := auth.VerifyPassword(reset.Password, bob.PasswordHash); err != nil || !ok {
+		t.Errorf("reset password does not verify: ok=%v err=%v", ok, err)
+	}
+	if bob.PasswordHash == oldHash {
+		t.Error("hash unchanged by reset")
+	}
+	// The old credential is dead on both fronts: sessions and logins.
+	if f.sessionCountFor(bob.ID) != 0 {
+		t.Errorf("bob sessions after reset = %d, want 0", f.sessionCountFor(bob.ID))
+	}
+	if w := doLogin(t, h, "bob", "hunter22222"); w.Code != http.StatusUnauthorized {
+		t.Errorf("old-password login after reset = %d, want 401", w.Code)
+	}
+	if w := doLogin(t, h, "bob", reset.Password); w.Code != http.StatusOK {
+		t.Errorf("new-password login = %d: %s", w.Code, w.Body)
+	}
+
+	// Reset leaves the disabled flag alone: enable is a separate lever.
+	bob.Disabled = true
+	if w := doConfig(t, h, "POST", "/api/v1/users/"+bob.ID.String()+"/reset-password", "", cookie, csrf); w.Code != http.StatusOK {
+		t.Fatalf("reset of disabled bob = %d: %s", w.Code, w.Body)
+	}
+	if !bob.Disabled {
+		t.Error("reset must not re-enable a disabled account")
+	}
+
+	// Self-reset is refused: it would kill the caller's own session.
+	if w := doConfig(t, h, "POST", "/api/v1/users/"+self.ID.String()+"/reset-password", "", cookie, csrf); w.Code != http.StatusConflict {
+		t.Errorf("self reset = %d, want 409: %s", w.Code, w.Body)
+	} else if msg := errBody(t, w); !strings.Contains(msg, "user menu") {
+		t.Errorf("self-reset error %q should point at the user menu", msg)
+	}
+
+	// Bad UUID, unknown id (the deleted-identity case: login_events rows
+	// have no users row), and federated accounts — all explicit refusals.
+	if w := doConfig(t, h, "POST", "/api/v1/users/not-a-uuid/reset-password", "", cookie, csrf); w.Code != http.StatusBadRequest {
+		t.Errorf("bad uuid reset = %d, want 400", w.Code)
+	}
+	if w := doConfig(t, h, "POST", "/api/v1/users/"+uuid.New().String()+"/reset-password", "", cookie, csrf); w.Code != http.StatusNotFound {
+		t.Errorf("unknown id reset = %d, want 404: %s", w.Code, w.Body)
+	}
+	fed := f.addOIDCUser("https://idp.example", "sub-1", "fed", "viewer", false)
+	if w := doConfig(t, h, "POST", "/api/v1/users/"+fed.ID.String()+"/reset-password", "", cookie, csrf); w.Code != http.StatusConflict {
+		t.Errorf("federated reset = %d, want 409: %s", w.Code, w.Body)
+	} else if msg := errBody(t, w); !strings.Contains(msg, "identity provider") {
+		t.Errorf("federated-reset error %q should name the identity provider", msg)
+	}
+}
+
 func TestLoginRecordsEvent(t *testing.T) {
 	f := newFakeDB()
 	h := newTestAPI(t, f)

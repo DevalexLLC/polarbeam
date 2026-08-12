@@ -4,6 +4,9 @@
 export interface User {
   username: string
   role: 'admin' | 'viewer'
+  // Federated accounts have no password here — their credential lives at
+  // the IdP — so the UI hides password management for them.
+  auth_source: 'local' | 'oidc'
 }
 
 export interface LoginResponse {
@@ -416,8 +419,9 @@ export interface UsersResponse {
   login_months: LoginMonth[]
 }
 
-// POST /api/v1/users — the generated password is returned exactly once and
-// never persisted in cleartext.
+// POST /api/v1/users and POST /api/v1/users/{id}/reset-password (same
+// shape) — the generated password is returned exactly once and never
+// persisted in cleartext.
 export interface UserCreateResponse {
   id: string
   username: string

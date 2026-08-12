@@ -54,6 +54,13 @@ type fakeDB struct {
 	// UpdateOIDCSettings — the seam for simulating a concurrent settings
 	// write landing between the handler's read and the store transaction.
 	beforeUpdateOIDCSettings func()
+	// beforeUpdateOwnPassword: same seam for the self-service password
+	// change — simulates an admin reset landing between the handler's
+	// current-password verification and the store transaction.
+	beforeUpdateOwnPassword func()
+	// beforeCreateLocalSession: same seam for login — simulates a password
+	// rotation landing between login's verification and the session insert.
+	beforeCreateLocalSession func()
 
 	pairSummary          *store.PairSummaryRow
 	pairSeries           []store.SeriesBucket
@@ -88,17 +95,28 @@ func (f *fakeDB) GetUserByUsername(_ context.Context, username string) (*store.U
 }
 
 func (f *fakeDB) CreateSession(_ context.Context, userID uuid.UUID, tokenHash []byte, csrf string, expiresAt time.Time) error {
-	var username, role string
+	var username, role, authSource string
 	for _, u := range f.users {
 		if u.ID == userID {
-			username, role = u.Username, u.Role
+			username, role, authSource = u.Username, u.Role, u.AuthSource
 		}
 	}
 	f.sessions[string(tokenHash)] = &store.SessionInfo{
-		ID: uuid.New(), UserID: userID, Username: username, Role: role,
+		ID: uuid.New(), UserID: userID, Username: username, Role: role, AuthSource: authSource,
 		CSRFToken: csrf, ExpiresAt: expiresAt, LastUsedAt: time.Now(),
 	}
 	return nil
+}
+
+func (f *fakeDB) CreateLocalSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrf string, expiresAt time.Time, verifiedHash string) error {
+	if f.beforeCreateLocalSession != nil {
+		f.beforeCreateLocalSession()
+	}
+	u := f.userByID(userID)
+	if u == nil || u.AuthSource != "local" || u.PasswordHash != verifiedHash || u.Disabled {
+		return store.ErrPasswordChanged
+	}
+	return f.CreateSession(ctx, userID, tokenHash, csrf, expiresAt)
 }
 
 func (f *fakeDB) GetSessionByTokenHash(_ context.Context, tokenHash []byte) (*store.SessionInfo, error) {
@@ -190,6 +208,47 @@ func (f *fakeDB) DeleteUser(_ context.Context, id uuid.UUID) error {
 		return err
 	}
 	delete(f.users, u.Username)
+	return nil
+}
+
+func (f *fakeDB) GetUserByID(_ context.Context, id uuid.UUID) (*store.UserInfo, error) {
+	return f.userByID(id), nil
+}
+
+func (f *fakeDB) ResetLocalUserPassword(_ context.Context, id uuid.UUID, passwordHash string) (string, string, error) {
+	u := f.userByID(id)
+	if u == nil {
+		return "", "", fmt.Errorf("user %s does not exist%w", id, store.ErrNotFound)
+	}
+	if u.AuthSource != "local" {
+		return "", "", fmt.Errorf("federated accounts authenticate at the identity provider%w", store.ErrConflict)
+	}
+	u.PasswordHash = passwordHash
+	for k, s := range f.sessions {
+		if s.UserID == id {
+			delete(f.sessions, k)
+		}
+	}
+	return u.Username, u.Role, nil
+}
+
+func (f *fakeDB) UpdateOwnPassword(_ context.Context, userID uuid.UUID, verifiedHash, passwordHash string, keepSessionID uuid.UUID) error {
+	if f.beforeUpdateOwnPassword != nil {
+		f.beforeUpdateOwnPassword()
+	}
+	u := f.userByID(userID)
+	if u == nil || u.AuthSource != "local" {
+		return fmt.Errorf("user %s does not exist%w", userID, store.ErrNotFound)
+	}
+	if u.PasswordHash != verifiedHash {
+		return fmt.Errorf("password was changed by another request; sign in with the current password and try again%w", store.ErrConflict)
+	}
+	u.PasswordHash = passwordHash
+	for k, s := range f.sessions {
+		if s.UserID == userID && s.ID != keepSessionID {
+			delete(f.sessions, k)
+		}
+	}
 	return nil
 }
 
@@ -407,13 +466,17 @@ func TestLoginSuccess(t *testing.T) {
 		t.Fatalf("login = %d, want 200: %s", w.Code, w.Body)
 	}
 	var res struct {
-		User      struct{ Username, Role string }
+		User struct {
+			Username   string `json:"username"`
+			Role       string `json:"role"`
+			AuthSource string `json:"auth_source"`
+		}
 		CSRFToken string `json:"csrf_token"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
 		t.Fatalf("bad login body: %v", err)
 	}
-	if res.User.Username != "alice" || res.User.Role != "admin" || res.CSRFToken == "" {
+	if res.User.Username != "alice" || res.User.Role != "admin" || res.User.AuthSource != "local" || res.CSRFToken == "" {
 		t.Errorf("login body = %+v", res)
 	}
 
@@ -803,6 +866,9 @@ func TestMeAndLogoutCSRF(t *testing.T) {
 	// The About page renders this; an empty string would render as a blank
 	// field rather than failing, so pin it here.
 	var me struct {
+		User struct {
+			AuthSource string `json:"auth_source"`
+		} `json:"user"`
 		Version string `json:"version"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &me); err != nil {
@@ -810,6 +876,11 @@ func TestMeAndLogoutCSRF(t *testing.T) {
 	}
 	if me.Version == "" {
 		t.Errorf("me carries no version: %s", w.Body)
+	}
+	// The user menu hides password management for federated accounts on this
+	// field; an absent value would hide it for everyone.
+	if me.User.AuthSource != "local" {
+		t.Errorf("me auth_source = %q, want local: %s", me.User.AuthSource, w.Body)
 	}
 
 	// logout without CSRF token → 403, session survives.

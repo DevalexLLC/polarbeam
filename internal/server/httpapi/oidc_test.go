@@ -337,6 +337,9 @@ func TestOIDCCallbackScopedToIssuer(t *testing.T) {
 	if mw.Code != http.StatusOK || !strings.Contains(mw.Body.String(), `"eve"`) {
 		t.Errorf("me with new-issuer session = %d %s, want eve", mw.Code, mw.Body)
 	}
+	if !strings.Contains(mw.Body.String(), `"auth_source":"oidc"`) {
+		t.Errorf("me for a federated session must carry auth_source oidc: %s", mw.Body)
+	}
 }
 
 // TestOIDCCallbackProviderChangedMidFlight pins the race guard: a callback

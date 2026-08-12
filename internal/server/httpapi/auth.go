@@ -4,13 +4,16 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -30,6 +33,9 @@ const (
 type userJSON struct {
 	Username string `json:"username"`
 	Role     string `json:"role"`
+	// AuthSource ("local" or "oidc") lets the SPA hide password management
+	// for federated accounts, whose credential lives at the IdP.
+	AuthSource string `json:"auth_source"`
 }
 
 // loginResponse is shared by handleLogin and handleMe, so the dashboard
@@ -100,22 +106,36 @@ func (a *api) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	csrf, err := a.issueSession(w, r, user, a.db.CreateSession)
+	// The session insert revalidates the hash this request verified: a
+	// password reset or change landing after VerifyPassword revokes every
+	// session of the old credential, and minting unchecked would hand the
+	// old (presumed leaked) password a session that outlives the rotation.
+	create := func(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time) error {
+		return a.db.CreateLocalSession(ctx, userID, tokenHash, csrfToken, expiresAt, hash)
+	}
+	csrf, err := a.issueSession(w, r, user, create)
 	if err != nil {
+		if errors.Is(err, store.ErrPasswordChanged) {
+			// Byte-identical to the other credential failures.
+			writeError(w, http.StatusUnauthorized, "invalid credentials")
+			return
+		}
 		internalError(w, "issue session", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, loginResponse{
-		User:      userJSON{Username: user.Username, Role: user.Role},
+		User:      userJSON{Username: user.Username, Role: user.Role, AuthSource: user.AuthSource},
 		CSRFToken: csrf,
 		Version:   version.String(),
 	})
 }
 
-// sessionCreator inserts the session row. Local login passes the DB's
-// CreateSession directly; the OIDC callback passes a closure over
-// CreateOIDCSession so the provider identity is revalidated inside the
-// insert's transaction (the code exchange can straddle a provider switch).
+// sessionCreator inserts the session row. Both logins pass closures that
+// revalidate their credential inside the insert, because verification and
+// insert can straddle a revocation: local login closes over the verified
+// hash (CreateLocalSession — a password rotation revokes old sessions),
+// the OIDC callback over the provider identity (CreateOIDCSession — the
+// code exchange can straddle a provider switch).
 type sessionCreator func(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time) error
 
 // issueSession mints a session for an already-authenticated user and sets
@@ -187,10 +207,97 @@ func (a *api) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (a *api) handleMe(w http.ResponseWriter, r *http.Request) {
 	s := sessionFrom(r.Context())
 	writeJSON(w, http.StatusOK, loginResponse{
-		User:      userJSON{Username: s.Username, Role: s.Role},
+		User:      userJSON{Username: s.Username, Role: s.Role, AuthSource: s.AuthSource},
 		CSRFToken: s.CSRFToken,
 		Version:   version.String(),
 	})
+}
+
+// handlePasswordChange lets a local user rotate their own password. The
+// current password is required — a hijacked session must not be able to
+// silently take over the credential — and its verification is a password
+// oracle, so attempts are rate-limited per account. On success every OTHER
+// session of the user is deleted (the change-because-compromised case is
+// the one that matters); the current session survives.
+func (a *api) handlePasswordChange(w http.ResponseWriter, r *http.Request) {
+	s := sessionFrom(r.Context())
+	// Refused before body decode and before the limiter: federated accounts
+	// have no password by schema, and the refusal must be explicit — never
+	// a silent no-op.
+	if s.AuthSource != "local" {
+		writeError(w, http.StatusConflict, "federated accounts authenticate at the identity provider")
+		return
+	}
+	var req struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+	if !decodeStrict(w, r, &req) {
+		return
+	}
+	var problems []string
+	if req.CurrentPassword == "" {
+		problems = append(problems, "current_password is required")
+	}
+	if req.NewPassword == "" {
+		problems = append(problems, "new_password is required")
+	} else if utf8.RuneCountInString(req.NewPassword) < auth.MinPasswordLen {
+		// Runes, not bytes: the policy says characters, and byte counting
+		// would let two 4-byte emoji pass an 8-character minimum.
+		problems = append(problems, fmt.Sprintf("new_password must be at least %d characters", auth.MinPasswordLen))
+	}
+	if len(problems) > 0 {
+		writeError(w, http.StatusBadRequest, strings.Join(problems, "; "))
+		return
+	}
+	// Only actual verification attempts burn the limiter; a fumbled request
+	// body above should not lock anyone out.
+	if !a.pwLimiter.allow(s.UserID.String()) {
+		writeError(w, http.StatusTooManyRequests, "too many password attempts; try again in a minute")
+		return
+	}
+
+	user, err := a.db.GetUserByID(r.Context(), s.UserID)
+	if err != nil {
+		internalError(w, "password change lookup", err)
+		return
+	}
+	if user == nil {
+		// The account was deleted after this session was validated.
+		writeError(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	if user.PasswordHash == "" {
+		// Unreachable for a local account (users_auth_shape); guard anyway
+		// so an empty hash never reaches VerifyPassword as a malformed PHC.
+		internalError(w, "password change", fmt.Errorf("local user %s has no password hash", s.UserID))
+		return
+	}
+	ok, err := auth.VerifyPassword(req.CurrentPassword, user.PasswordHash)
+	if err != nil {
+		internalError(w, "verify password", err)
+		return
+	}
+	if !ok {
+		// 403, not 401: the SPA treats 401 as session death and would log
+		// the user out over a typo.
+		writeError(w, http.StatusForbidden, "current password is incorrect")
+		return
+	}
+
+	hash, err := auth.HashPassword(req.NewPassword)
+	if err != nil {
+		internalError(w, "hash password", err)
+		return
+	}
+	// The verified hash rides along so the store can refuse a stale update:
+	// if the password changed between verification and the transaction (an
+	// admin reset landing mid-request), this must fail, not overwrite it.
+	if err := a.db.UpdateOwnPassword(r.Context(), s.UserID, user.PasswordHash, hash, s.ID); err != nil {
+		writeStoreError(w, "update password", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // withSession authenticates the request's session cookie, enforces CSRF on

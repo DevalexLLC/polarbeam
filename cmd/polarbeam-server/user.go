@@ -7,13 +7,12 @@ import (
 	"io"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"golang.org/x/term"
 
 	"github.com/devalexllc/polarbeam/internal/server/auth"
 )
-
-const minPasswordLen = 8
 
 func cmdUser(args []string) error {
 	const use = "usage: polarbeam-server user add --config <file> --username <name> [--admin]"
@@ -91,8 +90,10 @@ func readNewPassword(in io.Reader, fd int, isTerminal bool) (string, error) {
 		}
 		pw = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
 	}
-	if len(pw) < minPasswordLen {
-		return "", fmt.Errorf("password must be at least %d characters", minPasswordLen)
+	// Runes, not bytes — the policy says characters (matches the dashboard's
+	// self-service check).
+	if utf8.RuneCountInString(pw) < auth.MinPasswordLen {
+		return "", fmt.Errorf("password must be at least %d characters", auth.MinPasswordLen)
 	}
 	return pw, nil
 }
