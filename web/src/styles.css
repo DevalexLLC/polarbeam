@@ -2802,6 +2802,73 @@ td.fleet-uptime {
   opacity: 0.45;
 }
 
+/* Row actions: a real table cell (config-actions' flex breaks table-cell
+   layout and jumbles row borders), right-aligned flat text buttons instead
+   of outlined ones — two outlined buttons per row read as chrome. */
+td.users-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+td.users-actions .inline-confirm {
+  min-height: 0;
+  padding: 0.15rem 0.4rem;
+  border: none;
+  background: none;
+  color: var(--ink-2);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+td.users-actions .inline-confirm:hover {
+  color: var(--ink);
+  background: none;
+  text-decoration: underline;
+}
+
+td.users-actions .inline-confirm.armed {
+  color: var(--status-down);
+  background: none;
+}
+
+td.users-actions .inline-confirm:disabled {
+  color: var(--ink-3);
+  opacity: 0.55;
+  text-decoration: none;
+}
+
+/* Create-user modal: native <dialog> wearing the card look. */
+.users-dialog {
+  margin: auto;
+  width: min(26rem, calc(100vw - 2rem));
+  padding: 1.25rem 1.4rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.users-dialog::backdrop {
+  background: rgb(0 0 0 / 0.45);
+}
+
+.users-dialog h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+}
+
+.users-dialog .section-intro {
+  margin: 0 0 1rem;
+}
+
+.users-dialog-foot {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 1.1rem;
+}
+
 .status-marker {
   display: block;
   width: 8px;

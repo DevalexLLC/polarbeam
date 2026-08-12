@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { apiDelete, apiGet, apiPost, apiPut } from '../api'
 import { fmtAgo, fmtTime } from '../format'
 import { useTimezone } from '../timezone'
@@ -173,7 +173,8 @@ export default function UsersPanel({
   const [source, setSource] = useState<SourceFilter>('')
   const [offset, setOffset] = useState(0)
   const [refresh, setRefresh] = useState(0) // bumped after any mutation
-  const [actionError, setActionError] = useState('')
+  const [actionError, setActionError] = useState('') // row disable/delete failures
+  const [createError, setCreateError] = useState('') // shown inside the dialog
   const [newUsername, setNewUsername] = useState('')
   const [newRole, setNewRole] = useState<'viewer' | 'admin'>('viewer')
   const [creating, setCreating] = useState(false)
@@ -181,6 +182,7 @@ export default function UsersPanel({
   // never clear it — it is shown exactly once and cannot be recovered.
   const [minted, setMinted] = useState<UserCreateResponse | null>(null)
   const [copied, setCopied] = useState(false)
+  const dialogRef = useRef<HTMLDialogElement>(null)
 
   // Debounce the search box so each keystroke doesn't hit the server; any
   // applied-filter change resets to the first page.
@@ -246,10 +248,15 @@ export default function UsersPanel({
     }
   }, [isAdmin, onAuthError, q, role, status, source, offset, refresh])
 
+  const openCreate = () => {
+    setCreateError('')
+    dialogRef.current?.showModal()
+  }
+
   const create = async () => {
     if (!newUsername.trim()) return
     setCreating(true)
-    setActionError('')
+    setCreateError('')
     setCopied(false)
     try {
       const res = await apiPost<UserCreateResponse>('/api/v1/users', {
@@ -258,13 +265,20 @@ export default function UsersPanel({
       })
       setMinted(res)
       setNewUsername('')
+      setNewRole('viewer')
       setRefresh((r) => r + 1)
     } catch (err) {
       onAuthError(err)
-      setActionError(err instanceof Error ? err.message : String(err))
+      setCreateError(err instanceof Error ? err.message : String(err))
     } finally {
       setCreating(false)
     }
+  }
+
+  const finishCreate = () => {
+    setMinted(null)
+    setCopied(false)
+    dialogRef.current?.close()
   }
 
   const setDisabled = async (u: UserAccount, disabled: boolean) => {
@@ -353,82 +367,106 @@ export default function UsersPanel({
             <span className="eyebrow">Accounts</span>
             <h2>Dashboard users</h2>
           </div>
+          <button type="button" className="primary" onClick={openCreate}>
+            Create user
+          </button>
         </div>
         <p className="section-intro">
           Single sign-on accounts are provisioned automatically at first login. Deleted accounts stay listed with their
           last-known details as long as their sign-in history is retained. Sign-in counts start when this server first
           records logins.
         </p>
-        <div className="config-form">
-          <h3 className="eyebrow">Create local user</h3>
-          <div className="config-form-grid">
-            <label className="threshold-field">
-              <span className="eyebrow">Username</span>
-              <span className="threshold-input">
-                <input
-                  type="text"
-                  value={newUsername}
-                  disabled={creating}
-                  placeholder="username"
-                  onChange={(e) => setNewUsername(e.target.value)}
-                />
-              </span>
-            </label>
-            <label className="threshold-field">
-              <span className="eyebrow">Role</span>
-              <span className="threshold-input">
-                <select
-                  value={newRole}
-                  disabled={creating}
-                  onChange={(e) => setNewRole(e.target.value === 'admin' ? 'admin' : 'viewer')}
-                >
-                  <option value="viewer">viewer</option>
-                  <option value="admin">admin</option>
-                </select>
-              </span>
-            </label>
-          </div>
-          {actionError && (
-            <ul className="error threshold-errors">
-              <li>{actionError}</li>
-            </ul>
-          )}
-          <div className="threshold-foot">
-            <span className="hint">
-              The password is generated and shown once — hand it to the user out-of-band. Federated users sign in via
-              SSO instead.
-            </span>
-            <span className="threshold-actions">
-              {/* Creation stays blocked while a password is displayed:
-                  minting another would replace the only copy. */}
-              <button
-                className="primary"
-                onClick={create}
-                disabled={creating || !newUsername.trim() || minted !== null}
-                title={minted !== null ? 'Copy and dismiss the displayed password first' : undefined}
-              >
-                {creating ? 'Creating…' : 'Create user'}
-              </button>
-            </span>
-          </div>
-        </div>
-        {minted && (
-          <div className="inline-alert" role="status">
-            <div>
-              <strong>
-                Password for {minted.username} ({minted.role}).
-              </strong>{' '}
-              Copy it now — it is shown only once and cannot be recovered.
+        {/* Native <dialog>: modal focus, Esc, and backdrop come from the
+            platform, keeping the no-overlay-machinery rule intact. Esc is
+            suppressed only while the one-time password is displayed. */}
+        <dialog
+          ref={dialogRef}
+          className="users-dialog"
+          aria-label="Create local user"
+          onCancel={(e) => {
+            if (minted) e.preventDefault()
+          }}
+        >
+          {minted ? (
+            <>
+              <h2>User created</h2>
+              <p className="section-intro">
+                <strong>{minted.username}</strong> ({minted.role}). Copy the password now — it is shown only once and
+                cannot be recovered.
+              </p>
               <div className="mono token-reveal">{minted.password}</div>
-            </div>
-            <span className="threshold-actions">
-              <button type="button" className="secondary-button" onClick={copyMinted}>
-                {copied ? 'Copied' : 'Copy'}
-              </button>
-              <button type="button" className="linklike" onClick={() => setMinted(null)}>
-                Dismiss
-              </button>
-            </span>
+              <div className="users-dialog-foot">
+                <button type="button" className="secondary-button" onClick={copyMinted}>
+                  {copied ? 'Copied' : 'Copy'}
+                </button>
+                <button type="button" className="primary" onClick={finishCreate}>
+                  Done
+                </button>
+              </div>
+            </>
+          ) : (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                void create()
+              }}
+            >
+              <h2>Create local user</h2>
+              <p className="section-intro">
+                The password is generated and shown once — hand it to the user out-of-band. Federated users sign in via
+                SSO instead.
+              </p>
+              <div className="config-form-grid">
+                <label className="threshold-field">
+                  <span className="eyebrow">Username</span>
+                  <span className="threshold-input">
+                    <input
+                      type="text"
+                      value={newUsername}
+                      disabled={creating}
+                      placeholder="username"
+                      onChange={(e) => setNewUsername(e.target.value)}
+                    />
+                  </span>
+                </label>
+                <label className="threshold-field">
+                  <span className="eyebrow">Role</span>
+                  <span className="threshold-input">
+                    <select
+                      value={newRole}
+                      disabled={creating}
+                      onChange={(e) => setNewRole(e.target.value === 'admin' ? 'admin' : 'viewer')}
+                    >
+                      <option value="viewer">viewer</option>
+                      <option value="admin">admin</option>
+                    </select>
+                  </span>
+                </label>
+              </div>
+              {createError && (
+                <ul className="error threshold-errors">
+                  <li>{createError}</li>
+                </ul>
+              )}
+              <div className="users-dialog-foot">
+                <button
+                  type="button"
+                  className="linklike"
+                  disabled={creating}
+                  onClick={() => dialogRef.current?.close()}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="primary" disabled={creating || !newUsername.trim()}>
+                  {creating ? 'Creating…' : 'Create user'}
+                </button>
+              </div>
+            </form>
+          )}
+        </dialog>
+        {actionError && (
+          <div className="inline-alert" role="alert">
+            {actionError}
           </div>
         )}
         <div className="users-toolbar">
@@ -531,7 +569,7 @@ export default function UsersPanel({
                       <td data-label="Created" title={u.created_at ? fmtTime(u.created_at) : undefined}>
                         {u.created_at ? fmtAgo(u.created_at) : '—'}
                       </td>
-                      <td data-label="Actions" className="config-actions">
+                      <td data-label="Actions" className="users-actions">
                         {u.status !== 'deleted' && (
                           <>
                             <ConfirmButton
