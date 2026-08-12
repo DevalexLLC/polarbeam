@@ -1,13 +1,14 @@
 # PolarBEAM probe reference
 
 PolarBEAM agents measure network and service reachability from the sites where
-they run. The current agent supports six probe types:
+they run. The current agent supports seven probe types:
 
 - ICMP
 - TCP
 - TLS
 - HTTP and HTTPS
 - DNS
+- NTP
 - traceroute
 
 The probes do not all use the same transport. PolarBEAM uses TCP, UDP, and
@@ -29,6 +30,7 @@ and how to use them to validate network paths.
 | HTTP | HTTP over TCP | URL port, normally 80 | TCP/HTTP return traffic |
 | HTTPS | HTTP over TLS over TCP | URL port, normally 443 | TCP/TLS/HTTP return traffic |
 | DNS | UDP only | Target port, default 53 | UDP DNS response |
+| NTP | UDP only | Target port, default 123 | UDP NTP response |
 | traceroute | Outbound UDP plus inbound ICMP | UDP 33434-33523 | ICMP time-exceeded or destination-unreachable |
 
 ICMP probing is not UDP on the wire. On Linux, the agent first tries an
@@ -66,6 +68,7 @@ Agent egress depends on the configured workload:
 | Configured TCP port | Peer or external target | TCP and TLS probes |
 | URL-derived TCP port | External target | HTTP and HTTPS probes |
 | UDP 53 or configured port | DNS target or resolver | DNS probe; no TCP fallback |
+| UDP 123 or configured port | NTP server target | NTP probe; no TCP fallback |
 | UDP 33434-33523 | Peer or external target | traceroute |
 
 Stateful firewalls must permit corresponding return traffic. ICMP and
@@ -107,8 +110,9 @@ B has three, one mesh template produces six A-to-B and six B-to-A agent-pair
 series. Each destination uses the peer agent's `probe_address`, recorded at
 enrollment.
 
-Mesh templates support ICMP, TCP, TLS, DNS, and traceroute. HTTP is direct
-only because it requires a complete target URL.
+Mesh templates support ICMP, TCP, TLS, DNS, and traceroute. HTTP and NTP are
+direct only: HTTP requires a complete target URL, and an expanded NTP template
+would query peer agents that do not serve time.
 
 TCP and TLS mesh templates require a `port` parameter between 1 and 65535.
 Every destination probe address must have a suitable service listening on that
@@ -127,7 +131,8 @@ forms:
 - A full URL
 
 Use an address for ICMP and traceroute, an address plus port for TCP and TLS,
-an address with an optional port for DNS, and a full URL for HTTP or HTTPS.
+an address with an optional port for DNS and NTP, and a full URL for HTTP or
+HTTPS.
 
 Target creation currently verifies that at least an address or URL exists,
 but it does not cross-check the target against a later probe type. For example,
@@ -142,7 +147,7 @@ Every probe has the following settings:
 | Setting | Meaning |
 |---|---|
 | Assignment | A mesh, or a source site plus external target |
-| Type | One of the six supported types |
+| Type | One of the seven supported types |
 | Interval | Time between scheduled runs |
 | Timeout | Maximum duration of one run |
 | Train count | Packet count for ICMP trains |
@@ -362,6 +367,57 @@ agent's probe address on UDP 53. That is useful only when the peer hosts
 actually run DNS. A direct probe against a named resolver target is usually
 clearer.
 
+## NTP
+
+NTP sends one NTPv4 client-mode request over UDP per run and validates the
+reply. It does not fall back to TCP and does not retransmit within a run; the
+probe interval is the retry. The probe resolves hostnames to one address,
+preferring IPv4 when both families are available, and reports one packet sent,
+one received, and the request/response round-trip time.
+
+NTP is direct only. Each site selects its own external target, so different
+sites can verify different time servers, and the probe runs only on agents at
+its selected source site. Because sites commonly use per-site NTP endpoints
+and peer agents do not serve time, NTP cannot be configured as a mesh
+template.
+
+NTP has no type-specific parameters. The probe queries the target address,
+using the target's port when nonzero and UDP 123 otherwise.
+
+A run is `OK` only when a reply from the queried server:
+
+- Is at least 48 bytes
+- Uses server mode
+- Echoes the request's transmit timestamp in its originate field — the agent
+  fills that field with a random value, so a matching reply proves the server
+  answered this specific request
+- Reports a stratum from 1 through 15
+- Does not report an unsynchronized leap state
+- Carries a nonzero transmit timestamp
+
+No reply within the timeout is `TIMEOUT`, and a failed hostname resolution is
+`DNS_FAILURE`. A closed UDP port that answers with ICMP port-unreachable is
+`CONN_REFUSED`. Every other outcome is an `ERROR` naming the reason, including
+malformed or truncated packets, non-server modes, out-of-range strata,
+unsynchronized servers, and Kiss-o'-Death replies (stratum 0), which include
+the four-character kiss code such as `RATE`, `DENY`, or `RSTR`.
+
+Poll conservatively. Public NTP servers and pool members rate-limit eager
+clients and answer with Kiss-o'-Death `RATE`; use an interval of at least 60
+seconds unless you operate the time server. Creating or editing an NTP probe
+with a faster interval succeeds but returns a warning.
+
+Typical uses include:
+
+- Verifying that each site's approved time source answers NTP from that site
+- Detecting a firewall change that silently broke UDP 123 egress
+- Confirming a per-site NTP endpoint is synchronized rather than merely up
+- Comparing time-service round-trip times across sites or providers
+
+The probe establishes NTP service reachability. It does not compute clock
+offset, does not assess time accuracy, does not verify the agent host's own
+synchronization, and does not support authenticated NTP or NTS.
+
 ## Traceroute
 
 Traceroute sends three UDP probes per hop with an increasing IPv4 TTL or IPv6
@@ -409,7 +465,7 @@ Probe results use these statuses:
 |---|---|
 | `OK` | The probe-specific success condition was met |
 | `TIMEOUT` | The run exceeded its deadline or received no required response |
-| `CONN_REFUSED` | A TCP connection was actively refused |
+| `CONN_REFUSED` | A TCP connection was actively refused, or a UDP probe drew ICMP port-unreachable |
 | `DNS_FAILURE` | Resolution, DNS exchange, or expected-RCODE validation failed |
 | `TLS_FAILURE` | TLS verification or handshake failed |
 | `ERROR` | Another configuration, socket, protocol, or runtime error occurred |
@@ -560,8 +616,11 @@ A practical enterprise baseline is:
 - Direct TLS probes to certificate-sensitive services: every 30-60 seconds
 - Direct HTTP health probes: every 30-60 seconds
 - Direct DNS probes to approved resolvers: every 30 seconds
+- Direct NTP probes to each site's approved time source: every 60 seconds or
+  slower
 - Separate regional or topology-specific meshes instead of one global mesh
 
 This layered workload distinguishes IP reachability, packet quality, route
-changes, transport reachability, TLS health, application responses, and DNS
-resolver behavior without adding a PolarBEAM listener to agent hosts.
+changes, transport reachability, TLS health, application responses, DNS
+resolver behavior, and time-service reachability without adding a PolarBEAM
+listener to agent hosts.

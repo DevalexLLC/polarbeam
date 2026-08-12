@@ -22,6 +22,7 @@ var TypeNames = map[string]pb.ProbeType{
 	"tls":        pb.ProbeType_PROBE_TYPE_TLS,
 	"http":       pb.ProbeType_PROBE_TYPE_HTTP,
 	"dns":        pb.ProbeType_PROBE_TYPE_DNS,
+	"ntp":        pb.ProbeType_PROBE_TYPE_NTP,
 	"traceroute": pb.ProbeType_PROBE_TYPE_TRACEROUTE,
 }
 
@@ -154,7 +155,7 @@ var meshPortSpec = ParamSpec{
 }
 
 // registry mirrors exactly what the probers read; keep in lockstep with
-// internal/agent/probes/{tls,http,dns}.go and meshexpand's meshPort.
+// internal/agent/probes/{tls,http,dns,ntp}.go and meshexpand's meshPort.
 var registry = map[pb.ProbeType][]ParamSpec{
 	pb.ProbeType_PROBE_TYPE_ICMP: {},
 	pb.ProbeType_PROBE_TYPE_TCP:  {meshPortSpec},
@@ -176,6 +177,7 @@ var registry = map[pb.ProbeType][]ParamSpec{
 			Enum: []string{"NOERROR", "FORMERR", "SERVFAIL", "NXDOMAIN", "NOTIMPL", "REFUSED"}},
 		{Key: "dns.resolver", Kind: KindString, Hint: "override resolver host:port (default: the target)"},
 	},
+	pb.ProbeType_PROBE_TYPE_NTP:        {},
 	pb.ProbeType_PROBE_TYPE_TRACEROUTE: {},
 }
 
@@ -185,12 +187,21 @@ func Params(t pb.ProbeType) []ParamSpec {
 	return registry[t]
 }
 
-// DirectOnly reports types that cannot be mesh templates. HTTP is the one
-// case: the prober reads only Target.Url, and mesh expansion carries only
-// the peer's address/port — an expanded HTTP mesh probe would fail on an
-// empty URL every run.
+// directOnlyReason lists types that cannot be mesh templates, keyed to the
+// reason spliced into the rejection message. HTTP: the prober reads only
+// Target.Url, and mesh expansion carries only the peer's address/port — an
+// expanded HTTP mesh probe would fail on an empty URL every run. NTP: peer
+// agents do not run NTP servers, so an expanded template would query port
+// 123 on hosts that serve nothing.
+var directOnlyReason = map[pb.ProbeType]string{
+	pb.ProbeType_PROBE_TYPE_HTTP: "mesh expansion carries only the peer address/port and the prober needs a URL",
+	pb.ProbeType_PROBE_TYPE_NTP:  "peer agents do not run NTP servers, so an expanded template would query port 123 on hosts that serve nothing",
+}
+
+// DirectOnly reports types that cannot be mesh templates.
 func DirectOnly(t pb.ProbeType) bool {
-	return t == pb.ProbeType_PROBE_TYPE_HTTP
+	_, ok := directOnlyReason[t]
+	return ok
 }
 
 // MinMeshMembers is the smallest mesh that can produce any probe at all.
@@ -235,10 +246,15 @@ func ValidateMeshMemberRemoval(meshName string, membersAfter, templates int) []s
 		meshName, membersAfter, templates, noun, noun, MinMeshMembers)}
 }
 
+// NTPRecommendedMinInterval is the fastest cadence that is polite to NTP
+// servers the operator does not run: public servers and pool members
+// rate-limit faster pollers, answering with kiss-o'-death RATE.
+const NTPRecommendedMinInterval = 60 * time.Second
+
 // Warnings reports configurations that are valid, will run, and are almost
 // certainly not what the operator meant. They never block a write — each
 // case has a legitimate use — so callers surface them alongside success.
-func Warnings(t pb.ProbeType, mesh bool, params map[string]string) []string {
+func Warnings(t pb.ProbeType, mesh bool, interval time.Duration, params map[string]string) []string {
 	var out []string
 	// A mesh dns probe has no target row: expansion points it at the peer
 	// AGENT's probe address, so it queries another agent's host on port 53
@@ -250,6 +266,13 @@ func Warnings(t pb.ProbeType, mesh bool, params map[string]string) []string {
 			`set "dns.resolver" to the resolver you mean to test, or use a direct probe against a resolver target, `+
 			"unless your agent hosts genuinely serve DNS")
 	}
+	// Legitimate when you operate the time server yourself; public servers
+	// answer over-eager pollers with kiss-o'-death RATE, which the prober
+	// reports as an error every run.
+	if t == pb.ProbeType_PROBE_TYPE_NTP && interval > 0 && interval < NTPRecommendedMinInterval {
+		out = append(out, fmt.Sprintf("ntp probes more frequent than %s risk rate limiting (kiss-o'-death RATE) from public NTP servers; "+
+			"use an interval of at least %s unless you operate the server", NTPRecommendedMinInterval, NTPRecommendedMinInterval))
+	}
 	return out
 }
 
@@ -259,7 +282,7 @@ func ValidateParams(t pb.ProbeType, mesh bool, params map[string]string) []strin
 	var problems []string
 	if mesh && DirectOnly(t) {
 		problems = append(problems,
-			fmt.Sprintf("%s probes cannot be mesh templates: mesh expansion carries only the peer address/port and the prober needs a URL", TypeName(int16(t))))
+			fmt.Sprintf("%s probes cannot be mesh templates: %s", TypeName(int16(t)), directOnlyReason[t]))
 	}
 	specs := registry[t]
 	byKey := make(map[string]ParamSpec, len(specs))

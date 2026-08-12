@@ -266,7 +266,7 @@ export type Window = (typeof WINDOWS)[number]
 // admin-only. Cadence fields are wire integer milliseconds; the probes form
 // converts to seconds at the edge like the thresholds form does µs↔ms.
 
-export const PROBE_TYPES = ['icmp', 'tcp', 'tls', 'http', 'dns', 'traceroute'] as const
+export const PROBE_TYPES = ['icmp', 'tcp', 'tls', 'http', 'dns', 'ntp', 'traceroute'] as const
 export type ProbeTypeName = (typeof PROBE_TYPES)[number]
 
 export interface TargetConfig {
@@ -375,6 +375,7 @@ export interface ParamSpec {
 export interface ProbeTypeInfo {
   type: string
   // http: the prober needs a URL, which mesh expansion cannot provide.
+  // ntp: peer agents do not serve time, so a mesh template is meaningless.
   direct_only?: boolean
   params: ParamSpec[]
 }

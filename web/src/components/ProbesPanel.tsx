@@ -634,7 +634,7 @@ export default function ProbesPanel({
                         ...d,
                         mode: 'mesh',
                         params: {},
-                        // A direct-only type (http) cannot be a mesh template.
+                        // A direct-only type (http, ntp) cannot be a mesh template.
                         type: registry?.types.find((t) => t.type === d.type)?.direct_only ? 'icmp' : d.type,
                       }))
                     }

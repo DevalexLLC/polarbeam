@@ -13,7 +13,7 @@ reachability between geographically dispersed sites.
 
 PolarBEAM is a central control plane plus a lightweight agent that runs at
 each site. Agents probe each other (full mesh) and designated endpoints over
-ICMP, TCP, TLS, HTTP(S), and DNS, run periodic traceroutes, and push results
+ICMP, TCP, TLS, HTTP(S), DNS, and NTP, run periodic traceroutes, and push results
 to the control plane over mTLS on port 443. The dashboard shows current and
 historical latency (min/avg/max/percentiles), packet loss, jitter, TCP connect
 and TLS handshake times, recent outages, and path changes — **in both
@@ -51,7 +51,7 @@ directions for every site pair** — over 7/30/90/365-day windows.
 │  probes ───────┼────────── ┼─passthrough)  dashboard :8080 │   │   probes       │
 │  spool         │           │           ──> TimescaleDB     │   │   spool        │
 └────────────────┘           └───────────────────────────────┘   └────────────────┘
-        └─────────────── ICMP/TCP/TLS/HTTP/DNS/traceroute ───────────────┘
+        └───────────── ICMP/TCP/TLS/HTTP/DNS/NTP/traceroute ─────────────┘
 ```
 
 - **`polarbeam-server`** — control plane: gRPC API for agents (enrollment,

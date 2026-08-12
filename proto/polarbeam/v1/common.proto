@@ -21,6 +21,7 @@ enum ProbeType {
   PROBE_TYPE_HTTP = 4;
   PROBE_TYPE_DNS = 5;
   PROBE_TYPE_TRACEROUTE = 6;
+  PROBE_TYPE_NTP = 7;
 }
 
 enum ProbeStatus {

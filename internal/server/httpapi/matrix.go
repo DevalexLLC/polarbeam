@@ -141,6 +141,8 @@ func probeTypeName(t int16) string {
 		return "http"
 	case pb.ProbeType_PROBE_TYPE_DNS:
 		return "dns"
+	case pb.ProbeType_PROBE_TYPE_NTP:
+		return "ntp"
 	case pb.ProbeType_PROBE_TYPE_TRACEROUTE:
 		return "traceroute"
 	default:

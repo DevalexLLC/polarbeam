@@ -43,7 +43,7 @@ polarbeam/
 │   └── migrate/     # go:embed SQL migrations
 ├── internal/agent/
 │   ├── config/ enroll/ uplink/ scheduler/ spool/
-│   └── probes/{icmp,tcp,tls,http,dns,traceroute}/
+│   └── probes/{icmp,tcp,tls,http,dns,ntp,traceroute}/
 ├── vendor/                              # committed Go dependencies
 ├── web/                                 # Vite + React/TS SPA; dist/ committed; web/embed.go embeds dist/
 ├── deploy/
@@ -96,6 +96,7 @@ Continuous aggregates: `probe_results_hourly` (from raw: samples, ok_samples, su
 - **ICMP:** unprivileged datagram ICMP first (`x/net/icmp` udp4, works when `net.ipv4.ping_group_range` covers the service group), fallback raw socket via `CAP_NET_RAW` (`--cap-add NET_RAW` on the container); `selfcheck` verifies at start. Trains of `train_count` (default 10) echoes spaced 200 ms → loss %, min/avg/max/stddev.
 - **Jitter:** RFC 3550 smoothing `J += (|RTTᵢ−RTTᵢ₋₁|−J)/16` across consecutive RTTs, carried per-series across runs.
 - **TCP/TLS:** timed `DialContext` + `tls.Client.HandshakeContext`. **HTTP(S):** `httptrace` → dns/tcp/tls/ttfb/total + expected-status assertion. **DNS:** `codeberg.org/miekg/dns` (v2), configurable resolver/qname/qtype, RCODE check.
+- **NTP:** hand-rolled 48-byte SNTP client-mode request over UDP (stdlib only), single shot per run, default port 123; the transmit timestamp is a `crypto/rand` nonce so the originate-echo check authenticates the reply. Validates server mode, stratum 1–15, synchronized leap, nonzero transmit timestamp; Kiss-o'-Death (stratum 0) reports the kiss code. Reachability + RTT only — no clock-offset math. **Direct-only** (peer agents serve no time; `probeadmin.DirectOnly`).
 - **Traceroute:** UDP with incrementing TTL, ICMP time-exceeded read on a **raw** ICMP socket — unprivileged datagram ICMP does not deliver errors elicited by another socket's packets, so traceroute strictly requires CAP_NET_RAW (missing capability = ERROR result every cadence, never a skip); 3 probes/hop, max 30 hops, slower interval (~5 min); `path_hash = sha256(hop IPs)`.
 
 ## Outage detection (server-side)
