@@ -179,9 +179,14 @@ export default function UsersPanel({
   const [newRole, setNewRole] = useState<'viewer' | 'admin'>('viewer')
   const [creating, setCreating] = useState(false)
   // The generated password lives in its own state so the 30 s poll can
-  // never clear it — it is shown exactly once and cannot be recovered.
-  const [minted, setMinted] = useState<UserCreateResponse | null>(null)
+  // never clear it — it is shown exactly once and cannot be recovered. The
+  // kind picks the reveal copy: the same dialog serves create and reset.
+  const [minted, setMinted] = useState<{ kind: 'created' | 'reset'; res: UserCreateResponse } | null>(null)
   const [copied, setCopied] = useState(false)
+  // A reset mints a shown-once password per request, so overlapping resets
+  // could reveal a password the second request already replaced — block
+  // further resets while one is in flight.
+  const [resetting, setResetting] = useState(false)
   const dialogRef = useRef<HTMLDialogElement>(null)
 
   // Debounce the search box so each keystroke doesn't hit the server; any
@@ -263,7 +268,7 @@ export default function UsersPanel({
         username: newUsername.trim(),
         role: newRole,
       })
-      setMinted(res)
+      setMinted({ kind: 'created', res })
       setNewUsername('')
       setNewRole('viewer')
       setRefresh((r) => r + 1)
@@ -275,7 +280,7 @@ export default function UsersPanel({
     }
   }
 
-  const finishCreate = () => {
+  const finishReveal = () => {
     setMinted(null)
     setCopied(false)
     dialogRef.current?.close()
@@ -303,9 +308,27 @@ export default function UsersPanel({
     }
   }
 
+  const resetPassword = async (u: UserAccount) => {
+    if (resetting) return
+    setResetting(true)
+    setActionError('')
+    setCopied(false)
+    try {
+      const res = await apiPost<UserCreateResponse>('/api/v1/users/' + encodeURIComponent(u.id) + '/reset-password')
+      setMinted({ kind: 'reset', res })
+      setRefresh((r) => r + 1)
+      dialogRef.current?.showModal()
+    } catch (err) {
+      onAuthError(err)
+      setActionError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setResetting(false)
+    }
+  }
+
   const copyMinted = () => {
     if (!minted) return
-    navigator.clipboard.writeText(minted.password).then(
+    navigator.clipboard.writeText(minted.res.password).then(
       () => setCopied(true),
       () => setCopied(false),
     )
@@ -382,24 +405,25 @@ export default function UsersPanel({
         <dialog
           ref={dialogRef}
           className="users-dialog"
-          aria-label="Create local user"
+          aria-label={minted?.kind === 'reset' ? 'Password reset' : 'Create local user'}
           onCancel={(e) => {
             if (minted) e.preventDefault()
           }}
         >
           {minted ? (
             <>
-              <h2>User created</h2>
+              <h2>{minted.kind === 'reset' ? 'Password reset' : 'User created'}</h2>
               <p className="section-intro">
-                <strong>{minted.username}</strong> ({minted.role}). Copy the password now — it is shown only once and
-                cannot be recovered.
+                <strong>{minted.res.username}</strong> ({minted.res.role}). Copy the {minted.kind === 'reset' && 'new '}
+                password now — it is shown only once and cannot be recovered.
+                {minted.kind === 'reset' && ' All of their sessions have been signed out.'}
               </p>
-              <div className="mono token-reveal">{minted.password}</div>
+              <div className="mono token-reveal">{minted.res.password}</div>
               <div className="users-dialog-foot">
                 <button type="button" className="secondary-button" onClick={copyMinted}>
                   {copied ? 'Copied' : 'Copy'}
                 </button>
-                <button type="button" className="primary" onClick={finishCreate}>
+                <button type="button" className="primary" onClick={finishReveal}>
                   Done
                 </button>
               </div>
@@ -572,6 +596,21 @@ export default function UsersPanel({
                       <td data-label="Actions" className="users-actions">
                         {u.status !== 'deleted' && (
                           <>
+                            {/* Hidden (not disabled) for SSO accounts: they
+                                have no password to reset, per the schema. */}
+                            {u.auth_source !== 'oidc' && (
+                              <ConfirmButton
+                                label="Reset password"
+                                confirmLabel="Confirm? Signs them out"
+                                disabled={u.username === currentUsername || resetting}
+                                title={
+                                  u.username === currentUsername
+                                    ? 'Change your own password from the user menu'
+                                    : 'Generates a new password shown once and signs out all of their sessions'
+                                }
+                                onConfirm={() => resetPassword(u)}
+                              />
+                            )}
                             <ConfirmButton
                               label={u.status === 'disabled' ? 'Enable' : 'Disable'}
                               confirmLabel={u.status === 'disabled' ? 'Confirm enable?' : 'Confirm disable?'}

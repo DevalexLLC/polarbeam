@@ -156,17 +156,8 @@ func (a *api) handleUserPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 18 random bytes -> 24 base64url chars, comfortably past the CLI's
-	// 8-char minimum.
-	raw := make([]byte, 18)
-	if _, err := rand.Read(raw); err != nil {
-		internalError(w, "generate password", err)
-		return
-	}
-	password := base64.RawURLEncoding.EncodeToString(raw)
-	hash, err := auth.HashPassword(password)
-	if err != nil {
-		internalError(w, "hash password", err)
+	password, hash, ok := mintPassword(w)
+	if !ok {
 		return
 	}
 	id, err := a.db.CreateUser(r.Context(), strings.TrimSpace(in.Username), hash, in.Role)
@@ -182,24 +173,71 @@ func (a *api) handleUserPost(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// mintPassword generates the shown-once password for admin-driven account
+// flows (create, reset): 18 random bytes -> 24 base64url chars, comfortably
+// past the 8-char minimum. Returns the cleartext and its argon2id hash; on
+// failure the response has been written and ok is false.
+func mintPassword(w http.ResponseWriter) (password, hash string, ok bool) {
+	raw := make([]byte, 18)
+	if _, err := rand.Read(raw); err != nil {
+		internalError(w, "generate password", err)
+		return "", "", false
+	}
+	password = base64.RawURLEncoding.EncodeToString(raw)
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		internalError(w, "hash password", err)
+		return "", "", false
+	}
+	return password, hash, true
+}
+
 // userIDParam parses the {id} path segment, refusing to act on the caller's
-// own account — self-disable locks the admin out mid-session and
-// self-delete is never what anyone meant.
-func (a *api) userIDParam(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+// own account with selfRefusal as the 409 message — self-disable locks the
+// admin out mid-session, self-delete is never what anyone meant, and
+// self-reset would kill the caller's own session mid-response.
+func (a *api) userIDParam(w http.ResponseWriter, r *http.Request, selfRefusal string) (uuid.UUID, bool) {
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "user id must be a UUID")
 		return uuid.Nil, false
 	}
 	if s := sessionFrom(r.Context()); s != nil && s.UserID == id {
-		writeError(w, http.StatusConflict, "you cannot disable or delete your own account")
+		writeError(w, http.StatusConflict, selfRefusal)
 		return uuid.Nil, false
 	}
 	return id, true
 }
 
+// handleUserResetPassword replaces a local user's password with a fresh
+// server-generated one, returned exactly once (same posture as create), and
+// signs out all of the target's sessions — the old credential was presumably
+// lost or leaked. Deleted identities 404 and federated accounts 409 in the
+// store; neither is ever a silent no-op.
+func (a *api) handleUserResetPassword(w http.ResponseWriter, r *http.Request) {
+	id, ok := a.userIDParam(w, r, "reset your own password from the user menu instead")
+	if !ok {
+		return
+	}
+	password, hash, ok := mintPassword(w)
+	if !ok {
+		return
+	}
+	username, role, err := a.db.ResetLocalUserPassword(r.Context(), id, hash)
+	if err != nil {
+		writeStoreError(w, "reset password", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"id":       id.String(),
+		"username": username,
+		"role":     role,
+		"password": password,
+	})
+}
+
 func (a *api) handleUserPut(w http.ResponseWriter, r *http.Request) {
-	id, ok := a.userIDParam(w, r)
+	id, ok := a.userIDParam(w, r, "you cannot disable or delete your own account")
 	if !ok {
 		return
 	}
@@ -221,7 +259,7 @@ func (a *api) handleUserPut(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) handleUserDelete(w http.ResponseWriter, r *http.Request) {
-	id, ok := a.userIDParam(w, r)
+	id, ok := a.userIDParam(w, r, "you cannot disable or delete your own account")
 	if !ok {
 		return
 	}

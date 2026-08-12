@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ApiError, apiGet, apiPost, setCsrfToken } from './api'
 import type { AuthProviders, LoginResponse, User } from './types'
+import ChangePasswordDialog from './components/ChangePasswordDialog'
 import LogoMark from './components/LogoMark'
 import ThemeToggle from './components/ThemeToggle'
 import TimezoneToggle from './components/TimezoneToggle'
@@ -88,6 +89,7 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null)
   const [serverVersion, setServerVersion] = useState('')
   const [sso, setSso] = useState(false)
+  const [changingPassword, setChangingPassword] = useState(false)
   const [route, setRoute] = useState<Route>(() => parseHash(location.hash))
 
   useEffect(() => {
@@ -213,6 +215,20 @@ export default function App() {
               >
                 About
               </a>
+              {/* Federated accounts have no password here — their
+                  credential lives at the IdP — so the item is absent, not
+                  disabled. */}
+              {user.auth_source !== 'oidc' && (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.currentTarget.closest('details')?.removeAttribute('open')
+                    setChangingPassword(true)
+                  }}
+                >
+                  Change password
+                </button>
+              )}
               <button type="button" onClick={logout}>
                 Log out
               </button>
@@ -220,6 +236,9 @@ export default function App() {
           </details>
         </div>
       </header>
+      {changingPassword && (
+        <ChangePasswordDialog onClose={() => setChangingPassword(false)} onAuthError={onAuthError} />
+      )}
       <main id="main-content" tabIndex={-1}>
         {route.view === 'overview' ? (
           <Overview onAuthError={onAuthError} />

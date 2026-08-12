@@ -23,6 +23,12 @@ const (
 	argonKeyLen    = 32
 )
 
+// MinPasswordLen is the minimum length for operator-chosen passwords,
+// enforced by both the CLI's `user add` and the dashboard's self-service
+// password change. Server-generated passwords (24 base64url chars) clear
+// it trivially.
+const MinPasswordLen = 8
+
 // DummyHash is a valid hash of an unguessable throwaway password. Login
 // verifies against it when the username does not exist so that response
 // timing does not reveal which usernames are real.

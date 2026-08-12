@@ -26,7 +26,7 @@ const maxRequestBody = 1 << 20
 // so handler tests run offline against a fake instead of a live PostgreSQL.
 type DB interface {
 	GetUserByUsername(ctx context.Context, username string) (*store.UserInfo, error)
-	CreateSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time) error
+	CreateLocalSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time, verifiedHash string) error
 	GetSessionByTokenHash(ctx context.Context, tokenHash []byte) (*store.SessionInfo, error)
 	TouchSession(ctx context.Context, id uuid.UUID) error
 	DeleteSessionByTokenHash(ctx context.Context, tokenHash []byte) error
@@ -37,6 +37,9 @@ type DB interface {
 	CreateUser(ctx context.Context, username, passwordHash, role string) (uuid.UUID, error)
 	SetUserDisabled(ctx context.Context, id uuid.UUID, disabled bool) error
 	DeleteUser(ctx context.Context, id uuid.UUID) error
+	GetUserByID(ctx context.Context, id uuid.UUID) (*store.UserInfo, error)
+	ResetLocalUserPassword(ctx context.Context, id uuid.UUID, passwordHash string) (username, role string, err error)
+	UpdateOwnPassword(ctx context.Context, userID uuid.UUID, verifiedHash, passwordHash string, keepSessionID uuid.UUID) error
 
 	ListSites(ctx context.Context) ([]store.SiteInfo, error)
 	ListSitesConfig(ctx context.Context) ([]store.SiteAdminInfo, error)
@@ -110,7 +113,12 @@ type api struct {
 	// SSO round-trips (or a failing IdP) behind one NAT must never burn
 	// the break-glass password login's attempts.
 	ssoLimiter *loginLimiter
-	providers  OIDCProviders
+	// pwLimiter guards the self-service password change's current-password
+	// oracle. Separate for the same isolation reason, and keyed by user ID
+	// rather than IP: the endpoint is authenticated, so the key is exact,
+	// and exhausting it must never burn anyone's login attempts.
+	pwLimiter *loginLimiter
+	providers OIDCProviders
 }
 
 // db wraps DB so internal helpers hang off a private type.
@@ -128,6 +136,7 @@ func newHandler(sdb DB, static fs.FS, providers OIDCProviders) http.Handler {
 		db:         db{sdb},
 		limiter:    newLoginLimiter(loginLimit, loginWindow),
 		ssoLimiter: newLoginLimiter(loginLimit, loginWindow),
+		pwLimiter:  newLoginLimiter(loginLimit, loginWindow),
 		providers:  providers,
 	}
 
@@ -139,6 +148,7 @@ func newHandler(sdb DB, static fs.FS, providers OIDCProviders) http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/login", a.handleLogin)
 	mux.Handle("POST /api/v1/auth/logout", a.withSession(a.handleLogout))
 	mux.Handle("GET /api/v1/auth/me", a.withSession(a.handleMe))
+	mux.Handle("PUT /api/v1/auth/password", a.withSession(a.handlePasswordChange))
 	// SSO: providers is open (the login page must know whether to offer the
 	// button); start/callback are open, rate-limited top-level navigations.
 	mux.HandleFunc("GET /api/v1/auth/providers", a.handleAuthProviders)
@@ -192,6 +202,7 @@ func newHandler(sdb DB, static fs.FS, providers OIDCProviders) http.Handler {
 	mux.Handle("POST /api/v1/users", adminWrite(a.handleUserPost))
 	mux.Handle("PUT /api/v1/users/{id}", adminWrite(a.handleUserPut))
 	mux.Handle("DELETE /api/v1/users/{id}", adminWrite(a.handleUserDelete))
+	mux.Handle("POST /api/v1/users/{id}/reset-password", adminWrite(a.handleUserResetPassword))
 	mux.Handle("POST /api/v1/config/tokens", adminWrite(a.handleTokenPost))
 	mux.Handle("DELETE /api/v1/config/tokens/{id}", adminWrite(a.handleTokenDelete))
 	mux.Handle("GET /api/v1/pairs/{a}/{b}", a.withSession(a.handlePair))

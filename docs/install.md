@@ -504,7 +504,12 @@ docker compose exec server polarbeam-server user add \
   --username admin --admin
 ```
 
-Open `https://<dashboard-name>/` and sign in. A successful health request also
+Open `https://<dashboard-name>/` and sign in. Once signed in, any local user
+can change their own password from the user menu (top right; same
+eight-character minimum), and administrators can create further accounts and
+reset lost passwords from **Settings → Users**.
+
+A successful health request also
 confirms that DNS, the proxy's default route, dashboard TLS, and the HTTP
 listener work together:
 
@@ -931,6 +936,19 @@ network/TLS error. Saving applies immediately — no restart.
   and shown once), and disable, re-enable, or delete accounts — you
   cannot act on your own account, and the last enabled admin is
   protected. The CLI (`user add`) and SQL levers below keep working.
+- **Password management for local accounts.** An admin can reset any
+  other local user's password from its Settings → Users row: a new
+  password is generated server-side and shown exactly once, and all of
+  that user's sessions are signed out (the old credential is presumed
+  lost or leaked). A reset does not re-enable a disabled account —
+  enable stays a separate action. Every local user can change their own
+  password from the user menu; the current password is required, the
+  same eight-character minimum applies, and a successful change signs
+  out the user's other sessions while keeping the current one. The
+  current-password check is rate-limited per account (10 attempts per
+  minute, isolated from the login limiter). Neither lever exists for
+  federated accounts — they have no password here (see below) — nor for
+  your own account's reset, which is what the self-service change is for.
 - Federated users are created on first successful login, keyed on the
   pair of issuer and the provider's immutable `sub` claim — renaming a
   user at the IdP renames it here on the next login instead of creating a
@@ -958,7 +976,10 @@ network/TLS error. Saving applies immediately — no restart.
   Disabling kills the user's existing sessions on their next request and
   survives re-login attempts.
 - Federated users cannot sign in with a password; the local form treats
-  them as unknown users.
+  them as unknown users. They also have no password to change or reset:
+  both the row action and the user-menu item are absent for them, and the
+  API refuses with "federated accounts authenticate at the identity
+  provider" — the credential to rotate lives at the IdP.
 - Changing the issuer or client ID signs out every SSO session
   immediately (their roles came from the previous provider); local
   sessions are unaffected. An SSO login already in flight across the

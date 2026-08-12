@@ -2888,6 +2888,18 @@ td.users-actions .inline-confirm:disabled {
   margin-top: 1.1rem;
 }
 
+/* Change-password dialog: stacked full-width fields (the base
+   .threshold-input width is sized for short numeric values) with room for
+   the show/hide toggle. */
+.password-dialog .threshold-field {
+  width: 100%;
+}
+
+.password-dialog .password-field input {
+  width: 100%;
+  padding-right: 3.8rem;
+}
+
 .status-marker {
   display: block;
   width: 8px;

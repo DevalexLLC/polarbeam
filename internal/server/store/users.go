@@ -31,6 +31,7 @@ type SessionInfo struct {
 	UserID     uuid.UUID
 	Username   string
 	Role       string
+	AuthSource string // "local" or "oidc"
 	CSRFToken  string
 	ExpiresAt  time.Time
 	LastUsedAt time.Time
@@ -163,14 +164,129 @@ func (s *Store) GetUserByUsername(ctx context.Context, username string) (*UserIn
 	return &u, nil
 }
 
-// CreateSession stores a new session for userID. tokenHash is the sha256 of
-// the cookie token; the cleartext never reaches the database.
-func (s *Store) CreateSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time) error {
-	_, err := s.pool.Exec(ctx,
-		`INSERT INTO sessions (token_hash, user_id, csrf_token, expires_at) VALUES ($1, $2, $3, $4)`,
-		tokenHash, userID, csrfToken, expiresAt)
+// GetUserByID returns the user or (nil, nil) when the id is unknown, mirroring
+// GetUserByUsername. The self-service password change uses it to fetch the
+// caller's current hash.
+func (s *Store) GetUserByID(ctx context.Context, id uuid.UUID) (*UserInfo, error) {
+	var u UserInfo
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, username, COALESCE(password_hash, ''), role, disabled, created_at, auth_source
+		   FROM users WHERE id = $1`, id).
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Disabled, &u.CreatedAt, &u.AuthSource)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
-		return fmt.Errorf("create session: %w", err)
+		return nil, fmt.Errorf("get user: %w", err)
+	}
+	return &u, nil
+}
+
+// ResetLocalUserPassword replaces a local user's password hash and deletes
+// ALL of their sessions (the old credential is presumed lost or leaked) in
+// one transaction, returning the username and role for the reveal response.
+// Federated accounts are refused explicitly — an unguarded UPDATE would trip
+// the users_auth_shape constraint and surface as an opaque 500. A deleted
+// identity (login_events row with no users row) lands on the not-found path.
+// The disabled flag is deliberately untouched: enable is a separate lever.
+func (s *Store) ResetLocalUserPassword(ctx context.Context, id uuid.UUID, passwordHash string) (username, role string, err error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", "", fmt.Errorf("reset password %s: %w", id, err)
+	}
+	defer tx.Rollback(ctx)
+
+	var authSource string
+	err = tx.QueryRow(ctx,
+		`SELECT username, role, auth_source FROM users WHERE id = $1 FOR UPDATE`, id).
+		Scan(&username, &role, &authSource)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", notFoundf("user %s does not exist", id)
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("reset password %s: %w", id, err)
+	}
+	if authSource != "local" {
+		return "", "", conflictf("federated accounts authenticate at the identity provider")
+	}
+	if _, err := tx.Exec(ctx, `UPDATE users SET password_hash = $2 WHERE id = $1`, id, passwordHash); err != nil {
+		return "", "", fmt.Errorf("reset password %s: %w", id, err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1`, id); err != nil {
+		return "", "", fmt.Errorf("reset password %s: %w", id, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", "", fmt.Errorf("reset password %s: %w", id, err)
+	}
+	return username, role, nil
+}
+
+// UpdateOwnPassword replaces userID's password hash and deletes their OTHER
+// sessions (keepSessionID survives — the one that just proved the current
+// password) in one transaction. Current-password verification is the
+// caller's job: an argon2 KDF must not run while holding the row lock.
+// verifiedHash is the hash that verification ran against; the row must
+// still carry it, or the update is refused — otherwise a change verified
+// against the old credential could land after an admin reset and overwrite
+// the fresh password, exactly the takeover the reset was revoking.
+func (s *Store) UpdateOwnPassword(ctx context.Context, userID uuid.UUID, verifiedHash, passwordHash string, keepSessionID uuid.UUID) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("update password %s: %w", userID, err)
+	}
+	defer tx.Rollback(ctx)
+
+	var curHash string
+	err = tx.QueryRow(ctx,
+		`SELECT COALESCE(password_hash, '') FROM users
+		  WHERE id = $1 AND auth_source = 'local' FOR UPDATE`, userID).Scan(&curHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// The account was deleted (or is somehow federated) mid-request.
+		return notFoundf("user %s does not exist", userID)
+	}
+	if err != nil {
+		return fmt.Errorf("update password %s: %w", userID, err)
+	}
+	if curHash != verifiedHash {
+		return conflictf("password was changed by another request; sign in with the current password and try again")
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE users SET password_hash = $2 WHERE id = $1`, userID, passwordHash); err != nil {
+		return fmt.Errorf("update password %s: %w", userID, err)
+	}
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM sessions WHERE user_id = $1 AND id <> $2`, userID, keepSessionID); err != nil {
+		return fmt.Errorf("update password %s: %w", userID, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("update password %s: %w", userID, err)
+	}
+	return nil
+}
+
+// ErrPasswordChanged is returned by CreateLocalSession when the password (or
+// enabled state) the login verified is no longer the row's current one.
+var ErrPasswordChanged = errors.New("password changed during login")
+
+// CreateLocalSession mints a password-login session, revalidating inside the
+// insert that verifiedHash is still the user's password hash and the account
+// is still enabled — the CreateOIDCSession pattern. Argon2 verification runs
+// before this call; a reset or self-service change landing in that window
+// revokes every session of the old credential, and an unchecked insert would
+// hand the old (presumed leaked) password a fresh session that outlives the
+// rotation.
+func (s *Store) CreateLocalSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time, verifiedHash string) error {
+	tag, err := s.pool.Exec(ctx, `
+		INSERT INTO sessions (token_hash, user_id, csrf_token, expires_at)
+		SELECT $1, u.id, $3, $4 FROM users u
+		 WHERE u.id = $2 AND u.auth_source = 'local'
+		   AND u.password_hash = $5 AND NOT u.disabled`,
+		tokenHash, userID, csrfToken, expiresAt, verifiedHash)
+	if err != nil {
+		return fmt.Errorf("create local session: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrPasswordChanged
 	}
 	return nil
 }
@@ -180,11 +296,11 @@ func (s *Store) CreateSession(ctx context.Context, userID uuid.UUID, tokenHash [
 func (s *Store) GetSessionByTokenHash(ctx context.Context, tokenHash []byte) (*SessionInfo, error) {
 	var si SessionInfo
 	err := s.pool.QueryRow(ctx,
-		`SELECT s.id, s.user_id, u.username, u.role, s.csrf_token, s.expires_at, s.last_used_at
+		`SELECT s.id, s.user_id, u.username, u.role, u.auth_source, s.csrf_token, s.expires_at, s.last_used_at
 		   FROM sessions s JOIN users u ON u.id = s.user_id
 		  WHERE s.token_hash = $1 AND s.expires_at > now() AND NOT u.disabled`,
 		tokenHash).
-		Scan(&si.ID, &si.UserID, &si.Username, &si.Role, &si.CSRFToken, &si.ExpiresAt, &si.LastUsedAt)
+		Scan(&si.ID, &si.UserID, &si.Username, &si.Role, &si.AuthSource, &si.CSRFToken, &si.ExpiresAt, &si.LastUsedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
