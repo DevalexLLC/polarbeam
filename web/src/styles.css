@@ -2608,6 +2608,26 @@ table.fleet-table tr:last-child td {
   border-bottom: none;
 }
 
+/* Fleet rows deep-link to the agent's expanded detail; the anchor on the
+   site/hostname cell is the real (keyboard-reachable) control, the row
+   click is a pointer convenience, as on the Agents table. */
+table.fleet-table tbody tr {
+  cursor: pointer;
+}
+
+table.fleet-table tbody tr:hover td {
+  background: var(--surface-2);
+}
+
+.fleet-agent-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.fleet-agent-link:hover strong {
+  text-decoration: underline;
+}
+
 table.fleet-table td strong {
   display: block;
   font-size: 0.83rem;

@@ -187,6 +187,7 @@ function Row({
   return (
     <>
       <tr
+        id={'agent-' + a.id}
         className="agent-row"
         onClick={(e) => {
           // The whole row is a convenience click target, but never steal
@@ -263,7 +264,7 @@ function Row({
   )
 }
 
-export default function Agents({ onAuthError }: { onAuthError: (err: unknown) => void }) {
+export default function Agents({ agent, onAuthError }: { agent: string | null; onAuthError: (err: unknown) => void }) {
   useTimezone() // re-render fmtTime tooltips on UTC/local toggle
   const [data, setData] = useState<AgentsResponse | null>(null)
   const [error, setError] = useState('')
@@ -271,7 +272,11 @@ export default function Agents({ onAuthError }: { onAuthError: (err: unknown) =>
   const [query, setQuery] = useState('')
   // One agent's row may be expanded to its per-probe detail, fetched
   // lazily on expand and refreshed on the same cadence as the table.
-  const [expanded, setExpanded] = useState<string | null>(null)
+  // The hash (#/agents/<id>) is the single source of truth for which row
+  // is open — not local state, which would go stale when the top-nav
+  // Agents link resets the hash — so deep links from the Overview fleet
+  // card, refreshes, and Back all restore the expansion for free.
+  const expanded = agent
   const [detail, setDetail] = useState<AgentProbeHealthResponse | null>(null)
   const [detailError, setDetailError] = useState('')
 
@@ -326,16 +331,25 @@ export default function Agents({ onAuthError }: { onAuthError: (err: unknown) =>
     }
   }, [expanded, onAuthError])
 
+  // Bring a deep-linked row into view once the table exists. block:
+  // 'nearest' is a no-op for a row already on screen, so expanding by
+  // click never jumps — only arrivals from the Overview fleet card (or a
+  // bookmark) scroll. An unknown id simply has no row to scroll to.
+  useEffect(() => {
+    if (!expanded || !data) return
+    document.getElementById('agent-' + expanded)?.scrollIntoView({ block: 'nearest' })
+  }, [expanded, data])
+
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase()
-    return (data?.agents ?? []).filter((agent) => {
+    return (data?.agents ?? []).filter((row) => {
       // The two filters partition the fleet on needsAttention — including
       // never-seen (stale) agents and recent spool drops — so the button
       // counts always match the rows they reveal.
-      if (filter === 'attention' && !needsAttention(agent)) return false
-      if (filter === 'healthy' && needsAttention(agent)) return false
+      if (filter === 'attention' && !needsAttention(row)) return false
+      if (filter === 'healthy' && needsAttention(row)) return false
       if (!needle) return true
-      return [agent.site, agent.hostname, agent.probe_address, agent.version].some((value) =>
+      return [row.site, row.hostname, row.probe_address, row.version].some((value) =>
         value.toLowerCase().includes(needle),
       )
     })
@@ -474,7 +488,9 @@ export default function Agents({ onAuthError }: { onAuthError: (err: unknown) =>
                     key={a.id}
                     a={a}
                     expanded={expanded === a.id}
-                    onToggle={() => setExpanded((prev) => (prev === a.id ? null : a.id))}
+                    onToggle={() => {
+                      location.hash = expanded === a.id ? '#/agents' : '#/agents/' + a.id
+                    }}
                     detail={detail}
                     detailError={detailError}
                   />

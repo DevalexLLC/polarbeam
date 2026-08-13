@@ -50,10 +50,28 @@ export default function FleetAgentsCard({
                 const buckets = healthById.get(a.id) ?? []
                 const s = stripStats(buckets, bucketS, nowS)
                 return (
-                  <tr key={a.id}>
+                  <tr
+                    key={a.id}
+                    onClick={(e) => {
+                      // The whole row is a convenience click target for the
+                      // agent link, but never steal clicks meant for real
+                      // controls — including strip slots, whose click pins
+                      // the drill-down card rather than navigating.
+                      if ((e.target as Element).closest('button, a, .fleet-strip, .strip-tip')) return
+                      location.hash = '#/agents/' + a.id
+                    }}
+                  >
                     <td>
-                      <strong>{a.site}</strong>
-                      <small>{a.hostname}</small>
+                      {/* aria-label because the linter can't see the nested
+                          interpolated text as the control's label. */}
+                      <a
+                        className="fleet-agent-link"
+                        href={'#/agents/' + a.id}
+                        aria-label={`${a.site} · ${a.hostname}`}
+                      >
+                        <strong>{a.site}</strong>
+                        <small>{a.hostname}</small>
+                      </a>
                     </td>
                     <td className="fleet-seen">{a.last_seen_at ? fmtAgo(a.last_seen_at) : 'never'}</td>
                     <td className="fleet-health">
