@@ -2765,6 +2765,45 @@ td.fleet-uptime {
   transform: translate(-50%, 10px);
 }
 
+/* Clickable slots: the strip has a drill-down wired. */
+.fleet-strip-clickable {
+  cursor: pointer;
+}
+
+/* Pinned drill-down: the one strip-tip state that IS interactive — the
+   error text must be selectable, so the pointer-inertness lifts. */
+.strip-tip-pinned {
+  pointer-events: auto;
+  user-select: text;
+  max-width: 22rem;
+}
+
+.strip-tip-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.4rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--border);
+}
+
+.strip-tip-fail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  font-size: 0.78rem;
+}
+
+.strip-tip-error {
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--ink-2);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Settings → Users: monthly sign-in chart (stacked local/SSO bars, hover
    card via .strip-tip like the fleet strips). */
 .login-bars {

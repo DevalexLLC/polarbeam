@@ -3,7 +3,13 @@ import { apiGet } from '../api'
 import HealthStrip, { stripStats, UptimeValue } from '../components/HealthStrip'
 import { fmtAgo, fmtTime } from '../format'
 import { useTimezone } from '../timezone'
-import type { AgentInfo, AgentProbeHealth, AgentProbeHealthResponse, AgentsResponse } from '../types'
+import type {
+  AgentBucketFailuresResponse,
+  AgentInfo,
+  AgentProbeHealth,
+  AgentProbeHealthResponse,
+  AgentsResponse,
+} from '../types'
 
 const POLL_MS = 30_000
 // Agents renew their cert at 2/3 lifetime (10 days left on the 30-day
@@ -111,7 +117,15 @@ function ProbeLabel({ p }: { p: AgentProbeHealth }) {
 // first, so the row's "N of M failing" is attributable to specific probes —
 // an external target down for maintenance reads differently from a broken
 // site link.
-function ProbeDetail({ detail, error }: { detail: AgentProbeHealthResponse | null; error: string }) {
+function ProbeDetail({
+  agentId,
+  detail,
+  error,
+}: {
+  agentId: string
+  detail: AgentProbeHealthResponse | null
+  error: string
+}) {
   if (!detail && error)
     return (
       <div className="inline-alert" role="status">
@@ -149,7 +163,19 @@ function ProbeDetail({ detail, error }: { detail: AgentProbeHealthResponse | nul
         return (
           <div key={p.probe_id} className="probe-strip-row">
             <ProbeLabel p={p} />
-            <HealthStrip buckets={s.inWindow} bucketS={bucketS} endS={s.endS} label={s.stripLabel} />
+            {/* probe_id scopes the breakdown to this series (and keeps
+                traceroute in, matching this strip's own counts). */}
+            <HealthStrip
+              buckets={s.inWindow}
+              bucketS={bucketS}
+              endS={s.endS}
+              label={s.stripLabel}
+              fetchSlotDetail={(t) =>
+                apiGet<AgentBucketFailuresResponse>(
+                  `/api/v1/agents/${agentId}/health/bucket?t=${t}&probe_id=${p.probe_id}`,
+                )
+              }
+            />
             <div className="probe-strip-uptime">
               <UptimeValue uptime={s.uptime} partial={s.partial} stripLabel={s.stripLabel} />
             </div>
@@ -256,7 +282,7 @@ function Row({
       {expanded && (
         <tr className="agent-detail-row">
           <td colSpan={10} data-label="24 h probes">
-            <ProbeDetail detail={detail} error={detailError} />
+            <ProbeDetail agentId={a.id} detail={detail} error={detailError} />
           </td>
         </tr>
       )}

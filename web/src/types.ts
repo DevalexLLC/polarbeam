@@ -99,6 +99,29 @@ export interface AgentProbeHealthResponse {
   probes: AgentProbeHealth[]
 }
 
+// GET /api/v1/agents/{id}/health/bucket?t=… — the failure breakdown behind
+// one 30-min health-strip slot. Without probe_id, traceroute is excluded so
+// counts reconcile with the fleet strip; with probe_id they reconcile with
+// that probe's own strip. groups is [] for an all-OK (or aged-out) bucket.
+// target/dst_site semantics match AgentProbeHealth.
+export interface AgentBucketFailureGroup {
+  probe_id: string
+  type: string
+  target_kind: 'agent' | 'external' | ''
+  target: string | null
+  dst_site: string | null
+  status: string
+  count: number
+  last_error: string | null // ≤128 chars, truncated at ingest
+  last_time: string
+}
+
+export interface AgentBucketFailuresResponse {
+  t: number
+  bucket_s: number
+  groups: AgentBucketFailureGroup[]
+}
+
 export type CellStatus = 'ok' | 'degraded' | 'down' | 'stale'
 
 export interface MatrixProbe {

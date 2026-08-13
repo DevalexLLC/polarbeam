@@ -1,5 +1,6 @@
+import { apiGet } from '../api'
 import { fmtAgo } from '../format'
-import type { AgentHealthResponse, AgentInfo } from '../types'
+import type { AgentBucketFailuresResponse, AgentHealthResponse, AgentInfo } from '../types'
 import HealthStrip, { stripStats, UptimeValue } from './HealthStrip'
 
 // Fleet health at a glance: one row per agent with its last update, 24 h
@@ -75,7 +76,18 @@ export default function FleetAgentsCard({
                     </td>
                     <td className="fleet-seen">{a.last_seen_at ? fmtAgo(a.last_seen_at) : 'never'}</td>
                     <td className="fleet-health">
-                      <HealthStrip buckets={s.inWindow} bucketS={bucketS} endS={s.endS} label={s.stripLabel} />
+                      {/* The strip stays dumb about 401s: a dead session
+                          shows in the pinned card once, and the 30 s polls
+                          bounce the app to login within a cycle anyway. */}
+                      <HealthStrip
+                        buckets={s.inWindow}
+                        bucketS={bucketS}
+                        endS={s.endS}
+                        label={s.stripLabel}
+                        fetchSlotDetail={(t) =>
+                          apiGet<AgentBucketFailuresResponse>(`/api/v1/agents/${a.id}/health/bucket?t=${t}`)
+                        }
+                      />
                     </td>
                     <td className="fleet-uptime">
                       <UptimeValue uptime={s.uptime} partial={s.partial} stripLabel={s.stripLabel} />
