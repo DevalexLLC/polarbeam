@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -199,6 +200,90 @@ func (a *api) handleAgentProbeHealth(w http.ResponseWriter, r *http.Request) {
 		"window":   "24h",
 		"bucket_s": int(agentHealthBucket.Seconds()),
 		"probes":   probes,
+	})
+}
+
+// bucketFailureJSON is one (probe, status) failure group inside a single
+// health-strip bucket. Target/DstSite semantics match agentProbeHealthJSON:
+// target only for external kind (agent-kind names are synthesized handles),
+// target_kind "" when the target row is gone.
+type bucketFailureJSON struct {
+	ProbeID    string    `json:"probe_id"`
+	Type       string    `json:"type"`
+	TargetKind string    `json:"target_kind"`
+	Target     *string   `json:"target"`
+	DstSite    *string   `json:"dst_site"`
+	Status     string    `json:"status"`
+	Count      int64     `json:"count"`
+	LastError  *string   `json:"last_error"`
+	LastTime   time.Time `json:"last_time"`
+}
+
+// handleAgentHealthBucket serves the failure breakdown behind one 30-min
+// health-strip slot — the "why" for a degraded or down bucket. Without
+// probe_id it reconciles with the fleet strip (traceroute excluded); with
+// probe_id it reconciles with that probe's own strip. t must be an aligned
+// bucket start inside the strip window, with one bucket of slack because
+// the strip's oldest slot starts up to one bucket before now−24h.
+func (a *api) handleAgentHealthBucket(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad agent id")
+		return
+	}
+	t, err := strconv.ParseInt(r.URL.Query().Get("t"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad t (want epoch seconds)")
+		return
+	}
+	bucketS := int64(agentHealthBucket.Seconds())
+	if t%bucketS != 0 {
+		writeError(w, http.StatusBadRequest, "t must be a 30-minute bucket start")
+		return
+	}
+	now := time.Now().Unix()
+	if t > now || now-t > int64((agentHealthWindow+agentHealthBucket).Seconds()) {
+		writeError(w, http.StatusBadRequest, "t outside the 24h window")
+		return
+	}
+	var probeID *uuid.UUID
+	if p := r.URL.Query().Get("probe_id"); p != "" {
+		pid, err := uuid.Parse(p)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad probe id")
+			return
+		}
+		probeID = &pid
+	}
+	rows, err := a.db.AgentBucketFailures(r.Context(), id, time.Unix(t, 0).UTC(), agentHealthBucket,
+		probeID, int16(pb.ProbeType_PROBE_TYPE_TRACEROUTE))
+	if err != nil {
+		internalError(w, "agent bucket failures", err)
+		return
+	}
+	groups := []bucketFailureJSON{}
+	for _, g := range rows {
+		j := bucketFailureJSON{
+			ProbeID:   g.ProbeID.String(),
+			Type:      probeTypeName(g.ProbeType),
+			Status:    probeStatusName(g.Status),
+			Count:     g.Count,
+			LastError: g.LastError,
+			LastTime:  g.LastTime,
+			DstSite:   g.DstSite,
+		}
+		if g.TargetKind != nil {
+			j.TargetKind = *g.TargetKind
+			if *g.TargetKind == "external" {
+				j.Target = g.TargetName
+			}
+		}
+		groups = append(groups, j)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"t":        t,
+		"bucket_s": int(agentHealthBucket.Seconds()),
+		"groups":   groups,
 	})
 }
 

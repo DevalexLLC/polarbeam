@@ -42,7 +42,7 @@ type Route =
   | { view: 'pair'; a: string; b: string }
   | { view: 'incidents' }
   | { view: 'routes' }
-  | { view: 'agents' }
+  | { view: 'agents'; agent: string | null }
   | { view: 'about' }
   | { view: 'settings'; tab: SettingsTab }
 
@@ -63,7 +63,9 @@ function parseHash(hash: string): Route {
   }
   if (parts[0] === 'incidents' || parts[0] === 'outages') return { view: 'incidents' }
   if (parts[0] === 'routes' || parts[0] === 'paths') return { view: 'routes' }
-  if (parts[0] === 'agents') return { view: 'agents' }
+  // #/agents/<id> deep-links to that agent's expanded detail; the hash is
+  // the single source of truth for which row is open (see Agents.tsx).
+  if (parts[0] === 'agents') return { view: 'agents', agent: parts[1] ? decodeSegment(parts[1]) : null }
   if (parts[0] === 'about') return { view: 'about' }
   if (parts[0] === 'settings') {
     // #/settings/<tab>; unknown or absent tabs land on thresholds so the
@@ -250,7 +252,7 @@ export default function App() {
         ) : route.view === 'incidents' ? (
           <Outages onAuthError={onAuthError} />
         ) : route.view === 'agents' ? (
-          <Agents onAuthError={onAuthError} />
+          <Agents agent={route.agent} onAuthError={onAuthError} />
         ) : route.view === 'settings' ? (
           <Settings
             tab={route.tab}

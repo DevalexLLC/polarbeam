@@ -2608,6 +2608,26 @@ table.fleet-table tr:last-child td {
   border-bottom: none;
 }
 
+/* Fleet rows deep-link to the agent's expanded detail; the anchor on the
+   site/hostname cell is the real (keyboard-reachable) control, the row
+   click is a pointer convenience, as on the Agents table. */
+table.fleet-table tbody tr {
+  cursor: pointer;
+}
+
+table.fleet-table tbody tr:hover td {
+  background: var(--surface-2);
+}
+
+.fleet-agent-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.fleet-agent-link:hover strong {
+  text-decoration: underline;
+}
+
 table.fleet-table td strong {
   display: block;
   font-size: 0.83rem;
@@ -2743,6 +2763,45 @@ td.fleet-uptime {
    flips underneath the strip instead of rendering off-screen. */
 .strip-tip-below {
   transform: translate(-50%, 10px);
+}
+
+/* Clickable slots: the strip has a drill-down wired. */
+.fleet-strip-clickable {
+  cursor: pointer;
+}
+
+/* Pinned drill-down: the one strip-tip state that IS interactive — the
+   error text must be selectable, so the pointer-inertness lifts. */
+.strip-tip-pinned {
+  pointer-events: auto;
+  user-select: text;
+  max-width: 22rem;
+}
+
+.strip-tip-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.4rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--border);
+}
+
+.strip-tip-fail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  font-size: 0.78rem;
+}
+
+.strip-tip-error {
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--ink-2);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Settings → Users: monthly sign-in chart (stacked local/SSO bars, hover
