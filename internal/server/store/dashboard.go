@@ -160,6 +160,23 @@ type AgentProbeHealthRow struct {
 	OK         *int64
 }
 
+// AgentBucketFailureGroup is one (probe series, status) failure group inside
+// a single health-strip bucket, with a representative most-recent error.
+// TargetKind/TargetName are nil when the target row is gone; DstSite is nil
+// for external targets. LastError is the newest non-NULL error in the group
+// (≤128 chars, truncated at ingest); nil when every row lacked one.
+type AgentBucketFailureGroup struct {
+	ProbeID    uuid.UUID
+	ProbeType  int16
+	TargetKind *string
+	TargetName *string
+	DstSite    *string
+	Status     int16
+	Count      int64
+	LastError  *string
+	LastTime   time.Time
+}
+
 // MatrixRow is the latest result of one (agent, agent-target, probe type)
 // series, mapped to its ordered site pair.
 type MatrixRow struct {
@@ -486,6 +503,58 @@ func (s *Store) AgentProbeHealth(ctx context.Context, agentID uuid.UUID, window,
 			return nil, fmt.Errorf("agent probe health: %w", err)
 		}
 		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// AgentBucketFailures returns the failure groups behind one health-strip
+// bucket: every non-OK result (status <> 1, UNSUPPORTED included — same
+// failure definition as AgentHealthSeries) the agent recorded in
+// [bucketStart, bucketStart+bucket), grouped by probe series and status.
+// Label joins go through pr.target_id — unlike AgentProbeHealth's
+// series_state route — because only rows that actually exist are reported;
+// a deleted target degrades to NULL kind/name exactly as there. probeID nil
+// serves the fleet strip and excludes excludeProbeType so counts reconcile
+// with AgentHealthSeries (the caller passes traceroute; store deliberately
+// does not import pb). probeID non-nil serves a per-probe strip: it filters
+// to that probe and ignores the exclusion, reconciling with
+// AgentProbeHealth, which includes traceroute. The FILTER on array_agg
+// keeps a NULL-error newest row from hiding an older real message. Bucket
+// starts must sit inside raw retention (14 d); this reads probe_results
+// directly.
+func (s *Store) AgentBucketFailures(ctx context.Context, agentID uuid.UUID,
+	bucketStart time.Time, bucket time.Duration,
+	probeID *uuid.UUID, excludeProbeType int16) ([]AgentBucketFailureGroup, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT pr.probe_id, pr.probe_type, t.kind, t.name, dst.name, pr.status,
+		        count(*),
+		        (array_agg(pr.error ORDER BY pr.time DESC)
+		           FILTER (WHERE pr.error IS NOT NULL))[1],
+		        max(pr.time)
+		   FROM probe_results pr
+		   LEFT JOIN targets t  ON t.id  = pr.target_id
+		   LEFT JOIN agents ta  ON ta.id = t.agent_id
+		   LEFT JOIN sites  dst ON dst.id = ta.site_id
+		  WHERE pr.agent_id = $1
+		    AND pr.time >= $2 AND pr.time < $2 + $3::interval
+		    AND pr.status <> 1
+		    AND ($4::uuid IS NULL OR pr.probe_id = $4)
+		    AND ($4::uuid IS NOT NULL OR pr.probe_type <> $5)
+		  GROUP BY pr.probe_id, pr.probe_type, t.kind, t.name, dst.name, pr.status
+		  ORDER BY count(*) DESC, pr.probe_id, pr.status`,
+		agentID, bucketStart, bucket, probeID, excludeProbeType)
+	if err != nil {
+		return nil, fmt.Errorf("agent bucket failures: %w", err)
+	}
+	defer rows.Close()
+	var out []AgentBucketFailureGroup
+	for rows.Next() {
+		var g AgentBucketFailureGroup
+		if err := rows.Scan(&g.ProbeID, &g.ProbeType, &g.TargetKind, &g.TargetName, &g.DstSite,
+			&g.Status, &g.Count, &g.LastError, &g.LastTime); err != nil {
+			return nil, fmt.Errorf("agent bucket failures: %w", err)
+		}
+		out = append(out, g)
 	}
 	return out, rows.Err()
 }

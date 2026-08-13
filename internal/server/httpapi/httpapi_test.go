@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -34,9 +35,15 @@ type fakeDB struct {
 	probeHealth       []store.AgentProbeHealthRow
 	// agent id the last AgentProbeHealth call was made for
 	lastProbeHealthAgent uuid.UUID
-	sites                []store.SiteInfo
-	endpoints            map[string]*store.SiteEndpoints
-	settings             *store.ThresholdSettings
+	bucketFailures       []store.AgentBucketFailureGroup
+	// arguments of the last AgentBucketFailures call
+	lastBucketAgent   uuid.UUID
+	lastBucketStart   time.Time
+	lastBucketProbe   *uuid.UUID
+	lastBucketExclude int16
+	sites             []store.SiteInfo
+	endpoints         map[string]*store.SiteEndpoints
+	settings          *store.ThresholdSettings
 
 	targets     []store.TargetInfo
 	meshes      []store.MeshGroupInfo
@@ -298,6 +305,13 @@ func (f *fakeDB) AgentHealthSeries(_ context.Context, _, _ time.Duration, exclud
 func (f *fakeDB) AgentProbeHealth(_ context.Context, agentID uuid.UUID, _, _ time.Duration) ([]store.AgentProbeHealthRow, error) {
 	f.lastProbeHealthAgent = agentID
 	return f.probeHealth, nil
+}
+func (f *fakeDB) AgentBucketFailures(_ context.Context, agentID uuid.UUID, bucketStart time.Time, _ time.Duration, probeID *uuid.UUID, excludeProbeType int16) ([]store.AgentBucketFailureGroup, error) {
+	f.lastBucketAgent = agentID
+	f.lastBucketStart = bucketStart
+	f.lastBucketProbe = probeID
+	f.lastBucketExclude = excludeProbeType
+	return f.bucketFailures, nil
 }
 func (f *fakeDB) MatrixLatest(_ context.Context, _ time.Duration) ([]store.MatrixRow, error) {
 	return nil, nil
@@ -611,6 +625,7 @@ func TestSessionRequired(t *testing.T) {
 		"/api/v1/auth/me", "/api/v1/sites", "/api/v1/agents", "/api/v1/matrix",
 		"/api/v1/agents/health", "/api/v1/pairs/a/b", "/api/v1/pairs/a/b/series",
 		"/api/v1/agents/00000000-0000-0000-0000-000000000000/health",
+		"/api/v1/agents/00000000-0000-0000-0000-000000000000/health/bucket?t=0",
 	} {
 		req := httptest.NewRequest("GET", path, nil)
 		w := httptest.NewRecorder()
@@ -837,6 +852,133 @@ func TestAgentProbeHealth(t *testing.T) {
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("bad id = %d, want 400", w.Code)
+	}
+}
+
+func TestAgentHealthBucket(t *testing.T) {
+	f := newFakeDB()
+	agent := uuid.New()
+	probeA := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+	probeB := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+	str := func(s string) *string { return &s }
+	// Aligned to the 30-min grid from the current time so the window
+	// validation never rots: two buckets ago is always inside 24h+bucket.
+	tAligned := time.Now().Unix() / 1800 * 1800
+	tQuery := tAligned - 2*1800
+	lastTime := time.Unix(tQuery+900, 0).UTC()
+	f.bucketFailures = []store.AgentBucketFailureGroup{
+		{ProbeID: probeA, ProbeType: int16(pb.ProbeType_PROBE_TYPE_HTTP),
+			TargetKind: str("external"), TargetName: str("corp-vpn"),
+			Status: int16(pb.ProbeStatus_PROBE_STATUS_TIMEOUT), Count: 4,
+			LastError: str("context deadline exceeded"), LastTime: lastTime},
+		{ProbeID: probeB, ProbeType: int16(pb.ProbeType_PROBE_TYPE_ICMP),
+			TargetKind: str("agent"), TargetName: str("agent:deadbeef"), DstSite: str("lon"),
+			Status: int16(pb.ProbeStatus_PROBE_STATUS_ERROR), Count: 1,
+			LastTime: lastTime},
+	}
+	h := newTestAPI(t, f)
+	cookie, _ := loginAndCookie(t, h, f)
+
+	url := "/api/v1/agents/" + agent.String() + "/health/bucket?t=" + strconv.FormatInt(tQuery, 10)
+	req := httptest.NewRequest("GET", url, nil)
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("health/bucket = %d %s", w.Code, w.Body)
+	}
+	if f.lastBucketAgent != agent || !f.lastBucketStart.Equal(time.Unix(tQuery, 0)) {
+		t.Errorf("store queried for %s at %s, want %s at %s",
+			f.lastBucketAgent, f.lastBucketStart, agent, time.Unix(tQuery, 0).UTC())
+	}
+	// Fleet-level (no probe_id): traceroute excluded so counts reconcile
+	// with the fleet strip.
+	if f.lastBucketProbe != nil {
+		t.Errorf("probe filter = %v, want nil for fleet-level query", f.lastBucketProbe)
+	}
+	if f.lastBucketExclude != int16(pb.ProbeType_PROBE_TYPE_TRACEROUTE) {
+		t.Errorf("excluded probe type = %d, want traceroute (%d)",
+			f.lastBucketExclude, int16(pb.ProbeType_PROBE_TYPE_TRACEROUTE))
+	}
+	var res struct {
+		T       int64 `json:"t"`
+		BucketS int   `json:"bucket_s"`
+		Groups  []struct {
+			ProbeID    string  `json:"probe_id"`
+			Type       string  `json:"type"`
+			TargetKind string  `json:"target_kind"`
+			Target     *string `json:"target"`
+			DstSite    *string `json:"dst_site"`
+			Status     string  `json:"status"`
+			Count      int64   `json:"count"`
+			LastError  *string `json:"last_error"`
+		} `json:"groups"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatalf("bad body: %v", err)
+	}
+	if res.T != tQuery || res.BucketS != 1800 {
+		t.Errorf("t/bucket_s = %d/%d, want %d/1800", res.T, res.BucketS, tQuery)
+	}
+	if len(res.Groups) != 2 {
+		t.Fatalf("groups = %d, want 2", len(res.Groups))
+	}
+	ga := res.Groups[0]
+	if ga.ProbeID != probeA.String() || ga.Type != "http" || ga.Status != "timeout" || ga.Count != 4 ||
+		ga.TargetKind != "external" || ga.Target == nil || *ga.Target != "corp-vpn" ||
+		ga.LastError == nil || *ga.LastError != "context deadline exceeded" {
+		t.Errorf("external group = %+v", ga)
+	}
+	// Agent-kind targets label by destination site; the synthesized
+	// agent:<id> targets.name must never leak into target.
+	gb := res.Groups[1]
+	if gb.Type != "icmp" || gb.Status != "error" || gb.Target != nil ||
+		gb.DstSite == nil || *gb.DstSite != "lon" || gb.LastError != nil {
+		t.Errorf("agent-kind group = %+v", gb)
+	}
+
+	// probe_id narrows to one series and drops the traceroute exclusion
+	// (per-probe strips include traceroute).
+	req = httptest.NewRequest("GET", url+"&probe_id="+probeA.String(), nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("health/bucket with probe_id = %d %s", w.Code, w.Body)
+	}
+	if f.lastBucketProbe == nil || *f.lastBucketProbe != probeA {
+		t.Errorf("probe filter = %v, want %s", f.lastBucketProbe, probeA)
+	}
+
+	// An all-OK (or aged-out) bucket is an empty list, not null.
+	f.bucketFailures = nil
+	req = httptest.NewRequest("GET", url, nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"groups":[]`) {
+		t.Errorf("empty bucket = %d %s, want 200 with groups:[]", w.Code, w.Body)
+	}
+
+	// Validation rejects everything the strip cannot have produced.
+	for name, path := range map[string]string{
+		"bad agent id": "/api/v1/agents/not-a-uuid/health/bucket?t=" + strconv.FormatInt(tQuery, 10),
+		"missing t":    "/api/v1/agents/" + agent.String() + "/health/bucket",
+		"garbage t":    "/api/v1/agents/" + agent.String() + "/health/bucket?t=noon",
+		"misaligned t": "/api/v1/agents/" + agent.String() + "/health/bucket?t=" + strconv.FormatInt(tQuery+900, 10),
+		"too-old t": "/api/v1/agents/" + agent.String() + "/health/bucket?t=" +
+			strconv.FormatInt(tAligned-(50*1800), 10),
+		"future t": "/api/v1/agents/" + agent.String() + "/health/bucket?t=" +
+			strconv.FormatInt(tAligned+2*1800, 10),
+		"bad probe_id": url + "&probe_id=not-a-uuid",
+	} {
+		req := httptest.NewRequest("GET", path, nil)
+		req.AddCookie(cookie)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s = %d, want 400", name, w.Code)
+		}
 	}
 }
 
