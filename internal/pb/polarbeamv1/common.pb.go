@@ -40,6 +40,7 @@ const (
 	ProbeType_PROBE_TYPE_HTTP        ProbeType = 4
 	ProbeType_PROBE_TYPE_DNS         ProbeType = 5
 	ProbeType_PROBE_TYPE_TRACEROUTE  ProbeType = 6
+	ProbeType_PROBE_TYPE_NTP         ProbeType = 7
 )
 
 // Enum value maps for ProbeType.
@@ -52,6 +53,7 @@ var (
 		4: "PROBE_TYPE_HTTP",
 		5: "PROBE_TYPE_DNS",
 		6: "PROBE_TYPE_TRACEROUTE",
+		7: "PROBE_TYPE_NTP",
 	}
 	ProbeType_value = map[string]int32{
 		"PROBE_TYPE_UNSPECIFIED": 0,
@@ -61,6 +63,7 @@ var (
 		"PROBE_TYPE_HTTP":        4,
 		"PROBE_TYPE_DNS":         5,
 		"PROBE_TYPE_TRACEROUTE":  6,
+		"PROBE_TYPE_NTP":         7,
 	}
 )
 
@@ -857,7 +860,7 @@ const file_polarbeam_v1_common_proto_rawDesc = "" +
 	"\atimings\x18\v \x01(\v2\x15.polarbeam.v1.TimingsR\atimings\x12>\n" +
 	"\n" +
 	"traceroute\x18\f \x01(\v2\x1e.polarbeam.v1.TracerouteResultR\n" +
-	"traceroute*\xa8\x01\n" +
+	"traceroute*\xbc\x01\n" +
 	"\tProbeType\x12\x1a\n" +
 	"\x16PROBE_TYPE_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fPROBE_TYPE_ICMP\x10\x01\x12\x12\n" +
@@ -865,7 +868,8 @@ const file_polarbeam_v1_common_proto_rawDesc = "" +
 	"\x0ePROBE_TYPE_TLS\x10\x03\x12\x13\n" +
 	"\x0fPROBE_TYPE_HTTP\x10\x04\x12\x12\n" +
 	"\x0ePROBE_TYPE_DNS\x10\x05\x12\x19\n" +
-	"\x15PROBE_TYPE_TRACEROUTE\x10\x06*\xeb\x01\n" +
+	"\x15PROBE_TYPE_TRACEROUTE\x10\x06\x12\x12\n" +
+	"\x0ePROBE_TYPE_NTP\x10\a*\xeb\x01\n" +
 	"\vProbeStatus\x12\x1c\n" +
 	"\x18PROBE_STATUS_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fPROBE_STATUS_OK\x10\x01\x12\x18\n" +

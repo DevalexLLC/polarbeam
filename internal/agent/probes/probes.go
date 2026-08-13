@@ -36,6 +36,7 @@ func DefaultRegistry() Registry {
 		pb.ProbeType_PROBE_TYPE_TLS:        TLS{},
 		pb.ProbeType_PROBE_TYPE_HTTP:       HTTP{},
 		pb.ProbeType_PROBE_TYPE_DNS:        DNS{},
+		pb.ProbeType_PROBE_TYPE_NTP:        NTP{},
 		pb.ProbeType_PROBE_TYPE_TRACEROUTE: Traceroute{},
 	}
 }

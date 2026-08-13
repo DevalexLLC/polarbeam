@@ -236,8 +236,8 @@ export default function TargetsPanel({
             <h3 className="eyebrow">{editing ? `Edit ${draft?.name}` : 'Add target'}</h3>
             <div className="config-form-grid">
               {field('Name', 'name', 'unique handle, e.g. pg-primary', editing)}
-              {field('Address', 'address', 'host or IP (tcp/tls/icmp/dns)')}
-              {field('Port', 'port', 'for tcp/tls probes')}
+              {field('Address', 'address', 'host or IP (tcp/tls/icmp/dns/ntp)')}
+              {field('Port', 'port', 'for tcp/tls probes (ntp defaults to 123)')}
               {field('URL', 'url', 'full URL for http probes')}
             </div>
             {formErrors.length > 0 && (

@@ -20,7 +20,7 @@ func TestParseType(t *testing.T) {
 		t.Fatal("ParseType(smtp) succeeded")
 	}
 	// The accepted list must be sorted so error text is deterministic.
-	want := `unknown probe type "smtp" (accepted: dns, http, icmp, tcp, tls, traceroute)`
+	want := `unknown probe type "smtp" (accepted: dns, http, icmp, ntp, tcp, tls, traceroute)`
 	if err.Error() != want {
 		t.Errorf("error = %q, want %q", err, want)
 	}
@@ -152,6 +152,11 @@ func TestValidateParams(t *testing.T) {
 		{"http mesh rejected", pb.ProbeType_PROBE_TYPE_HTTP, true, nil,
 			[]string{"http probes cannot be mesh templates"}},
 		{"http direct ok", pb.ProbeType_PROBE_TYPE_HTTP, false, nil, nil},
+		{"ntp mesh rejected", pb.ProbeType_PROBE_TYPE_NTP, true, nil,
+			[]string{"ntp probes cannot be mesh templates"}},
+		{"ntp unknown key", pb.ProbeType_PROBE_TYPE_NTP, false, map[string]string{"ntp.version": "4"},
+			[]string{`unknown key "ntp.version" for probe type ntp (accepted: none)`}},
+		{"ntp direct ok", pb.ProbeType_PROBE_TYPE_NTP, false, nil, nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -220,32 +225,38 @@ func TestValidateMeshMembers(t *testing.T) {
 	}
 }
 
-// TestWarnings pins the mesh-dns advisory. It must stay a warning: agents
-// that genuinely run resolvers make this configuration correct, so it can
-// never become a hard error.
+// TestWarnings pins the advisories. They must stay warnings: agents that
+// genuinely run resolvers make the mesh-dns configuration correct, and an
+// operator probing their own time server may poll faster than public NTP
+// etiquette allows, so neither can become a hard error.
 func TestWarnings(t *testing.T) {
 	dnsQ := map[string]string{"dns.qname": "example.internal"}
 	dnsResolved := map[string]string{"dns.qname": "example.internal", "dns.resolver": "10.0.0.53:53"}
 
 	for _, c := range []struct {
-		name   string
-		typ    pb.ProbeType
-		mesh   bool
-		params map[string]string
-		want   bool
+		name     string
+		typ      pb.ProbeType
+		mesh     bool
+		interval time.Duration
+		params   map[string]string
+		wantSub  string // "" = no warning expected
 	}{
-		{"mesh dns without resolver warns", pb.ProbeType_PROBE_TYPE_DNS, true, dnsQ, true},
-		{"mesh dns with explicit resolver is silent", pb.ProbeType_PROBE_TYPE_DNS, true, dnsResolved, false},
-		{"direct dns is silent", pb.ProbeType_PROBE_TYPE_DNS, false, dnsQ, false},
-		{"mesh icmp is silent", pb.ProbeType_PROBE_TYPE_ICMP, true, nil, false},
+		{"mesh dns without resolver warns", pb.ProbeType_PROBE_TYPE_DNS, true, 30 * time.Second, dnsQ, "dns.resolver"},
+		{"mesh dns with explicit resolver is silent", pb.ProbeType_PROBE_TYPE_DNS, true, 30 * time.Second, dnsResolved, ""},
+		{"direct dns is silent", pb.ProbeType_PROBE_TYPE_DNS, false, 30 * time.Second, dnsQ, ""},
+		{"mesh icmp is silent", pb.ProbeType_PROBE_TYPE_ICMP, true, 30 * time.Second, nil, ""},
+		{"ntp under a minute warns", pb.ProbeType_PROBE_TYPE_NTP, false, 30 * time.Second, nil, "rate limiting"},
+		{"ntp at a minute is silent", pb.ProbeType_PROBE_TYPE_NTP, false, 60 * time.Second, nil, ""},
+		{"ntp above a minute is silent", pb.ProbeType_PROBE_TYPE_NTP, false, 5 * time.Minute, nil, ""},
+		{"fast interval on other types is silent", pb.ProbeType_PROBE_TYPE_TCP, false, time.Second, nil, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got := Warnings(c.typ, c.mesh, c.params)
-			if c.want != (len(got) > 0) {
-				t.Fatalf("Warnings = %v, want warning %v", got, c.want)
+			got := Warnings(c.typ, c.mesh, c.interval, c.params)
+			if (c.wantSub != "") != (len(got) > 0) {
+				t.Fatalf("Warnings = %v, want warning %v", got, c.wantSub != "")
 			}
-			if c.want && !strings.Contains(strings.Join(got, "; "), "dns.resolver") {
-				t.Errorf("warning %v must name the param that fixes it", got)
+			if c.wantSub != "" && !strings.Contains(strings.Join(got, "; "), c.wantSub) {
+				t.Errorf("warning %v must mention %q", got, c.wantSub)
 			}
 		})
 	}
@@ -255,10 +266,17 @@ func TestWarnings(t *testing.T) {
 // that warns must still pass validation, or the warning would be a lie.
 func TestWarningsNeverBlock(t *testing.T) {
 	params := map[string]string{"dns.qname": "example.internal"}
-	if len(Warnings(pb.ProbeType_PROBE_TYPE_DNS, true, params)) == 0 {
+	if len(Warnings(pb.ProbeType_PROBE_TYPE_DNS, true, 30*time.Second, params)) == 0 {
 		t.Fatal("expected the mesh-dns warning for this fixture")
 	}
 	if problems := ValidateParams(pb.ProbeType_PROBE_TYPE_DNS, true, params); len(problems) > 0 {
+		t.Errorf("a warned config must still validate, got %v", problems)
+	}
+
+	if len(Warnings(pb.ProbeType_PROBE_TYPE_NTP, false, 30*time.Second, nil)) == 0 {
+		t.Fatal("expected the ntp cadence warning for this fixture")
+	}
+	if problems := ValidateSettings(pb.ProbeType_PROBE_TYPE_NTP, 30*time.Second, 5*time.Second, 0, 0, cliFields); len(problems) > 0 {
 		t.Errorf("a warned config must still validate, got %v", problems)
 	}
 }

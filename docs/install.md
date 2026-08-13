@@ -683,9 +683,9 @@ docker exec polarbeam-agent polarbeam-agent selfcheck \
 docker logs --tail=100 polarbeam-agent
 ```
 
-`NET_RAW` enables ICMP and traceroute. TCP, TLS, HTTP, and DNS probes do not
-need it, but the recommended standard agent includes it so all supported probe
-types work.
+`NET_RAW` enables ICMP and traceroute. TCP, TLS, HTTP, DNS, and NTP probes do
+not need it, but the recommended standard agent includes it so all supported
+probe types work.
 
 ## 9. Enroll the remaining sites
 
@@ -788,7 +788,7 @@ External targets let one site monitor infrastructure that is not a PolarBEAM
 agent. Create a target with the fields required by the probe type:
 
 ```sh
-# Address target for ICMP, traceroute, TCP, TLS, or DNS.
+# Address target for ICMP, traceroute, TCP, TLS, DNS, or NTP.
 docker compose exec server polarbeam-server target add \
   --config /etc/polarbeam/server.yaml \
   --name public-dns --address 203.0.113.53 --port 53
@@ -825,6 +825,7 @@ Probe-specific rules include:
 | `tls` | TCP requirements; optional `tls.sni` and `tls.insecure_skip_verify` |
 | `http` | direct URL target only; optional method, expected status, and TLS verification override |
 | `dns` | target address and required `dns.qname`; optional qtype, expected RCODE, and resolver override |
+| `ntp` | direct target address only, optional port (default 123); no parameters; 60-second or slower interval recommended |
 
 Avoid `*.insecure_skip_verify=true` except for intentionally self-signed test
 services. Unknown parameters are rejected rather than silently ignored.
@@ -1023,6 +1024,7 @@ Outbound requirements depend on configured probes:
 | TCP target port | peer agents/targets | TCP and TLS probes |
 | TCP URL port | external target | HTTP(S) probes |
 | UDP 53 or configured port | DNS target/resolver | DNS probes; no TCP fallback |
+| UDP 123 or configured port | NTP server target | NTP probes; no TCP fallback |
 | UDP 33434-33523 | peer agents/targets | traceroute probes |
 
 Inbound requirements for mesh destinations are:

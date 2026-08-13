@@ -330,6 +330,8 @@ func TestConfigProbeValidation(t *testing.T) {
 			`"port" is required for mesh tcp probes`},
 		{"http mesh rejected", `{"mesh":"m","type":"http","interval_ms":10000,"timeout_ms":5000}`,
 			"http probes cannot be mesh templates"},
+		{"ntp mesh rejected", `{"mesh":"m","type":"ntp","interval_ms":90000,"timeout_ms":5000}`,
+			"ntp probes cannot be mesh templates"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -453,8 +455,9 @@ func TestConfigProbeTypesRegistry(t *testing.T) {
 	}
 	var res struct {
 		Types []struct {
-			Type   string `json:"type"`
-			Params []struct {
+			Type       string `json:"type"`
+			DirectOnly bool   `json:"direct_only"`
+			Params     []struct {
 				Key          string `json:"key"`
 				Kind         string `json:"kind"`
 				RequiredMesh bool   `json:"required_mesh"`
@@ -466,8 +469,10 @@ func TestConfigProbeTypesRegistry(t *testing.T) {
 		t.Fatalf("bad body: %v", err)
 	}
 	byType := map[string][]string{}
+	directOnly := map[string]bool{}
 	var tcpHasMeshOnlyPort bool
 	for _, tt := range res.Types {
+		directOnly[tt.Type] = tt.DirectOnly
 		for _, p := range tt.Params {
 			byType[tt.Type] = append(byType[tt.Type], p.Key)
 			if tt.Type == "tcp" && p.Key == "port" && p.MeshOnly && p.RequiredMesh {
@@ -475,8 +480,8 @@ func TestConfigProbeTypesRegistry(t *testing.T) {
 			}
 		}
 	}
-	if len(res.Types) != 6 {
-		t.Errorf("types = %d, want 6", len(res.Types))
+	if len(res.Types) != 7 {
+		t.Errorf("types = %d, want 7", len(res.Types))
 	}
 	if !tcpHasMeshOnlyPort {
 		t.Error("tcp must declare mesh-only required port")
@@ -486,6 +491,16 @@ func TestConfigProbeTypesRegistry(t *testing.T) {
 	}
 	if want := []string{"dns.qname", "dns.qtype", "dns.expect_rcode", "dns.resolver"}; !slicesEqual(byType["dns"], want) {
 		t.Errorf("dns params = %v, want %v", byType["dns"], want)
+	}
+	// The SPA hides direct-only types from mesh mode off this flag.
+	if !directOnly["http"] || !directOnly["ntp"] {
+		t.Errorf("direct_only flags = %v, want http and ntp true", directOnly)
+	}
+	if directOnly["icmp"] || directOnly["tcp"] {
+		t.Errorf("direct_only flags = %v, want icmp and tcp false", directOnly)
+	}
+	if len(byType["ntp"]) != 0 {
+		t.Errorf("ntp params = %v, want none", byType["ntp"])
 	}
 }
 
@@ -546,6 +561,37 @@ func TestConfigProbeMeshDNSWarning(t *testing.T) {
 	w = doConfig(t, h, "POST", "/api/v1/config/probes", validDirectProbe, cookie, csrf)
 	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "warnings") {
 		t.Errorf("unremarkable probe = %d with body %s, want 200 and no warnings key", w.Code, w.Body)
+	}
+}
+
+// TestConfigProbeNTPCadenceWarning pins that the ntp rate-limit advisory
+// reaches the API caller on the success path — a create, never a rejection,
+// because operators probing their own time servers may poll faster.
+func TestConfigProbeNTPCadenceWarning(t *testing.T) {
+	f := newFakeDB()
+	h := newTestAPI(t, f)
+	cookie, csrf := configLogin(t, h, f, "admin")
+
+	w := doConfig(t, h, "POST", "/api/v1/config/probes",
+		`{"site":"nyc","target":"ntp-nyc","type":"ntp","interval_ms":30000,"timeout_ms":5000}`, cookie, csrf)
+	if w.Code != http.StatusOK {
+		t.Fatalf("fast ntp create = %d, want 200 (advisory, not a rejection): %s", w.Code, w.Body)
+	}
+	var got struct {
+		Warnings []string `json:"warnings"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Warnings) != 1 || !strings.Contains(got.Warnings[0], "rate limiting") {
+		t.Fatalf("warnings = %v, want one naming rate limiting", got.Warnings)
+	}
+
+	// A polite cadence is unremarkable: no warnings key at all.
+	w = doConfig(t, h, "POST", "/api/v1/config/probes",
+		`{"site":"nyc","target":"ntp-nyc","type":"ntp","interval_ms":60000,"timeout_ms":5000}`, cookie, csrf)
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "warnings") {
+		t.Errorf("polite ntp = %d with body %s, want 200 and no warnings key", w.Code, w.Body)
 	}
 }
 

@@ -20,7 +20,8 @@ type FieldNames struct {
 
 // Validate returns every problem with a prospective target (settings.go
 // convention). Port 0 is the "unset" sentinel — ICMP/traceroute ignore the
-// port and DNS reads 0 as "default 53" — so the legal range is 0–65535.
+// port, DNS reads 0 as "default 53" and NTP as "default 123" — so the legal
+// range is 0–65535.
 // Port is int64 so CLI callers can validate before narrowing to the wire's
 // int32, instead of silently truncating.
 func Validate(name, address, url string, port int64, f FieldNames) []string {
