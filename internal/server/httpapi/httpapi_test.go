@@ -58,6 +58,8 @@ type fakeDB struct {
 	loginMonths  []store.LoginMonthStat
 	logins       []recordedLogin // appended by RecordLogin
 
+	banner *store.BannerSettings
+
 	oidcSettings *store.OIDCSettings
 	oidcUsers    map[string]*store.UserInfo // key: oidcKey(issuer, subject)
 	// beforeUpdateOIDCSettings, when set, runs at the top of
@@ -358,6 +360,18 @@ func (f *fakeDB) UpdateSettings(_ context.Context, ts store.ThresholdSettings) (
 	ts.UpdatedAt = time.Now()
 	f.settings = &ts
 	return f.settings, nil
+}
+func (f *fakeDB) GetBannerSettings(_ context.Context) (*store.BannerSettings, error) {
+	if f.banner == nil {
+		// Mirrors the migration-seeded defaults (disabled, empty).
+		return &store.BannerSettings{}, nil
+	}
+	return f.banner, nil
+}
+func (f *fakeDB) UpdateBannerSettings(_ context.Context, b store.BannerSettings) (*store.BannerSettings, error) {
+	b.UpdatedAt = time.Now()
+	f.banner = &b
+	return f.banner, nil
 }
 func (f *fakeDB) ListOutages(_ context.Context, _ time.Duration) ([]store.OutageInfo, error) {
 	return f.outages, nil

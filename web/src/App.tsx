@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ApiError, apiGet, apiPost, setCsrfToken } from './api'
-import type { AuthProviders, LoginResponse, User } from './types'
+import type { AuthProviders, LoginResponse, UIBanner, User } from './types'
+import BannerFrame from './components/BannerFrame'
 import ChangePasswordDialog from './components/ChangePasswordDialog'
 import LogoMark from './components/LogoMark'
 import ThemeToggle from './components/ThemeToggle'
@@ -25,6 +26,7 @@ export type SettingsTab =
   | 'enrollment'
   | 'users'
   | 'authentication'
+  | 'banner'
 
 const SETTINGS_TABS: SettingsTab[] = [
   'thresholds',
@@ -35,6 +37,7 @@ const SETTINGS_TABS: SettingsTab[] = [
   'enrollment',
   'users',
   'authentication',
+  'banner',
 ]
 
 type Route =
@@ -91,6 +94,7 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null)
   const [serverVersion, setServerVersion] = useState('')
   const [sso, setSso] = useState(false)
+  const [banner, setBanner] = useState<UIBanner | null>(null)
   const [changingPassword, setChangingPassword] = useState(false)
   const [route, setRoute] = useState<Route>(() => parseHash(location.hash))
 
@@ -126,6 +130,26 @@ export default function App() {
       })
   }, [booted, user])
 
+  // The banner is open (the sign-in screen renders it too): fetch at boot,
+  // refetch on login/logout, and poll so another admin's edit converges
+  // everywhere within 30s. A failure keeps the last known value — the
+  // banner must never block login or blank the app.
+  useEffect(() => {
+    let cancelled = false
+    const load = () =>
+      apiGet<UIBanner>('/api/v1/ui-banner')
+        .then((b) => {
+          if (!cancelled) setBanner(b)
+        })
+        .catch((err) => console.warn('ui banner unavailable; keeping last known', err))
+    load()
+    const id = setInterval(load, 30_000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [user])
+
   // Any 401 from a view means the session died server-side: back to login.
   const onAuthError = useCallback((err: unknown) => {
     if (err instanceof ApiError && err.status === 401) setUser(null)
@@ -143,129 +167,136 @@ export default function App() {
 
   if (!booted) {
     return (
-      <div className="boot-state" role="status">
-        <LogoMark className="logo-mark logo-mark-boot" />
-        Loading PolarBEAM…
-      </div>
+      <BannerFrame banner={banner}>
+        <div className="boot-state" role="status">
+          <LogoMark className="logo-mark logo-mark-boot" />
+          Loading PolarBEAM…
+        </div>
+      </BannerFrame>
     )
   }
   if (!user) {
     return (
-      <Login
-        sso={sso}
-        onLogin={(res) => {
-          setCsrfToken(res.csrf_token)
-          setUser(res.user)
-          setServerVersion(res.version)
-        }}
-      />
+      <BannerFrame banner={banner}>
+        <Login
+          sso={sso}
+          onLogin={(res) => {
+            setCsrfToken(res.csrf_token)
+            setUser(res.user)
+            setServerVersion(res.version)
+          }}
+        />
+      </BannerFrame>
     )
   }
 
   return (
-    <div className="app">
-      <button className="skip-link" onClick={() => document.getElementById('main-content')?.focus()}>
-        Skip to content
-      </button>
-      <header className="topbar">
-        <a className="brand" href="#/">
-          <LogoMark className="logo-mark logo-mark-header" />
-          PolarBEAM
-        </a>
-        <nav className="topnav" aria-label="Primary navigation">
-          {NAV.map((item) => (
-            <a
-              key={item.href}
-              href={item.href}
-              className={item.isActive(route) ? 'active' : ''}
-              aria-current={item.isActive(route) ? 'page' : undefined}
-            >
-              {item.label}
-            </a>
-          ))}
-        </nav>
-        <div className="topbar-right">
-          <TimezoneToggle />
-          <ThemeToggle />
-          <details className={'user-menu' + (route.view === 'settings' ? ' user-menu-current' : '')}>
-            <summary aria-label={`Open user menu for ${user.username}`}>
-              <svg className="user-menu-icon" viewBox="0 0 24 24" aria-hidden="true">
-                <circle cx="12" cy="8" r="3.5" />
-                <path d="M5.5 20c.5-4 2.7-6 6.5-6s6 2 6.5 6" />
-              </svg>
-            </summary>
-            <div className="user-menu-popover">
-              <div className="user-menu-identity">
-                <strong>{user.username}</strong>
-                <span>{user.role}</span>
-              </div>
-              {user.role === 'admin' && (
+    <BannerFrame banner={banner}>
+      <div className="app">
+        <button className="skip-link" onClick={() => document.getElementById('main-content')?.focus()}>
+          Skip to content
+        </button>
+        <header className="topbar">
+          <a className="brand" href="#/">
+            <LogoMark className="logo-mark logo-mark-header" />
+            PolarBEAM
+          </a>
+          <nav className="topnav" aria-label="Primary navigation">
+            {NAV.map((item) => (
+              <a
+                key={item.href}
+                href={item.href}
+                className={item.isActive(route) ? 'active' : ''}
+                aria-current={item.isActive(route) ? 'page' : undefined}
+              >
+                {item.label}
+              </a>
+            ))}
+          </nav>
+          <div className="topbar-right">
+            <TimezoneToggle />
+            <ThemeToggle />
+            <details className={'user-menu' + (route.view === 'settings' ? ' user-menu-current' : '')}>
+              <summary aria-label={`Open user menu for ${user.username}`}>
+                <svg className="user-menu-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="12" cy="8" r="3.5" />
+                  <path d="M5.5 20c.5-4 2.7-6 6.5-6s6 2 6.5 6" />
+                </svg>
+              </summary>
+              <div className="user-menu-popover">
+                <div className="user-menu-identity">
+                  <strong>{user.username}</strong>
+                  <span>{user.role}</span>
+                </div>
+                {user.role === 'admin' && (
+                  <a
+                    href="#/settings"
+                    aria-current={route.view === 'settings' ? 'page' : undefined}
+                    onClick={(event) => event.currentTarget.closest('details')?.removeAttribute('open')}
+                  >
+                    Settings
+                  </a>
+                )}
+                {/* Not admin-gated, unlike Settings: provenance and the server
+                  build are useful to every role. */}
                 <a
-                  href="#/settings"
-                  aria-current={route.view === 'settings' ? 'page' : undefined}
+                  href="#/about"
+                  aria-current={route.view === 'about' ? 'page' : undefined}
                   onClick={(event) => event.currentTarget.closest('details')?.removeAttribute('open')}
                 >
-                  Settings
+                  About
                 </a>
-              )}
-              {/* Not admin-gated, unlike Settings: provenance and the server
-                  build are useful to every role. */}
-              <a
-                href="#/about"
-                aria-current={route.view === 'about' ? 'page' : undefined}
-                onClick={(event) => event.currentTarget.closest('details')?.removeAttribute('open')}
-              >
-                About
-              </a>
-              {/* Federated accounts have no password here — their
+                {/* Federated accounts have no password here — their
                   credential lives at the IdP — so the item is absent, not
                   disabled. */}
-              {user.auth_source !== 'oidc' && (
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.currentTarget.closest('details')?.removeAttribute('open')
-                    setChangingPassword(true)
-                  }}
-                >
-                  Change password
+                {user.auth_source !== 'oidc' && (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.currentTarget.closest('details')?.removeAttribute('open')
+                      setChangingPassword(true)
+                    }}
+                  >
+                    Change password
+                  </button>
+                )}
+                <button type="button" onClick={logout}>
+                  Log out
                 </button>
-              )}
-              <button type="button" onClick={logout}>
-                Log out
-              </button>
-            </div>
-          </details>
-        </div>
-      </header>
-      {changingPassword && (
-        <ChangePasswordDialog onClose={() => setChangingPassword(false)} onAuthError={onAuthError} />
-      )}
-      <main id="main-content" tabIndex={-1}>
-        {route.view === 'overview' ? (
-          <Overview onAuthError={onAuthError} />
-        ) : route.view === 'pair' ? (
-          // Keyed on the pair so switching pairs remounts with fresh state:
-          // a stale series from the previous pair would otherwise keep
-          // rendering under the new names when the new fetch fails.
-          <PairDetail key={`${route.a}/${route.b}`} a={route.a} b={route.b} onAuthError={onAuthError} />
-        ) : route.view === 'incidents' ? (
-          <Outages onAuthError={onAuthError} />
-        ) : route.view === 'agents' ? (
-          <Agents agent={route.agent} onAuthError={onAuthError} />
-        ) : route.view === 'settings' ? (
-          <Settings
-            tab={route.tab}
-            isAdmin={user.role === 'admin'}
-            username={user.username}
-            onAuthError={onAuthError}
-          />
-        ) : route.view === 'about' ? (
-          <About version={serverVersion} />
-        ) : (
-          <Paths onAuthError={onAuthError} />
+              </div>
+            </details>
+          </div>
+        </header>
+        {changingPassword && (
+          <ChangePasswordDialog onClose={() => setChangingPassword(false)} onAuthError={onAuthError} />
         )}
-      </main>
-    </div>
+        <main id="main-content" tabIndex={-1}>
+          {route.view === 'overview' ? (
+            <Overview onAuthError={onAuthError} />
+          ) : route.view === 'pair' ? (
+            // Keyed on the pair so switching pairs remounts with fresh state:
+            // a stale series from the previous pair would otherwise keep
+            // rendering under the new names when the new fetch fails.
+            <PairDetail key={`${route.a}/${route.b}`} a={route.a} b={route.b} onAuthError={onAuthError} />
+          ) : route.view === 'incidents' ? (
+            <Outages onAuthError={onAuthError} />
+          ) : route.view === 'agents' ? (
+            <Agents agent={route.agent} onAuthError={onAuthError} />
+          ) : route.view === 'settings' ? (
+            <Settings
+              tab={route.tab}
+              isAdmin={user.role === 'admin'}
+              username={user.username}
+              onAuthError={onAuthError}
+              onBannerSaved={setBanner}
+            />
+          ) : route.view === 'about' ? (
+            <About version={serverVersion} />
+          ) : (
+            <Paths onAuthError={onAuthError} />
+          )}
+        </main>
+      </div>
+    </BannerFrame>
   )
 }

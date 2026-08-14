@@ -87,6 +87,9 @@ type DB interface {
 	ListPathEvents(ctx context.Context, window time.Duration) ([]store.PathEventInfo, error)
 	CurrentPaths(ctx context.Context, srcAgents, dstTargets []uuid.UUID) ([]store.CurrentPath, error)
 
+	GetBannerSettings(ctx context.Context) (*store.BannerSettings, error)
+	UpdateBannerSettings(ctx context.Context, b store.BannerSettings) (*store.BannerSettings, error)
+
 	GetOIDCSettings(ctx context.Context) (*store.OIDCSettings, error)
 	UpdateOIDCSettings(ctx context.Context, o store.OIDCSettings, keepSecret bool) (*store.OIDCSettings, int64, error)
 	UpsertOIDCUser(ctx context.Context, issuer, subject, username, role string) (*store.UserInfo, error)
@@ -185,6 +188,12 @@ func newHandler(sdb DB, static fs.FS, providers OIDCProviders) http.Handler {
 	mux.Handle("GET /api/v1/settings/oidc", adminWrite(a.handleOIDCSettingsGet))
 	mux.Handle("PUT /api/v1/settings/oidc", adminWrite(a.handleOIDCSettingsPut))
 	mux.Handle("POST /api/v1/settings/oidc/test", adminWrite(a.handleOIDCSettingsTest))
+	// UI banner: the open read reveals only what every visitor sees rendered
+	// anyway (and no text at all while disabled); edits are admin-only, and
+	// so is the admin read — it carries updated_by usernames.
+	mux.HandleFunc("GET /api/v1/ui-banner", a.handleUIBannerGet)
+	mux.Handle("GET /api/v1/settings/ui-banner", adminWrite(a.handleBannerSettingsGet))
+	mux.Handle("PUT /api/v1/settings/ui-banner", adminWrite(a.handleBannerSettingsPut))
 	mux.Handle("GET /api/v1/config/probe-types", a.withSession(a.handleProbeTypes))
 	mux.Handle("GET /api/v1/config/targets", a.withSession(a.handleTargetsGet))
 	mux.Handle("POST /api/v1/config/targets", adminWrite(a.handleTargetPost))

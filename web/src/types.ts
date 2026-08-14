@@ -430,6 +430,26 @@ export interface AuthProviders {
   oidc: { enabled: boolean }
 }
 
+// GET /api/v1/ui-banner — open (the sign-in screen renders the bands too).
+// text is always "" while disabled, so staged text never leaks pre-auth.
+export interface UIBanner {
+  enabled: boolean
+  text: string
+}
+
+// GET/PUT /api/v1/settings/ui-banner (admin-only)
+export interface BannerSettings {
+  enabled: boolean
+  text: string
+  updated_at: string
+  updated_by: string
+}
+
+export interface BannerSettingsPut {
+  enabled: boolean
+  text: string
+}
+
 // GET /api/v1/users (admin-only) — dashboard accounts with their
 // login-event aggregates, plus monthly sign-in totals for the activity
 // chart. Deleted identities are reconstructed from sign-in audit snapshots
