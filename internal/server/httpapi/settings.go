@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -23,8 +24,16 @@ type thresholdsJSON struct {
 
 type settingsResponse struct {
 	Thresholds thresholdsJSON `json:"thresholds"`
-	UpdatedAt  time.Time      `json:"updated_at"`
-	UpdatedBy  string         `json:"updated_by"`
+	// Per-site-pair overrides ride along so every consumer of the global
+	// thresholds (matrix, map, pair detail) resolves severity from one
+	// fetch. Always [] in JSON, never null.
+	Overrides []overrideJSON `json:"overrides"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	UpdatedBy string         `json:"updated_by"`
+	// Advisory only, set on PUT: a global change is never blocked by
+	// partial overrides it leaves inconsistent, but the admin is told
+	// which pairs need attention (same channel as probe/OIDC writes).
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 func toSettingsResponse(ts *store.ThresholdSettings) settingsResponse {
@@ -69,13 +78,33 @@ func validateThresholds(t thresholdsJSON) error {
 	return nil
 }
 
+// settingsWithOverrides folds the override list into the response; both
+// settings handlers return the same complete shape.
+func (a *api) settingsWithOverrides(r *http.Request, ts *store.ThresholdSettings) (settingsResponse, error) {
+	overrides, err := a.db.ListPathThresholds(r.Context())
+	if err != nil {
+		return settingsResponse{}, err
+	}
+	resp := toSettingsResponse(ts)
+	resp.Overrides = make([]overrideJSON, 0, len(overrides))
+	for i := range overrides {
+		resp.Overrides = append(resp.Overrides, toOverrideJSON(&overrides[i]))
+	}
+	return resp, nil
+}
+
 func (a *api) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 	ts, err := a.db.GetSettings(r.Context())
 	if err != nil {
 		internalError(w, "get settings", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toSettingsResponse(ts))
+	resp, err := a.settingsWithOverrides(r, ts)
+	if err != nil {
+		internalError(w, "list path thresholds", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (a *api) handleSettingsPut(w http.ResponseWriter, r *http.Request) {
@@ -99,5 +128,28 @@ func (a *api) handleSettingsPut(w http.ResponseWriter, r *http.Request) {
 		internalError(w, "update settings", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toSettingsResponse(out))
+	resp, err := a.settingsWithOverrides(r, out)
+	if err != nil {
+		internalError(w, "list path thresholds", err)
+		return
+	}
+	// A global change may invert a PARTIAL override's effective warn/crit
+	// pair (validateOverride only guards the override's own write). The
+	// evaluator checks crit before warn, so an inverted pair degrades
+	// gracefully (the warn tier becomes unreachable) — the write goes
+	// through, and the admin is warned instead of blocked.
+	for _, o := range resp.Overrides {
+		eff := effectiveThresholds(resp.Thresholds, o.pathThresholdFields)
+		if eff.LatencyCritUS <= eff.LatencyWarnUS {
+			resp.Warnings = append(resp.Warnings, fmt.Sprintf(
+				"override for %s and %s: effective latency_warn_us (%d) is no longer below latency_crit_us (%d); adjust or delete the override",
+				o.A, o.B, eff.LatencyWarnUS, eff.LatencyCritUS))
+		}
+		if eff.LossCritPct <= eff.LossWarnPct {
+			resp.Warnings = append(resp.Warnings, fmt.Sprintf(
+				"override for %s and %s: effective loss_warn_pct (%g) is no longer below loss_crit_pct (%g); adjust or delete the override",
+				o.A, o.B, eff.LossWarnPct, eff.LossCritPct))
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }

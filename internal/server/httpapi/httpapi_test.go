@@ -44,6 +44,9 @@ type fakeDB struct {
 	sites             []store.SiteInfo
 	endpoints         map[string]*store.SiteEndpoints
 	settings          *store.ThresholdSettings
+	// key: lexically sorted site names joined with \x00 (the fake
+	// canonicalizes by name where the real store uses uuid order)
+	pathThresholds map[string]*store.PathThresholdOverride
 
 	targets     []store.TargetInfo
 	meshes      []store.MeshGroupInfo

@@ -75,6 +75,7 @@ export default function ThresholdSettingsPanel({
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [errors, setErrors] = useState<string[]>([])
+  const [warnings, setWarnings] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [savedFlash, setSavedFlash] = useState(false)
 
@@ -84,6 +85,7 @@ export default function ThresholdSettingsPanel({
     setOpen((o) => !o)
     setDraft(draftFrom(settings.thresholds))
     setErrors([])
+    setWarnings([])
     setSavedFlash(false)
   }
 
@@ -95,6 +97,8 @@ export default function ThresholdSettingsPanel({
     setSaving(true)
     try {
       const res = await apiPut<SettingsResponse>('/api/v1/settings', parsed)
+      // Advisory: pair overrides the new globals left inconsistent.
+      setWarnings(res.warnings ?? [])
       onSaved(res)
       // Clear the draft so the form resumes following server state: the
       // Settings page polls, and a lingering draft would hide another
@@ -153,6 +157,19 @@ export default function ThresholdSettingsPanel({
                 <li key={e}>{e}</li>
               ))}
             </ul>
+          )}
+          {warnings.length > 0 && (
+            <div className="inline-alert" role="status">
+              <strong>Saved, with a caveat.</strong>
+              <ul>
+                {warnings.map((w) => (
+                  <li key={w}>{w}</li>
+                ))}
+              </ul>
+              <button className="linklike" onClick={() => setWarnings([])}>
+                Dismiss
+              </button>
+            </div>
           )}
           <div className="threshold-foot">
             <span className="hint">

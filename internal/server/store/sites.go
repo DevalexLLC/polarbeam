@@ -107,7 +107,8 @@ func (s *Store) ListSitesConfig(ctx context.Context) ([]SiteAdminInfo, error) {
 // join tokens along the way (a used token always implies a live agent —
 // there is no agent-delete path — so agents block the delete first and
 // used_by_agent can never be orphaned). Referenced sites return ErrConflict
-// naming every blocking count.
+// naming every blocking count. path_thresholds rows are deliberately NOT
+// counted: they are presentation config and cascade with the site.
 //
 // Statement order is load-bearing: EnrollAgent locks the join-token row FOR
 // UPDATE and then touches the site row (the agents insert takes FOR KEY

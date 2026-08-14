@@ -1,6 +1,7 @@
 import MatrixTable from './MatrixTable'
 import WorldMap from './WorldMap'
-import type { MatrixResponse, ThresholdSettings } from '../types'
+import type { ThresholdResolver } from '../severity'
+import type { MatrixResponse } from '../types'
 
 export type ConnectivityMode = 'map' | 'matrix'
 
@@ -15,7 +16,7 @@ export default function ConnectivityCard({
   onModeChange,
 }: {
   matrix: MatrixResponse
-  thresholds: ThresholdSettings | null
+  thresholds: ThresholdResolver
   mode: ConnectivityMode
   onModeChange: (mode: ConnectivityMode) => void
 }) {

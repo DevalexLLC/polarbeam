@@ -64,6 +64,9 @@ type DB interface {
 
 	GetSettings(ctx context.Context) (*store.ThresholdSettings, error)
 	UpdateSettings(ctx context.Context, ts store.ThresholdSettings) (*store.ThresholdSettings, error)
+	ListPathThresholds(ctx context.Context) ([]store.PathThresholdOverride, error)
+	UpsertPathThreshold(ctx context.Context, siteA, siteB string, o store.PathThresholdOverride) (*store.PathThresholdOverride, error)
+	DeletePathThreshold(ctx context.Context, siteA, siteB string) error
 
 	ListTargets(ctx context.Context) ([]store.TargetInfo, error)
 	UpsertExternalTarget(ctx context.Context, name, address string, port int32, url string) (uuid.UUID, error)
@@ -175,6 +178,10 @@ func newHandler(sdb DB, static fs.FS, providers OIDCProviders) http.Handler {
 	}
 	// OIDC settings: GET is admin-only too — issuer, claim mapping, and
 	// admin group names are IdP topology, not viewer material.
+	// Per-site-pair threshold overrides ride on GET /settings; only the
+	// writes get their own routes. Either site order addresses the same row.
+	mux.Handle("PUT /api/v1/settings/path-thresholds/{a}/{b}", adminWrite(a.handlePathThresholdPut))
+	mux.Handle("DELETE /api/v1/settings/path-thresholds/{a}/{b}", adminWrite(a.handlePathThresholdDelete))
 	mux.Handle("GET /api/v1/settings/oidc", adminWrite(a.handleOIDCSettingsGet))
 	mux.Handle("PUT /api/v1/settings/oidc", adminWrite(a.handleOIDCSettingsPut))
 	mux.Handle("POST /api/v1/settings/oidc/test", adminWrite(a.handleOIDCSettingsTest))
