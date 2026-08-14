@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import uPlot from 'uplot'
 import { apiGet } from '../api'
 import Chart from '../components/Chart'
+import PathThresholdEditor from '../components/PathThresholdEditor'
 import { useTheme } from '../theme'
 import { useTimezone } from '../timezone'
 import {
@@ -13,12 +14,14 @@ import {
   latencyAxisLabel,
   latencySourceName,
 } from '../format'
+import { buildThresholdResolver } from '../severity'
 import type {
   CurrentPath,
   DirectionSummary,
   PairResponse,
   SeriesPoint,
   SeriesResponse,
+  SettingsResponse,
   TracerouteResponse,
   Window,
 } from '../types'
@@ -31,9 +34,56 @@ type Metric = 'latency' | 'loss'
 // return) — never slot 2's orange, which reads as the crit/down alarm ramp.
 // Must stay in lockstep with --series-a/--series-b in styles.css; the magenta
 // validates CVD + contrast against blue on both surfaces, so it is unstepped.
+// warn/crit ARE the alarm ramp on purpose: they draw the effective threshold
+// reference lines and mirror --status-warn/--status-crit in styles.css.
 const COLORS = {
-  light: { aToB: '#2a78d6', bToA: '#d55181', grid: '#e0dfd9', axis: '#55544d' },
-  dark: { aToB: '#3987e5', bToA: '#d55181', grid: '#30312d', axis: '#b9b8ae' },
+  light: { aToB: '#2a78d6', bToA: '#d55181', grid: '#e0dfd9', axis: '#55544d', warn: '#8a6100', crit: '#cf4a10' },
+  dark: { aToB: '#3987e5', bToA: '#d55181', grid: '#30312d', axis: '#b9b8ae', warn: '#ffc247', crit: '#f0692e' },
+}
+
+// Threshold levels in the CURRENT metric's y units (ms or loss %), read by
+// the chart plugin at draw time. A ref, never options state: mkOptions
+// caches options objects, and baking levels into them would either destroy
+// the plots on every settings poll or draw stale lines.
+interface ThresholdLevels {
+  warn: number | null
+  crit: number | null
+  warnColor: string
+  critColor: string
+}
+
+// Draws one dashed horizontal reference line, skipped when outside the
+// current y-range rather than forcing scale expansion — a 250 ms crit line
+// must not flatten a 2 ms-baseline chart.
+function drawThresholdLine(u: uPlot, v: number | null, color: string) {
+  const yMin = u.scales.y.min
+  const yMax = u.scales.y.max
+  if (v == null || yMin == null || yMax == null || v < yMin || v > yMax) return
+  const y = u.valToPos(v, 'y', true)
+  const ctx = u.ctx
+  ctx.save()
+  ctx.strokeStyle = color
+  ctx.lineWidth = window.devicePixelRatio || 1
+  ctx.setLineDash([6, 6])
+  ctx.beginPath()
+  ctx.moveTo(u.bbox.left, y)
+  ctx.lineTo(u.bbox.left + u.bbox.width, y)
+  ctx.stroke()
+  ctx.restore()
+}
+
+function thresholdLinesPlugin(levels: { current: ThresholdLevels }): uPlot.Plugin {
+  return {
+    hooks: {
+      draw: [
+        (u) => {
+          const { warn, crit, warnColor, critColor } = levels.current
+          drawThresholdLine(u, warn, warnColor)
+          drawThresholdLine(u, crit, critColor)
+        },
+      ],
+    },
+  }
 }
 
 // Wire timings are microseconds; charts plot milliseconds.
@@ -250,10 +300,12 @@ function PathList({ title, dir, paths }: { title: string; dir: 'a' | 'b'; paths:
 export default function PairDetail({
   a,
   b,
+  isAdmin,
   onAuthError,
 }: {
   a: string
   b: string
+  isAdmin: boolean
   onAuthError: (err: unknown) => void
 }) {
   const [win, setWin] = useState<Window>('24h')
@@ -265,37 +317,74 @@ export default function PairDetail({
   const [pair, setPair] = useState<PairResponse | null>(null)
   const [series, setSeries] = useState<SeriesResponse | null>(null)
   const [paths, setPaths] = useState<TracerouteResponse | null>(null)
+  const [settings, setSettings] = useState<SettingsResponse | null>(null)
+  const [editingThresholds, setEditingThresholds] = useState(false)
   const [error, setError] = useState('')
 
-  useEffect(() => {
-    let cancelled = false
-    const load = () =>
-      Promise.all([
-        apiGet<PairResponse>(`/api/v1/pairs/${encodeURIComponent(a)}/${encodeURIComponent(b)}?window=${win}`),
-        apiGet<SeriesResponse>(
-          `/api/v1/pairs/${encodeURIComponent(a)}/${encodeURIComponent(b)}/series?metric=${metric}&window=${win}`,
-        ),
-        apiGet<TracerouteResponse>(`/api/v1/traceroute/${encodeURIComponent(a)}/${encodeURIComponent(b)}`),
-      ])
-        .then(([p, s, tr]) => {
-          if (!cancelled) {
-            setPair(p)
-            setSeries(s)
-            setPaths(tr)
-            setError('')
-          }
-        })
-        .catch((err) => {
-          onAuthError(err)
-          if (!cancelled) setError(err instanceof Error ? err.message : String(err))
-        })
-    load()
-    const id = setInterval(load, POLL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
+  // Hoisted so the threshold editor can force an immediate refetch after a
+  // write; settings ride the same load as the series so a threshold change
+  // and the chart redraw land in one commit. The generation counter drops
+  // superseded responses: switching a slow 365d fetch to 24h must not let
+  // the older response land after the newer one and mislabel the charts.
+  const loadGen = useRef(0)
+  const load = useCallback(() => {
+    const gen = ++loadGen.current
+    return Promise.all([
+      apiGet<PairResponse>(`/api/v1/pairs/${encodeURIComponent(a)}/${encodeURIComponent(b)}?window=${win}`),
+      apiGet<SeriesResponse>(
+        `/api/v1/pairs/${encodeURIComponent(a)}/${encodeURIComponent(b)}/series?metric=${metric}&window=${win}`,
+      ),
+      apiGet<TracerouteResponse>(`/api/v1/traceroute/${encodeURIComponent(a)}/${encodeURIComponent(b)}`),
+      apiGet<SettingsResponse>('/api/v1/settings'),
+    ])
+      .then(([p, s, tr, st]) => {
+        if (gen !== loadGen.current) return
+        setPair(p)
+        setSeries(s)
+        setPaths(tr)
+        setSettings(st)
+        setError('')
+      })
+      .catch((err) => {
+        onAuthError(err)
+        if (gen !== loadGen.current) return
+        setError(err instanceof Error ? err.message : String(err))
+      })
   }, [a, b, win, metric, onAuthError])
+
+  useEffect(() => {
+    void load()
+    const id = setInterval(() => void load(), POLL_MS)
+    return () => clearInterval(id)
+  }, [load])
+
+  // Effective thresholds for this pair (override merged over global) and
+  // the raw override row, for the editor and the "which is it" badges.
+  const effective = useMemo(() => buildThresholdResolver(settings)(a, b), [settings, a, b])
+  const override = useMemo(
+    () => settings?.overrides.find((o) => (o.a === a && o.b === b) || (o.a === b && o.b === a)) ?? null,
+    [settings, a, b],
+  )
+
+  // Kept current every render; the chart plugin reads it at draw time.
+  const thresholdLevels = useRef<ThresholdLevels>({ warn: null, crit: null, warnColor: '', critColor: '' })
+  {
+    const c = COLORS[resolved]
+    thresholdLevels.current =
+      metric === 'loss'
+        ? {
+            warn: effective && effective.loss_warn_pct > 0 ? effective.loss_warn_pct : null,
+            crit: effective ? effective.loss_crit_pct : null,
+            warnColor: c.warn,
+            critColor: c.crit,
+          }
+        : {
+            warn: effective ? effective.latency_warn_us / 1000 : null,
+            crit: effective ? effective.latency_crit_us / 1000 : null,
+            warnColor: c.warn,
+            critColor: c.crit,
+          }
+  }
 
   const mkOptions = useMemo(() => {
     // Options are cached by everything they depend on, so a poll that changes
@@ -355,7 +444,8 @@ export default function PairDetail({
         axes: [{ ...axisStyle }, { ...axisStyle, label: axisLabel, size: 64 }],
         cursor: { drag: { x: true, y: false } },
         legend: { live: true },
-        plugins: [latestLegendPlugin()],
+        // thresholdLevels is a stable ref — safe inside the cached options.
+        plugins: [latestLegendPlugin(), thresholdLinesPlugin(thresholdLevels)],
         // UTC mode pins axis ticks and the live-legend x readout to UTC
         // wall clock; local mode keeps uPlot's default (browser zone).
         ...(mode === 'utc' ? { tzDate: (ts: number) => uPlot.tzDate(new Date(ts * 1e3), 'Etc/UTC') } : {}),
@@ -442,6 +532,59 @@ export default function PairDetail({
           ))}
         </div>
       </div>
+
+      {effective && settings && (
+        <div className="card">
+          <div className="card-head">
+            <div>
+              <span className="eyebrow">Health classification</span>
+              <h3>
+                Thresholds for this pair <span className="chip">{override ? 'pair override' : 'global defaults'}</span>
+              </h3>
+            </div>
+            {isAdmin && (
+              <button
+                type="button"
+                className="secondary-button"
+                aria-expanded={editingThresholds}
+                onClick={() => setEditingThresholds((e) => !e)}
+              >
+                {editingThresholds ? 'Close' : override ? 'Edit override' : 'Override thresholds'}
+              </button>
+            )}
+          </div>
+          <p className="section-intro">
+            {(
+              [
+                ['Latency degraded', `≥ ${effective.latency_warn_us / 1000} ms`, override?.latency_warn_us != null],
+                ['Latency critical', `≥ ${effective.latency_crit_us / 1000} ms`, override?.latency_crit_us != null],
+                ['Loss degraded', `≥ ${effective.loss_warn_pct}%`, override?.loss_warn_pct != null],
+                ['Loss critical', `≥ ${effective.loss_crit_pct}%`, override?.loss_crit_pct != null],
+              ] as const
+            ).map(([label, value, overridden], i) => (
+              <span key={label}>
+                {i > 0 && ' · '}
+                {label} <strong>{value}</strong>
+                {overridden && <span className="hint"> (override)</span>}
+              </span>
+            ))}
+          </p>
+          {editingThresholds && (
+            <PathThresholdEditor
+              a={a}
+              b={b}
+              override={override}
+              global={settings.thresholds}
+              isAdmin={isAdmin}
+              onChanged={() => {
+                setEditingThresholds(false)
+                void load()
+              }}
+              onAuthError={onAuthError}
+            />
+          )}
+        </div>
+      )}
 
       <div className="pair-cards">
         <DirectionCard title={`${a} → ${b}`} s={pair.a_to_b} dir="a" />

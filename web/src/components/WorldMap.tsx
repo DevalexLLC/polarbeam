@@ -3,8 +3,8 @@ import { MAP_DOTS, MAP_VIEW_H, MAP_VIEW_W } from '../assets/mapGeo'
 import { fmtLatency } from '../format'
 import { projectMap } from '../geo'
 import { bubbleRadius, declutter, type DeclutterNode } from '../mapLayout'
-import { directionSeverity, SEVERITY_LABEL, worst, type Severity } from '../severity'
-import type { MatrixCell, Site, ThresholdSettings } from '../types'
+import { directionSeverity, SEVERITY_LABEL, worst, type Severity, type ThresholdResolver } from '../severity'
+import type { MatrixCell, Site } from '../types'
 
 // Site names are unrestricted text (spaces included); NUL cannot appear in
 // Postgres text, so it is the one collision-free separator.
@@ -58,7 +58,7 @@ export default function WorldMap({
 }: {
   sites: Site[]
   cells: MatrixCell[]
-  thresholds: ThresholdSettings | null
+  thresholds: ThresholdResolver
 }) {
   const [pinned, setPinned] = useState<string | null>(null)
   const [hovered, setHovered] = useState<string | null>(null)
@@ -92,7 +92,7 @@ export default function WorldMap({
     const siteStats = new Map<string, SiteStats>()
     for (const site of sites) siteStats.set(site.name, newStats())
     for (const c of cells) {
-      const sev = directionSeverity(c, thresholds)
+      const sev = directionSeverity(c, thresholds(c.src, c.dst))
       for (const name of [c.src, c.dst]) {
         const prev = siteSeverity.get(name)
         siteSeverity.set(name, prev === undefined ? sev : worst(prev, sev))

@@ -3,7 +3,7 @@ import { apiGet } from '../api'
 import ConnectivityCard, { type ConnectivityMode } from '../components/ConnectivityCard'
 import FleetAgentsCard from '../components/FleetAgentsCard'
 import { fmtAgo } from '../format'
-import { directionSeverity } from '../severity'
+import { buildThresholdResolver, directionSeverity } from '../severity'
 import type {
   AgentHealthResponse,
   AgentInfo,
@@ -120,6 +120,7 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
     }
   }, [load])
 
+  const resolveThresholds = useMemo(() => buildThresholdResolver(settings), [settings])
   const active = useMemo(() => outages?.outages.filter((o) => o.closed_at == null) ?? [], [outages])
   const activeGroups = useMemo(() => {
     const groups = new Map<string, { key: string; cause: string; probe: string; events: OutageEvent[] }>()
@@ -136,7 +137,7 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
   const activeTargetCount = new Set(active.map(targetKey)).size
   const attention = agents?.agents.filter((a) => attentionReason(a) != null) ?? []
   const healthyDirections =
-    matrix?.cells.filter((cell) => directionSeverity(cell, settings?.thresholds ?? null) === 'ok').length ?? 0
+    matrix?.cells.filter((cell) => directionSeverity(cell, resolveThresholds(cell.src, cell.dst)) === 'ok').length ?? 0
   const totalDirections = matrix?.cells.length ?? 0
   const availableSites = matrix
     ? matrix.sites.filter((site) => {
@@ -252,12 +253,7 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
       </section>
 
       <div className="overview-main-row">
-        <ConnectivityCard
-          matrix={matrix}
-          thresholds={settings?.thresholds ?? null}
-          mode={connMode}
-          onModeChange={setConnMode}
-        />
+        <ConnectivityCard matrix={matrix} thresholds={resolveThresholds} mode={connMode} onModeChange={setConnMode} />
         <FleetAgentsCard agents={agents.agents} health={health} />
       </div>
     </>

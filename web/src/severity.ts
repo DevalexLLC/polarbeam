@@ -2,7 +2,7 @@
 // Status comes first — thresholds only refine links that are demonstrably
 // working; a down or silent pair must never look healthy because its last
 // numbers were good.
-import type { MatrixCell, ThresholdSettings } from './types'
+import type { MatrixCell, SettingsResponse, ThresholdSettings } from './types'
 
 export type Severity = 'ok' | 'warn' | 'crit' | 'stale' | 'down'
 
@@ -69,4 +69,35 @@ export function pairSeverity(
   if (ab && ba) return worst(directionSeverity(ab, t), directionSeverity(ba, t))
   const only = ab ?? ba
   return only ? directionSeverity(only, t) : 'stale'
+}
+
+// ThresholdResolver answers "which thresholds grade this direction" — the
+// global settings, or a per-pair override merged over them. Overrides are
+// keyed on the unordered pair, so both directions of a link resolve the
+// same values (they still grade independently). Null while settings are
+// loading, matching the old `thresholds` prop contract.
+export type ThresholdResolver = (src: string, dst: string) => ThresholdSettings | null
+
+function pairKey(a: string, b: string): string {
+  return a < b ? a + '\u0000' + b : b + '\u0000' + a
+}
+
+// buildThresholdResolver merges each override over the global row ONCE
+// (per-field: null inherits) so every consumer — matrix, map, overview
+// stat, pair detail — resolves identical effective values. The `loss_pct
+// > 0` guard in directionSeverity applies unchanged to overridden values:
+// a pair override of loss_warn_pct 0 still never flags a lossless link.
+export function buildThresholdResolver(settings: SettingsResponse | null): ThresholdResolver {
+  if (!settings) return () => null
+  const global = settings.thresholds
+  const merged = new Map<string, ThresholdSettings>()
+  for (const o of settings.overrides) {
+    merged.set(pairKey(o.a, o.b), {
+      latency_warn_us: o.latency_warn_us ?? global.latency_warn_us,
+      latency_crit_us: o.latency_crit_us ?? global.latency_crit_us,
+      loss_warn_pct: o.loss_warn_pct ?? global.loss_warn_pct,
+      loss_crit_pct: o.loss_crit_pct ?? global.loss_crit_pct,
+    })
+  }
+  return (src, dst) => merged.get(pairKey(src, dst)) ?? global
 }

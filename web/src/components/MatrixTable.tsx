@@ -1,5 +1,5 @@
-import { directionSeverity, SEVERITY_LABEL, type Severity } from '../severity'
-import type { MatrixCell, Site, ThresholdSettings } from '../types'
+import { directionSeverity, SEVERITY_LABEL, type Severity, type ThresholdResolver } from '../severity'
+import type { MatrixCell, Site } from '../types'
 import { fmtLatency } from '../format'
 
 // Matrix cells grade through the same directionSeverity fold as the map and
@@ -25,8 +25,8 @@ export const CLASS_LABEL: Record<CellClass, string> = {
   stale: SEVERITY_LABEL.stale,
 }
 
-function Cell({ cell, thresholds }: { cell: MatrixCell; thresholds: ThresholdSettings | null }) {
-  const cls = SEV_CLASS[directionSeverity(cell, thresholds)]
+function Cell({ cell, thresholds }: { cell: MatrixCell; thresholds: ThresholdResolver }) {
+  const cls = SEV_CLASS[directionSeverity(cell, thresholds(cell.src, cell.dst))]
   const failed = cell.probes.filter((p) => p.status !== 'ok').length
   const total = cell.probes.length
   const detail = cell.probes
@@ -89,7 +89,7 @@ export default function MatrixTable({
 }: {
   sites: Site[]
   cells: MatrixCell[]
-  thresholds: ThresholdSettings | null
+  thresholds: ThresholdResolver
 }) {
   // NUL separator: site names are unrestricted text and NUL cannot appear
   // in Postgres text (same convention as WorldMap's pairKey).

@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { apiGet } from '../api'
 import type { SettingsTab } from '../App'
 import EnrollmentPanel from '../components/EnrollmentPanel'
 import MeshesPanel from '../components/MeshesPanel'
 import OIDCSettingsPanel from '../components/OIDCSettingsPanel'
+import PathThresholdsPanel from '../components/PathThresholdsPanel'
 import ProbesPanel from '../components/ProbesPanel'
 import SitesPanel from '../components/SitesPanel'
 import TargetsPanel from '../components/TargetsPanel'
@@ -54,30 +55,26 @@ export default function Settings({
   // its own draft once edited, so a poll never clobbers in-progress input.
   // Only the thresholds tab needs /settings; the config tabs poll their own
   // endpoints.
+  // Hoisted so the overrides panel can force an immediate refetch after a
+  // write instead of waiting out the poll interval.
+  const load = useCallback(() => {
+    apiGet<SettingsResponse>('/api/v1/settings')
+      .then((s) => {
+        setSettings(s)
+        setError('')
+      })
+      .catch((err) => {
+        onAuthError(err)
+        setError(err instanceof Error ? err.message : String(err))
+      })
+  }, [onAuthError])
+
   useEffect(() => {
     if (tab !== 'thresholds') return
-    let cancelled = false
-    const load = () => {
-      apiGet<SettingsResponse>('/api/v1/settings')
-        .then((s) => {
-          if (!cancelled) {
-            setSettings(s)
-            setError('')
-          }
-        })
-        .catch((err) => {
-          if (cancelled) return
-          onAuthError(err)
-          setError(err instanceof Error ? err.message : String(err))
-        })
-    }
     load()
     const id = setInterval(load, POLL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [tab, onAuthError])
+    return () => clearInterval(id)
+  }, [tab, load])
 
   return (
     <>
@@ -150,6 +147,7 @@ export default function Settings({
               variant="page"
             />
           </section>
+          <PathThresholdsPanel settings={settings} isAdmin={isAdmin} onChanged={load} onAuthError={onAuthError} />
         </>
       )}
     </>

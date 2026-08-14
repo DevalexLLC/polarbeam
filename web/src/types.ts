@@ -159,10 +159,27 @@ export interface ThresholdSettings {
   loss_crit_pct: number
 }
 
-export interface SettingsResponse {
-  thresholds: ThresholdSettings
+// One per-site-pair override row: the unordered pair a/b (lexically
+// sorted by the server), each field null = inherit the global value.
+export interface PathThresholdOverride {
+  a: string
+  b: string
+  latency_warn_us: number | null
+  latency_crit_us: number | null
+  loss_warn_pct: number | null
+  loss_crit_pct: number | null
   updated_at: string
   updated_by: string
+}
+
+export interface SettingsResponse {
+  thresholds: ThresholdSettings
+  overrides: PathThresholdOverride[]
+  updated_at: string
+  updated_by: string
+  // Advisory, PUT only: overrides whose effective values the new globals
+  // left inconsistent (never blocks the write).
+  warnings?: string[]
 }
 
 // Which table served a windowed query. Raw windows (24h/7d) have no
