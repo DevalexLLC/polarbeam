@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import uPlot from 'uplot'
 import { apiGet } from '../api'
 import Chart from '../components/Chart'
-import PathThresholdEditor from '../components/PathThresholdEditor'
 import { useTheme } from '../theme'
 import { useTimezone } from '../timezone'
 import {
@@ -300,12 +299,10 @@ function PathList({ title, dir, paths }: { title: string; dir: 'a' | 'b'; paths:
 export default function PairDetail({
   a,
   b,
-  isAdmin,
   onAuthError,
 }: {
   a: string
   b: string
-  isAdmin: boolean
   onAuthError: (err: unknown) => void
 }) {
   const [win, setWin] = useState<Window>('24h')
@@ -318,12 +315,10 @@ export default function PairDetail({
   const [series, setSeries] = useState<SeriesResponse | null>(null)
   const [paths, setPaths] = useState<TracerouteResponse | null>(null)
   const [settings, setSettings] = useState<SettingsResponse | null>(null)
-  const [editingThresholds, setEditingThresholds] = useState(false)
   const [error, setError] = useState('')
 
-  // Hoisted so the threshold editor can force an immediate refetch after a
-  // write; settings ride the same load as the series so a threshold change
-  // and the chart redraw land in one commit. The generation counter drops
+  // Settings ride the same load as the series so a threshold change and
+  // the chart redraw land in one commit. The generation counter drops
   // superseded responses: switching a slow 365d fetch to 24h must not let
   // the older response land after the newer one and mislabel the charts.
   const loadGen = useRef(0)
@@ -358,13 +353,10 @@ export default function PairDetail({
     return () => clearInterval(id)
   }, [load])
 
-  // Effective thresholds for this pair (override merged over global) and
-  // the raw override row, for the editor and the "which is it" badges.
+  // Effective thresholds for this pair (override merged over global) —
+  // they only surface here as the charts' warn/crit reference lines;
+  // viewing and editing overrides lives on Settings → Thresholds.
   const effective = useMemo(() => buildThresholdResolver(settings)(a, b), [settings, a, b])
-  const override = useMemo(
-    () => settings?.overrides.find((o) => (o.a === a && o.b === b) || (o.a === b && o.b === a)) ?? null,
-    [settings, a, b],
-  )
 
   // Kept current every render; the chart plugin reads it at draw time.
   const thresholdLevels = useRef<ThresholdLevels>({ warn: null, crit: null, warnColor: '', critColor: '' })
@@ -532,59 +524,6 @@ export default function PairDetail({
           ))}
         </div>
       </div>
-
-      {effective && settings && (
-        <div className="card">
-          <div className="card-head">
-            <div>
-              <span className="eyebrow">Health classification</span>
-              <h3>
-                Thresholds for this pair <span className="chip">{override ? 'pair override' : 'global defaults'}</span>
-              </h3>
-            </div>
-            {isAdmin && (
-              <button
-                type="button"
-                className="secondary-button"
-                aria-expanded={editingThresholds}
-                onClick={() => setEditingThresholds((e) => !e)}
-              >
-                {editingThresholds ? 'Close' : override ? 'Edit override' : 'Override thresholds'}
-              </button>
-            )}
-          </div>
-          <p className="section-intro">
-            {(
-              [
-                ['Latency degraded', `≥ ${effective.latency_warn_us / 1000} ms`, override?.latency_warn_us != null],
-                ['Latency critical', `≥ ${effective.latency_crit_us / 1000} ms`, override?.latency_crit_us != null],
-                ['Loss degraded', `≥ ${effective.loss_warn_pct}%`, override?.loss_warn_pct != null],
-                ['Loss critical', `≥ ${effective.loss_crit_pct}%`, override?.loss_crit_pct != null],
-              ] as const
-            ).map(([label, value, overridden], i) => (
-              <span key={label}>
-                {i > 0 && ' · '}
-                {label} <strong>{value}</strong>
-                {overridden && <span className="hint"> (override)</span>}
-              </span>
-            ))}
-          </p>
-          {editingThresholds && (
-            <PathThresholdEditor
-              a={a}
-              b={b}
-              override={override}
-              global={settings.thresholds}
-              isAdmin={isAdmin}
-              onChanged={() => {
-                setEditingThresholds(false)
-                void load()
-              }}
-              onAuthError={onAuthError}
-            />
-          )}
-        </div>
-      )}
 
       <div className="pair-cards">
         <DirectionCard title={`${a} → ${b}`} s={pair.a_to_b} dir="a" />

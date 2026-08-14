@@ -248,13 +248,7 @@ export default function App() {
           // Keyed on the pair so switching pairs remounts with fresh state:
           // a stale series from the previous pair would otherwise keep
           // rendering under the new names when the new fetch fails.
-          <PairDetail
-            key={`${route.a}/${route.b}`}
-            a={route.a}
-            b={route.b}
-            isAdmin={user.role === 'admin'}
-            onAuthError={onAuthError}
-          />
+          <PairDetail key={`${route.a}/${route.b}`} a={route.a} b={route.b} onAuthError={onAuthError} />
         ) : route.view === 'incidents' ? (
           <Outages onAuthError={onAuthError} />
         ) : route.view === 'agents' ? (

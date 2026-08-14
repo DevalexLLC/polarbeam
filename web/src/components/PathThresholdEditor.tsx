@@ -2,12 +2,12 @@ import { useState } from 'react'
 import { apiDelete, apiPut } from '../api'
 import type { PathThresholdOverride, ThresholdSettings } from '../types'
 
-// Editor for one pair's threshold override, shared by the Settings
-// overrides table and the pair detail view. Fields speak ms/percent (wire
-// is µs, like the global thresholds form); an EMPTY field means "inherit
-// the global value", so the placeholders show what would apply. Saving with
-// every field empty clears the override (DELETE) — the server rejects
-// all-null rows by design.
+// Editor for one pair's threshold override, hosted by the Settings →
+// Thresholds overrides table (edit rows and the add flow). Fields speak
+// ms/percent (wire is µs, like the global thresholds form); an EMPTY field
+// means "inherit the global value", so the placeholders show what would
+// apply. Saving with every field empty clears the override (DELETE) — the
+// server rejects all-null rows by design.
 const usToMs = (us: number) => String(us / 1000)
 const MAX_LATENCY_CRIT_MS = 60_000
 
@@ -172,33 +172,38 @@ export default function PathThresholdEditor({
   const savedDraft = draftFrom(override)
   const dirty = (Object.keys(current) as (keyof Draft)[]).some((key) => current[key] !== savedDraft[key])
 
+  // threshold-settings-page is load-bearing: the bare .threshold-panel is
+  // an absolutely-positioned popover, and this editor always renders
+  // in-flow inside its host (a table edit row or the add form).
   return (
-    <div className="threshold-panel">
-      <div className="threshold-grid">
-        {field('Latency degraded', 'ms', 'latencyWarnMs', usToMs(global.latency_warn_us))}
-        {field('Latency critical', 'ms', 'latencyCritMs', usToMs(global.latency_crit_us))}
-        {field('Loss degraded', '%', 'lossWarnPct', String(global.loss_warn_pct))}
-        {field('Loss critical', '%', 'lossCritPct', String(global.loss_crit_pct))}
-      </div>
-      {errors.length > 0 && (
-        <ul className="error threshold-errors">
-          {errors.map((e) => (
-            <li key={e}>{e}</li>
-          ))}
-        </ul>
-      )}
-      <div className="threshold-foot">
-        <span className="hint">
-          Empty fields inherit the global thresholds
-          {override ? ' · clearing every field removes the override on save' : ''}
-        </span>
-        {isAdmin ? (
-          <button className="primary" onClick={() => void save()} disabled={saving || !dirty}>
-            {saving ? 'Saving…' : 'Save'}
-          </button>
-        ) : (
-          <span className="hint">admin role required to edit</span>
+    <div className="threshold-settings threshold-settings-page">
+      <div className="threshold-panel">
+        <div className="threshold-grid">
+          {field('Latency degraded', 'ms', 'latencyWarnMs', usToMs(global.latency_warn_us))}
+          {field('Latency critical', 'ms', 'latencyCritMs', usToMs(global.latency_crit_us))}
+          {field('Loss degraded', '%', 'lossWarnPct', String(global.loss_warn_pct))}
+          {field('Loss critical', '%', 'lossCritPct', String(global.loss_crit_pct))}
+        </div>
+        {errors.length > 0 && (
+          <ul className="error threshold-errors">
+            {errors.map((e) => (
+              <li key={e}>{e}</li>
+            ))}
+          </ul>
         )}
+        <div className="threshold-foot">
+          <span className="hint">
+            Empty fields inherit the global thresholds
+            {override ? ' · clearing every field removes the override on save' : ''}
+          </span>
+          {isAdmin ? (
+            <button className="primary" onClick={() => void save()} disabled={saving || !dirty}>
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          ) : (
+            <span className="hint">admin role required to edit</span>
+          )}
+        </div>
       </div>
     </div>
   )
