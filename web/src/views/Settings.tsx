@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { apiGet } from '../api'
 import type { SettingsTab } from '../App'
+import BannerSettingsPanel from '../components/BannerSettingsPanel'
 import EnrollmentPanel from '../components/EnrollmentPanel'
 import MeshesPanel from '../components/MeshesPanel'
 import OIDCSettingsPanel from '../components/OIDCSettingsPanel'
@@ -10,7 +11,7 @@ import SitesPanel from '../components/SitesPanel'
 import TargetsPanel from '../components/TargetsPanel'
 import ThresholdSettingsPanel from '../components/ThresholdSettings'
 import UsersPanel from '../components/UsersPanel'
-import type { SettingsResponse } from '../types'
+import type { SettingsResponse, UIBanner } from '../types'
 
 const POLL_MS = 30_000
 
@@ -23,6 +24,7 @@ const TABS: Array<{ tab: SettingsTab; href: string; label: string }> = [
   { tab: 'enrollment', href: '#/settings/enrollment', label: 'Enrollment' },
   { tab: 'users', href: '#/settings/users', label: 'Users' },
   { tab: 'authentication', href: '#/settings/authentication', label: 'Authentication' },
+  { tab: 'banner', href: '#/settings/banner', label: 'Banner' },
 ]
 
 const TAB_INTRO: Record<SettingsTab, string> = {
@@ -34,6 +36,7 @@ const TAB_INTRO: Record<SettingsTab, string> = {
   enrollment: 'Single-use join tokens that enroll new agents into a site.',
   users: 'Dashboard accounts across local and single sign-on, with sign-in activity.',
   authentication: 'Optional single sign-on via an OpenID Connect provider. Local accounts always keep working.',
+  banner: 'An optional marking shown at the top and bottom of every screen, the sign-in page included.',
 }
 
 export default function Settings({
@@ -41,11 +44,13 @@ export default function Settings({
   isAdmin,
   username,
   onAuthError,
+  onBannerSaved,
 }: {
   tab: SettingsTab
   isAdmin: boolean
   username: string
   onAuthError: (err: unknown) => void
+  onBannerSaved: (b: UIBanner) => void
 }) {
   const [settings, setSettings] = useState<SettingsResponse | null>(null)
   const [error, setError] = useState('')
@@ -99,6 +104,8 @@ export default function Settings({
       </nav>
       {tab === 'authentication' ? (
         <OIDCSettingsPanel isAdmin={isAdmin} onAuthError={onAuthError} />
+      ) : tab === 'banner' ? (
+        <BannerSettingsPanel isAdmin={isAdmin} onAuthError={onAuthError} onSaved={onBannerSaved} />
       ) : tab === 'users' ? (
         <UsersPanel isAdmin={isAdmin} currentUsername={username} onAuthError={onAuthError} />
       ) : tab === 'sites' ? (

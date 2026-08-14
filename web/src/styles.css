@@ -2118,6 +2118,69 @@ button.primary:disabled {
   transform: translateY(0);
 }
 
+/* ---- UI banner (Settings → Banner) ----
+   Two sticky in-flow bands framing every screen. The wrapper only exists
+   while the banner is enabled, so every override below is scoped under it
+   and the banner-off layout is untouched. */
+.banner-frame {
+  --banner-h: 28px;
+  display: flex;
+  min-height: 100dvh;
+  flex-direction: column;
+}
+
+.banner-frame > :not(.ui-banner) {
+  flex: 1 0 auto;
+}
+
+.ui-banner {
+  /* The .eyebrow engraved-label treatment, centered in a slim band.
+     Block + line-height (not flex) so text-overflow can ellipsize. */
+  position: sticky;
+  z-index: 60; /* above .topbar (50), below .skip-link (100) */
+  overflow: hidden;
+  height: var(--banner-h);
+  flex: none;
+  padding: 0 1rem;
+  background: var(--surface-2);
+  color: var(--ink-3);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  line-height: var(--banner-h);
+  text-align: center;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.ui-banner-top {
+  top: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.ui-banner-bottom {
+  bottom: 0;
+  border-top: 1px solid var(--border);
+}
+
+.banner-frame .topbar {
+  top: var(--banner-h);
+}
+
+/* Only the FOCUSED skip-link moves below the band — offsetting `top` would
+   also shift the hidden state back into view. */
+.banner-frame .skip-link:focus {
+  transform: translateY(var(--banner-h));
+}
+
+/* The full-viewport screens give back the two band heights so the frame
+   never overflows an unscrolled viewport. */
+.banner-frame .login-wrap,
+.banner-frame .boot-state {
+  min-height: calc(100dvh - 2 * var(--banner-h));
+}
+
 .topbar {
   position: sticky;
   top: 0;
