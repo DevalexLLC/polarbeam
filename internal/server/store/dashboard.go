@@ -12,6 +12,8 @@ import (
 // Dashboard read queries. Latest-row queries (matrix, direction status) and
 // short windows read the raw probe_results hypertable; long windows read the
 // M5 continuous aggregates (probe_results_hourly/daily) selected by Source.
+// The fixed-window agent health strips read the narrow probe_results_health_30m
+// cagg (migration 0009) unconditionally — no Source branching.
 //
 // latencyExpr is the per-row latency estimate: real RTT when a prober
 // measures it (ICMP, M4+), otherwise the purest available network timing.
@@ -20,7 +22,7 @@ import (
 // timings or turn a fast failure into apparent low latency.
 //
 // The same COALESCE ladder is frozen into the hourly cagg definition
-// (migration 0006); once that migration ships, changing the order here
+// (migration 0002); once that migration ships, changing the order here
 // requires a forward-only cagg rebuild or raw and aggregate windows disagree.
 const latencyExpr = `COALESCE(rtt_avg_us, tcp_connect_us, tls_handshake_us, ttfb_us, total_us)`
 
@@ -428,17 +430,23 @@ func (s *Store) ListAgents(ctx context.Context) ([]AgentListInfo, error) {
 // run-accounting rows (sent=1, all timings NULL) count as samples and would
 // poison a success ratio (store deliberately does not import pb, so the
 // constant travels as a parameter). status <> 1 — including UNSUPPORTED — is
-// a failure. Windows must stay inside raw retention (14 d); this reads
-// probe_results directly.
+// a failure. Reads the probe_results_health_30m cagg (migration 0009):
+// bucket must be a multiple of 30 min and windows must stay inside the
+// cagg's retention (14 d); materialized_only = false serves the un-refreshed
+// tail live from raw, so the current half hour is never stale.
 func (s *Store) AgentHealthSeries(ctx context.Context, window, bucket time.Duration, excludeProbeType int16) ([]AgentHealthBucket, error) {
+	// Alias b, not bucket: GROUP BY resolves unqualified names against input
+	// columns first, so "AS bucket ... GROUP BY bucket" would group by the
+	// cagg's 30-min column and skip the re-bucket. sum(bigint) is numeric;
+	// cast back for the int64 scans (same pattern as PairSeries).
 	rows, err := s.pool.Query(ctx,
-		`SELECT agent_id, time_bucket($1::interval, time) AS bucket,
-		        count(*), count(*) FILTER (WHERE status = 1)
-		   FROM probe_results
-		  WHERE time > now() - $2::interval
+		`SELECT agent_id, time_bucket($1::interval, bucket) AS b,
+		        sum(samples)::bigint, sum(ok_samples)::bigint
+		   FROM probe_results_health_30m
+		  WHERE bucket > now() - $2::interval
 		    AND probe_type <> $3
-		  GROUP BY agent_id, bucket
-		  ORDER BY agent_id, bucket`, bucket, window, excludeProbeType)
+		  GROUP BY agent_id, b
+		  ORDER BY agent_id, b`, bucket, window, excludeProbeType)
 	if err != nil {
 		return nil, fmt.Errorf("agent health series: %w", err)
 	}
@@ -464,8 +472,13 @@ func (s *Store) AgentHealthSeries(ctx context.Context, window, bucket time.Durat
 // A configured-and-enabled series with no results in the window still yields
 // one nil-bucket row instead of vanishing. Traceroute series are included
 // as-is: nothing here aggregates across probes, so their run-accounting rows
-// can't poison a ratio the way they would in AgentHealthSeries. Windows must
-// stay inside raw retention (14 d); this reads probe_results directly.
+// can't poison a ratio the way they would in AgentHealthSeries. The bucket
+// counts come from the probe_results_health_30m cagg (migration 0009): bucket
+// must be a multiple of 30 min and windows must stay inside the cagg's
+// retention (14 d); materialized_only = false keeps the current half hour
+// live. The subquery's GROUP BY repeats the time_bucket expression instead of
+// naming the alias — the alias must stay "bucket" for the outer ORDER BY, but
+// an unqualified GROUP BY bucket would resolve to the cagg's input column.
 func (s *Store) AgentProbeHealth(ctx context.Context, agentID uuid.UUID, window, bucket time.Duration) ([]AgentProbeHealthRow, error) {
 	enabled, err := s.enabledProbeIDs(ctx)
 	if err != nil {
@@ -482,11 +495,11 @@ func (s *Store) AgentProbeHealth(ctx context.Context, agentID uuid.UUID, window,
 		   LEFT JOIN sites dst ON dst.id = ta.site_id
 		   LEFT JOIN outage_events oe ON oe.id = ss.open_event_id
 		   LEFT JOIN (
-		        SELECT probe_id, time_bucket($2::interval, time) AS bucket,
-		               count(*) AS samples, count(*) FILTER (WHERE status = 1) AS ok
-		          FROM probe_results
-		         WHERE agent_id = $1 AND time > now() - $3::interval
-		         GROUP BY probe_id, bucket
+		        SELECT probe_id, time_bucket($2::interval, bucket) AS bucket,
+		               sum(samples)::bigint AS samples, sum(ok_samples)::bigint AS ok
+		          FROM probe_results_health_30m
+		         WHERE agent_id = $1 AND bucket > now() - $3::interval
+		         GROUP BY probe_id, time_bucket($2::interval, bucket)
 		   ) b ON b.probe_id = ss.probe_id
 		  WHERE ss.agent_id = $1
 		  ORDER BY ss.probe_id, b.bucket`, agentID, bucket, window, enabled)

@@ -92,3 +92,24 @@ func TestLatencyAggregatesKeepTimingFamiliesHonest(t *testing.T) {
 		t.Error("daily aggregate does not preserve the hourly latency source partition")
 	}
 }
+
+// The health strips' store queries filter and fold on exactly these group
+// keys, freeze status = 1 as the only success, and rely on the live tail of
+// materialized_only = false for the current half hour. The cagg definition
+// is immutable once shipped, so pin the contract.
+func TestHealthAggregateKeepsStripSemantics(t *testing.T) {
+	health, err := migrations.ReadFile("sql/0009_health_cagg.notx.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(health)
+	for _, want := range []string{
+		"GROUP BY bucket, agent_id, probe_id, probe_type",
+		"count(*) FILTER (WHERE status = 1)",
+		"timescaledb.materialized_only = false",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("health aggregate missing %q", want)
+		}
+	}
+}

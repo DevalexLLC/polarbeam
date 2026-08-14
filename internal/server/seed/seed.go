@@ -204,15 +204,28 @@ func Run(ctx context.Context, pool *pgxpool.Pool, days int, out io.Writer) error
 		return fmt.Errorf("seed: commit: %w", err)
 	}
 
-	// Refresh both caggs over everything now, before the retention job can
+	// Refresh the caggs over everything now, before the retention job can
 	// drop the >14 d raw region the hourly aggregate must fold first. The
 	// CALLs manage their own transactions, so they need the simple protocol
 	// and must not run inside an explicit tx.
-	for _, view := range []string{"probe_results_hourly", "probe_results_daily"} {
+	//
+	// The health cagg's refresh is bounded one bucket behind now: a full
+	// refresh would materialize the current partial bucket and push the
+	// watermark past it, and real-time aggregation only reads raw ABOVE the
+	// watermark — rows live agents insert into that bucket afterwards would
+	// stay invisible until a policy run catches up. Bounding keeps the live
+	// edge served from raw, exactly as the 30-min end_offset policy does in
+	// production. Hourly/daily keep the full refresh: their readers are
+	// 30d+ windows where the current partial bucket is invisible anyway.
+	for _, v := range []struct{ view, end string }{
+		{"probe_results_hourly", "NULL"}, // before daily: daily folds FROM hourly
+		{"probe_results_daily", "NULL"},
+		{"probe_results_health_30m", "now() - interval '30 minutes'"},
+	} {
 		if _, err := pool.Exec(ctx, fmt.Sprintf(
-			`CALL refresh_continuous_aggregate('%s', NULL, NULL)`, view),
+			`CALL refresh_continuous_aggregate('%s', NULL, %s)`, v.view, v.end),
 			pgx.QueryExecModeSimpleProtocol); err != nil {
-			return fmt.Errorf("seed: refresh %s: %w", view, err)
+			return fmt.Errorf("seed: refresh %s: %w", v.view, err)
 		}
 	}
 
