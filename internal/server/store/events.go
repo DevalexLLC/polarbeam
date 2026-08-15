@@ -25,13 +25,15 @@ type OutageInfo struct {
 	Error         *string
 }
 
-// ListOutages returns open events (always) plus events closed within the
-// window, newest first. The two disjoint branches (open ∪ recently
-// closed) replace a closed_at IS NULL OR closed_at > cutoff predicate no
-// index could serve against forever-retained history: the open branch
-// rides the partial open-event indexes, the closed branch range-scans
-// outage_events_closed_idx, and the display joins run on at most the 500
-// surviving rows.
+// ListOutages returns open events (always, uncapped) plus up to 500
+// events closed within the window, newest first. The two disjoint
+// branches (open ∪ recently closed) replace a closed_at IS NULL OR
+// closed_at > cutoff predicate no index could serve against
+// forever-retained history: the open branch rides the partial open-event
+// indexes, the closed branch range-scans outage_events_closed_idx. The
+// LIMIT is parenthesized onto the closed branch only — attached to the
+// union it would drop the oldest open outages during a >500-event
+// incident, exactly when the dashboard must show them all.
 func (s *Store) ListOutages(ctx context.Context, window time.Duration) ([]OutageInfo, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT oe.id, oe.kind, COALESCE(a.hostname, ''), COALESCE(src.name, ''),
@@ -41,11 +43,11 @@ func (s *Store) ListOutages(ctx context.Context, window time.Duration) ([]Outage
 			FROM outage_events
 			WHERE closed_at IS NULL
 			UNION ALL
-			SELECT id, kind, agent_id, target_id, probe_type, opened_at, closed_at, open_error
+			(SELECT id, kind, agent_id, target_id, probe_type, opened_at, closed_at, open_error
 			FROM outage_events
 			WHERE closed_at > now() - $1::interval
 			ORDER BY opened_at DESC
-			LIMIT 500
+			LIMIT 500)
 		) oe
 		LEFT JOIN agents a ON a.id = oe.agent_id
 		LEFT JOIN sites src ON src.id = a.site_id
