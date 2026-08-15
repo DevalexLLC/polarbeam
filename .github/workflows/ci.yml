@@ -58,8 +58,9 @@ jobs:
   # the runner to pull a database image. Go itself still runs fully
   # vendored (GOPROXY=off) here. The tests skip without
   # POLARBEAM_TEST_DB_URL, so `make test` everywhere else is unaffected.
-  # NOT in the branch ruleset's required checks (yet) — add it there once
-  # it has proven non-flaky.
+  # Required by the branch ruleset BY NAME, like the other five checks —
+  # renaming this job strands every PR; update the ruleset in the same
+  # change.
   db-test:
     runs-on: ubuntu-latest
     services:

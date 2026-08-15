@@ -114,8 +114,8 @@ Full design + milestone plan: `docs/architecture.md`.
 - Branch → PR is ENFORCED, not convention: a GitHub ruleset protects `main`
   with no bypass actors, so even the repo owner cannot push to it. Work on a
   branch, open a PR, merge once CI is green (no approval required — a
-  maintainer can self-merge). The five checks are required BY NAME
-  (`offline-build`, `web-lint`, `docker-build (server)`,
+  maintainer can self-merge). The six checks are required BY NAME
+  (`offline-build`, `web-lint`, `db-test`, `docker-build (server)`,
   `docker-build (agent)`, `docker-build (proxy)` — the matrix legs carry an
   explicit `name:` for this), so renaming a CI job strands every PR on a
   check that no longer reports — update the ruleset in the same change.
