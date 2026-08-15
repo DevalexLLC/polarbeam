@@ -36,10 +36,11 @@ polarbeam/
 │   ├── ca/          # built-in CA, CSR signing, revocation verify-callback
 │   ├── grpcapi/     # EnrollmentService + AgentService
 │   ├── httpapi/     # dashboard REST, sessions, CSRF
-│   ├── store/       # pgx + sqlc
+│   ├── store/       # hand-written pgx queries
 │   ├── meshexpand/  # mesh group → per-agent probe matrix
 │   ├── outage/      # hysteresis state machine
 │   ├── pathwatch/   # traceroute path-change detection
+│   ├── seed/        # synthetic 90-day data generator
 │   └── migrate/     # go:embed SQL migrations
 ├── internal/agent/
 │   ├── config/ enroll/ uplink/ scheduler/ spool/
@@ -52,8 +53,7 @@ polarbeam/
 │   ├── docker/                          # server/agent/proxy Dockerfiles (minimal bases)
 │   ├── proxy/                           # nginx stream config: SNI passthrough on 443
 │   ├── agent/                           # annotated agent.example.yaml
-├── scripts/seed/                        # synthetic 90-day data generator
-└── docs/{architecture,enrollment,airgap-build}.md
+└── docs/{architecture,install,probes,airgap-build}.md
 ```
 
 Admin CLI lives as `polarbeam-server` subcommands (needs DB + CA access anyway; one fewer artifact).
