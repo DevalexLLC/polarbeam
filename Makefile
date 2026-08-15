@@ -77,8 +77,15 @@ BUNDLE_ARCH ?= $(shell docker version --format '{{.Server.Arch}}' 2>/dev/null ||
 
 # ---- dev-time regeneration (network/tooling allowed; outputs are committed) ----
 
+# buf and both protoc plugins are pinned in go.mod's tool block and run from
+# vendor/, so regen needs no host tooling and produces identical output
+# everywhere — offline-build regenerates and diffs to catch proto drift.
+# Delete generated files first: buf only writes outputs for current inputs,
+# so without the sweep a deleted/renamed proto would leave its stale .pb.go
+# behind and regen-and-diff would miss it.
 proto:
-	$(GO) run -mod=vendor github.com/bufbuild/buf/cmd/buf generate 2>/dev/null || buf generate
+	find internal/pb -name '*.pb.go' -delete
+	$(GO) run -mod=vendor github.com/bufbuild/buf/cmd/buf generate
 
 # Lint and format-check before building: the SPA gate is the only place the
 # committed web/dist can be regenerated, so it is also where style problems
