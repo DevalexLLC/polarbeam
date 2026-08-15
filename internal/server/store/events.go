@@ -26,20 +26,33 @@ type OutageInfo struct {
 }
 
 // ListOutages returns open events (always) plus events closed within the
-// window, newest first.
+// window, newest first. The two disjoint branches (open ∪ recently
+// closed) replace a closed_at IS NULL OR closed_at > cutoff predicate no
+// index could serve against forever-retained history: the open branch
+// rides the partial open-event indexes, the closed branch range-scans
+// outage_events_closed_idx, and the display joins run on at most the 500
+// surviving rows.
 func (s *Store) ListOutages(ctx context.Context, window time.Duration) ([]OutageInfo, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT oe.id, oe.kind, COALESCE(a.hostname, ''), COALESCE(src.name, ''),
 			dst.name, t.name, oe.probe_type, oe.opened_at, oe.closed_at, oe.open_error
-		FROM outage_events oe
+		FROM (
+			SELECT id, kind, agent_id, target_id, probe_type, opened_at, closed_at, open_error
+			FROM outage_events
+			WHERE closed_at IS NULL
+			UNION ALL
+			SELECT id, kind, agent_id, target_id, probe_type, opened_at, closed_at, open_error
+			FROM outage_events
+			WHERE closed_at > now() - $1::interval
+			ORDER BY opened_at DESC
+			LIMIT 500
+		) oe
 		LEFT JOIN agents a ON a.id = oe.agent_id
 		LEFT JOIN sites src ON src.id = a.site_id
 		LEFT JOIN targets t ON t.id = oe.target_id
 		LEFT JOIN agents ta ON ta.id = t.agent_id
 		LEFT JOIN sites dst ON dst.id = ta.site_id
-		WHERE oe.closed_at IS NULL OR oe.closed_at > now() - $1::interval
-		ORDER BY oe.opened_at DESC
-		LIMIT 500`, window)
+		ORDER BY oe.opened_at DESC`, window)
 	if err != nil {
 		return nil, fmt.Errorf("list outages: %w", err)
 	}
