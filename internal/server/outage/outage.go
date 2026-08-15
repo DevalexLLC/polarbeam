@@ -148,6 +148,7 @@ func Apply(ctx context.Context, db DB, agentID uuid.UUID, results []Result) ([]T
 	}
 
 	var transitions []Transition
+	finals := make([]finalSeries, 0, len(probeIDs))
 	for _, probeID := range probeIDs {
 		batch := bySeries[probeID]
 		sort.Slice(batch, func(i, j int) bool { return batch[i].Time.Before(batch[j].Time) })
@@ -176,9 +177,10 @@ func Apply(ctx context.Context, db DB, agentID uuid.UUID, results []Result) ([]T
 		}
 
 		last := batch[len(batch)-1]
-		if err := upsertState(ctx, db, agentID, last.ProbeID, last.TargetID, last.ProbeType, st); err != nil {
-			return nil, err
-		}
+		finals = append(finals, finalSeries{probeID: last.ProbeID, targetID: last.TargetID, probeType: last.ProbeType, st: st})
+	}
+	if err := bulkUpsertStates(ctx, db, agentID, finals); err != nil {
+		return nil, err
 	}
 	return transitions, nil
 }
@@ -272,12 +274,64 @@ func openEvent(ctx context.Context, db DB, agentID uuid.UUID, r Result, openedAt
 	return id, nil
 }
 
-func upsertState(ctx context.Context, db DB, agentID, probeID, targetID uuid.UUID, probeType int16, st State) error {
+// finalSeries is one series' folded end state, queued for the single bulk
+// upsert at the end of Apply.
+type finalSeries struct {
+	probeID   uuid.UUID
+	targetID  uuid.UUID
+	probeType int16
+	st        State
+}
+
+// bulkUpsertStates persists every folded series state in one statement —
+// one round trip per push instead of one per series. Every target row is
+// already locked by this transaction (ensureStates' speculative insert or
+// lockStates' FOR UPDATE), so the statement's internal row order cannot
+// introduce a new deadlock. Nullable columns ride sentinels stripped back
+// to NULL by NULLIF: zero time → 'epoch' (zeroToEpoch) and nil
+// open_event_id → the nil uuid, which gen_random_uuid() can never mint.
+// last_time passes through raw: it is NOT NULL, and the year-1 seed value
+// must survive (see ensureStates).
+func bulkUpsertStates(ctx context.Context, db DB, agentID uuid.UUID, finals []finalSeries) error {
+	n := len(finals)
+	probeIDs := make([]uuid.UUID, n)
+	targetIDs := make([]uuid.UUID, n)
+	probeTypes := make([]int16, n)
+	consecFails := make([]int32, n)
+	consecOKs := make([]int32, n)
+	firstFails := make([]time.Time, n)
+	firstOKs := make([]time.Time, n)
+	lastStatuses := make([]int16, n)
+	lastTimes := make([]time.Time, n)
+	openEventIDs := make([]uuid.UUID, n)
+	for i, f := range finals {
+		probeIDs[i] = f.probeID
+		targetIDs[i] = f.targetID
+		probeTypes[i] = f.probeType
+		consecFails[i] = int32(f.st.ConsecFails)
+		consecOKs[i] = int32(f.st.ConsecOKs)
+		firstFails[i] = zeroToEpoch(f.st.FirstFailAt)
+		firstOKs[i] = zeroToEpoch(f.st.FirstOKAt)
+		lastStatuses[i] = f.st.LastStatus
+		lastTimes[i] = f.st.LastTime
+		if f.st.OpenEventID != nil {
+			openEventIDs[i] = *f.st.OpenEventID
+		}
+	}
 	_, err := db.Exec(ctx, `
 		INSERT INTO series_state (agent_id, probe_id, target_id, probe_type,
 			consec_fails, consec_oks, first_fail_at, first_ok_at,
 			last_status, last_time, open_event_id)
-		VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, 'epoch'::timestamptz), NULLIF($8, 'epoch'::timestamptz), $9, $10, $11)
+		SELECT $1, u.probe_id, u.target_id, u.probe_type,
+			u.consec_fails, u.consec_oks,
+			NULLIF(u.first_fail_at, 'epoch'::timestamptz),
+			NULLIF(u.first_ok_at, 'epoch'::timestamptz),
+			u.last_status, u.last_time,
+			NULLIF(u.open_event_id, '00000000-0000-0000-0000-000000000000'::uuid)
+		FROM unnest($2::uuid[], $3::uuid[], $4::smallint[], $5::int[], $6::int[],
+			$7::timestamptz[], $8::timestamptz[], $9::smallint[], $10::timestamptz[], $11::uuid[])
+			AS u(probe_id, target_id, probe_type, consec_fails, consec_oks,
+				first_fail_at, first_ok_at, last_status, last_time, open_event_id)
 		ON CONFLICT (agent_id, probe_id) DO UPDATE SET
 			target_id = EXCLUDED.target_id,
 			probe_type = EXCLUDED.probe_type,
@@ -288,9 +342,8 @@ func upsertState(ctx context.Context, db DB, agentID, probeID, targetID uuid.UUI
 			last_status = EXCLUDED.last_status,
 			last_time = EXCLUDED.last_time,
 			open_event_id = EXCLUDED.open_event_id`,
-		agentID, probeID, targetID, probeType,
-		st.ConsecFails, st.ConsecOKs, zeroToEpoch(st.FirstFailAt), zeroToEpoch(st.FirstOKAt),
-		st.LastStatus, st.LastTime, st.OpenEventID)
+		agentID, probeIDs, targetIDs, probeTypes, consecFails, consecOKs,
+		firstFails, firstOKs, lastStatuses, lastTimes, openEventIDs)
 	if err != nil {
 		return fmt.Errorf("upsert series_state: %w", err)
 	}

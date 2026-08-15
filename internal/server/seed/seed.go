@@ -164,18 +164,49 @@ func Run(ctx context.Context, pool *pgxpool.Pool, days int, out io.Writer) error
 	// series and the matrix/status views keep reflecting reality.
 	start := time.Now().Add(-2 * time.Minute).Add(-time.Duration(n) * Interval).Truncate(time.Second)
 
-	ids := make([]uuid.UUID, len(pairs))
-	for i, p := range pairs {
-		ids[i] = p.probeID
-	}
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("seed: begin: %w", err)
 	}
 	defer tx.Rollback(ctx)
 	// Idempotency: seed probe IDs are deterministic, so this deletes
-	// exactly the previous seed run and nothing else.
-	if _, err := tx.Exec(ctx, `DELETE FROM probe_results WHERE probe_id = ANY($1)`, ids); err != nil {
+	// exactly the previous seed run and nothing else. The delete is
+	// pair-wise so the (agent_id, probe_id, time) dedupe index prefix
+	// serves each pair (a bare probe_id filter would seq-scan the whole
+	// hypertable), crossing ALL agents with the probe IDs in Go so rows a
+	// rotated source agent wrote in an earlier run are still caught —
+	// agents are never deleted, so every historical seed row's agent_id
+	// is present in agents.
+	var allAgents []uuid.UUID
+	rows, err := tx.Query(ctx, `SELECT id FROM agents`)
+	if err != nil {
+		return fmt.Errorf("seed: list agents: %w", err)
+	}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return fmt.Errorf("seed: scan agent: %w", err)
+		}
+		allAgents = append(allAgents, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("seed: list agents: %w", err)
+	}
+	agentIDs := make([]uuid.UUID, 0, len(allAgents)*len(pairs))
+	probeIDs := make([]uuid.UUID, 0, len(allAgents)*len(pairs))
+	for _, a := range allAgents {
+		for _, p := range pairs {
+			agentIDs = append(agentIDs, a)
+			probeIDs = append(probeIDs, p.probeID)
+		}
+	}
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM probe_results pr
+		USING unnest($1::uuid[], $2::uuid[]) AS u(agent_id, probe_id)
+		WHERE pr.agent_id = u.agent_id AND pr.probe_id = u.probe_id`,
+		agentIDs, probeIDs); err != nil {
 		return fmt.Errorf("seed: delete prior seed rows: %w", err)
 	}
 

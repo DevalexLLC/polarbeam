@@ -1,10 +1,14 @@
 package outage
 
 import (
+	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func result(secs int64, ok bool) Result {
@@ -145,5 +149,68 @@ func TestDriftHealsWithOpenPastThreshold(t *testing.T) {
 	_, act := step(st, result(101, false))
 	if act != actionOpen {
 		t.Errorf("drifted state must re-attempt open, got %v", act)
+	}
+}
+
+// recordingDB satisfies DB, records every statement, and answers queries
+// with zero rows (every series folds from a zero State).
+type recordingDB struct {
+	execs   []string
+	queries []string
+}
+
+func (d *recordingDB) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	d.execs = append(d.execs, sql)
+	return pgconn.CommandTag{}, nil
+}
+
+func (d *recordingDB) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	d.queries = append(d.queries, sql)
+	return emptyRows{}, nil
+}
+
+func (d *recordingDB) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	panic("unexpected QueryRow: no transitions in this test")
+}
+
+type emptyRows struct{}
+
+func (emptyRows) Close()                                       {}
+func (emptyRows) Err() error                                   { return nil }
+func (emptyRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
+func (emptyRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (emptyRows) Next() bool                                   { return false }
+func (emptyRows) Scan(dest ...any) error                       { return nil }
+func (emptyRows) Values() ([]any, error)                       { return nil, nil }
+func (emptyRows) RawValues() [][]byte                          { return nil }
+func (emptyRows) Conn() *pgx.Conn                              { return nil }
+
+func TestApplyIssuesOneBulkStateUpsert(t *testing.T) {
+	// The round-trip contract on the ingest hot path: however many series
+	// a push carries (without transitions), Apply issues exactly one seed
+	// insert, one locking select, and ONE bulk state upsert — never a
+	// statement per series.
+	db := &recordingDB{}
+	var results []Result
+	for i := range 3 {
+		r := result(int64(100+i), true)
+		r.ProbeID = uuid.MustParse("22222222-2222-2222-2222-22222222222" + string(rune('0'+i)))
+		results = append(results, r)
+	}
+	if _, err := Apply(context.Background(), db, uuid.NameSpaceOID, results); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(db.queries) != 1 || !strings.Contains(db.queries[0], "FOR UPDATE") {
+		t.Errorf("queries = %d %q, want exactly the FOR UPDATE lock", len(db.queries), db.queries)
+	}
+	if len(db.execs) != 2 {
+		t.Fatalf("execs = %d, want exactly 2 (seed insert + bulk upsert): %q", len(db.execs), db.execs)
+	}
+	if !strings.Contains(db.execs[0], "DO NOTHING") {
+		t.Errorf("first exec is not the seed insert: %q", db.execs[0])
+	}
+	bulk := db.execs[1]
+	if !strings.Contains(bulk, "unnest") || !strings.Contains(bulk, "ON CONFLICT (agent_id, probe_id) DO UPDATE") {
+		t.Errorf("second exec is not the bulk upsert: %q", bulk)
 	}
 }
