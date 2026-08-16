@@ -285,6 +285,11 @@ export interface PathEventsResponse {
 }
 
 export interface CurrentPath {
+  // (agent_id, probe_id) is the series identity: several destination
+  // agents or templates give one source hostname several probe IDs,
+  // while several source agents at one site share a probe ID.
+  agent_id: string
+  probe_id: string
   agent: string
   updated_at: string
   dest_reached: boolean
@@ -302,8 +307,10 @@ export interface TracerouteResponse {
 // GET /api/v1/path-mtu/{a}/{b} — latest usable path MTU measurement per
 // direction. Sizes are IP-packet bytes including the IP header.
 export interface CurrentPathMtu {
-  // Series identity: unique even when one source hostname measures
-  // several destination agents or templates.
+  // (agent_id, probe_id) is the series identity: several destination
+  // agents or templates give one source hostname several probe IDs,
+  // while several source agents at one site share a probe ID.
+  agent_id: string
   probe_id: string
   agent: string
   updated_at: string

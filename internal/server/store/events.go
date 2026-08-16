@@ -118,9 +118,16 @@ func (s *Store) ListPathEvents(ctx context.Context, window time.Duration) ([]Pat
 	return out, rows.Err()
 }
 
-// CurrentPath is one traceroute_current row for a direction of a site pair.
+// CurrentPath is one traceroute_current row for a direction of a site
+// pair. (AgentID, ProbeID) is the series identity, mirroring the table's
+// primary key: several destination agents or templates put one source
+// hostname in multiple rows with distinct probe IDs, while several
+// source agents at one site share a probe ID (mesh IDs are derived per
+// source site, direct probes are assigned site-wide) and differ only by
+// agent ID.
 type CurrentPath struct {
 	AgentID       uuid.UUID
+	ProbeID       uuid.UUID
 	AgentHostname string
 	UpdatedAt     time.Time
 	DestReached   bool
@@ -132,12 +139,12 @@ type CurrentPath struct {
 // any of dstTargets (a site can field several agents).
 func (s *Store) CurrentPaths(ctx context.Context, srcAgents, dstTargets []uuid.UUID) ([]CurrentPath, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT tc.agent_id, COALESCE(a.hostname, ''), tc.updated_at, tc.dest_reached,
-			tc.path_hash, tc.hops
+		SELECT tc.agent_id, tc.probe_id, COALESCE(a.hostname, ''), tc.updated_at,
+			tc.dest_reached, tc.path_hash, tc.hops
 		FROM traceroute_current tc
 		LEFT JOIN agents a ON a.id = tc.agent_id
 		WHERE tc.agent_id = ANY($1) AND tc.target_id = ANY($2)
-		ORDER BY a.hostname`, srcAgents, dstTargets)
+		ORDER BY a.hostname, tc.agent_id, tc.probe_id`, srcAgents, dstTargets)
 	if err != nil {
 		return nil, fmt.Errorf("current paths: %w", err)
 	}
@@ -146,8 +153,8 @@ func (s *Store) CurrentPaths(ctx context.Context, srcAgents, dstTargets []uuid.U
 	var out []CurrentPath
 	for rows.Next() {
 		var p CurrentPath
-		if err := rows.Scan(&p.AgentID, &p.AgentHostname, &p.UpdatedAt, &p.DestReached,
-			&p.PathHash, &p.Hops); err != nil {
+		if err := rows.Scan(&p.AgentID, &p.ProbeID, &p.AgentHostname, &p.UpdatedAt,
+			&p.DestReached, &p.PathHash, &p.Hops); err != nil {
 			return nil, fmt.Errorf("scan current path: %w", err)
 		}
 		out = append(out, p)
@@ -156,10 +163,12 @@ func (s *Store) CurrentPaths(ctx context.Context, srcAgents, dstTargets []uuid.U
 }
 
 // CurrentPathMTU is one path_mtu_current row for a direction of a site
-// pair. Sizes are IP-packet bytes including the IP header. ProbeID is the
-// series identity: with several agents at the destination site (or
-// several templates) one source hostname legitimately appears in
-// multiple rows, and the probe ID is what tells them apart.
+// pair. Sizes are IP-packet bytes including the IP header. (AgentID,
+// ProbeID) is the series identity, mirroring the table's primary key:
+// several destination agents or templates put one source hostname in
+// multiple rows with distinct probe IDs, while several source agents at
+// one site share a probe ID (mesh IDs are derived per source site,
+// direct probes are assigned site-wide) and differ only by agent ID.
 type CurrentPathMTU struct {
 	AgentID         uuid.UUID
 	ProbeID         uuid.UUID
@@ -184,7 +193,7 @@ func (s *Store) CurrentPathMTUs(ctx context.Context, srcAgents, dstTargets []uui
 		FROM path_mtu_current mc
 		LEFT JOIN agents a ON a.id = mc.agent_id
 		WHERE mc.agent_id = ANY($1) AND mc.target_id = ANY($2)
-		ORDER BY a.hostname, mc.probe_id`, srcAgents, dstTargets)
+		ORDER BY a.hostname, mc.agent_id, mc.probe_id`, srcAgents, dstTargets)
 	if err != nil {
 		return nil, fmt.Errorf("current path MTUs: %w", err)
 	}
