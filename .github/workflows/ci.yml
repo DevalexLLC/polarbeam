@@ -3,13 +3,15 @@
 # proves vendor/, internal/pb/, and web/dist/ are complete — no build step
 # reaches the network.
 #
-# Deliberately absent (future work):
-#   - proto regen drift: buf is NOT vendored (the Makefile's `go run` branch
-#     falls back to a host binary) and plugin versions are unpinned, so a CI
-#     regen would produce false diffs. Vendor + pin buf first.
-#   - web/dist drift: `pnpm install` + build nondeterminism across
-#     environments makes byte-comparing dist/ noisy; the committed dist is
-#     covered by review instead.
+# Committed-artifact drift coverage lives in two places by necessity:
+#   - internal/pb/ drift: offline-build regenerates protos (buf + plugins are
+#     pinned in go.mod's tool block and run from vendor/) and its clean-tree
+#     check rejects any diff.
+#   - web/dist/ drift: web-lint rebuilds the SPA and byte-compares dist/ —
+#     it is the only job with node_modules. The build is reproducible because
+#     node (.nvmrc), pnpm (packageManager + sha512), and the lockfile are all
+#     pinned; if a toolchain bump ever breaks byte-stability, fix the pin or
+#     the build, don't drop the check.
 name: ci
 
 on:
@@ -45,12 +47,28 @@ jobs:
         run: make vet
       - name: Format check
         run: make fmt-check
+      # buf and the protoc plugins are pinned in go.mod's tool block and
+      # compile from vendor/, so this runs under GOPROXY=off too — and
+      # doubles as proof that proto regen itself needs no network. A proto
+      # change committed without regenerating shows up as a dirty tree below.
+      - name: Regenerate protobuf code
+        run: make proto
       # Reads vendor/ only, so it runs under GOPROXY=off. A dependency added
       # without regenerating attribution shows up as a dirty tree below.
       - name: Regenerate third-party notices
         run: make notices
+      # `git status --porcelain` rather than `git diff`: a new proto whose
+      # generated .pb.go was never committed appears as an UNTRACKED file
+      # after regen, which diff ignores.
       - name: Working tree must stay clean
-        run: git diff --exit-code
+        run: |
+          drift="$(git status --porcelain)"
+          if [ -n "$drift" ]; then
+            git status --porcelain
+            git diff
+            echo "committed generated artifacts are stale — regenerate and commit" >&2
+            exit 1
+          fi
 
   # DB-backed store/migrate tests against the same TimescaleDB image the
   # compose stack ships. Deliberately a separate job: offline-build proves
@@ -133,6 +151,19 @@ jobs:
         run: |
           node tools/gen-spa-licenses.mjs
           git diff --exit-code THIRD-PARTY-LICENSES
+      # The committed dist/ is what ships in every air-gap artifact; rebuild
+      # and byte-compare so a source edit without `make web` cannot merge.
+      # `git status --porcelain` (not `git diff`) because a content-hashed
+      # asset rename leaves the new file untracked, invisible to diff.
+      - name: Committed dist must match a fresh build
+        run: |
+          pnpm run build
+          drift="$(git status --porcelain -- dist)"
+          if [ -n "$drift" ]; then
+            echo "$drift"
+            echo "web/dist/ is stale — run 'make web' and commit the result" >&2
+            exit 1
+          fi
 
   docker-build:
     # Stable display name: the branch ruleset requires these checks BY NAME

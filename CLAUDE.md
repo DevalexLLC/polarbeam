@@ -61,8 +61,10 @@ Full design + milestone plan: `docs/architecture.md`.
   `POLARBEAM_DB_PASSWORD`. ALWAYS composes base + dev overlay together;
   never `docker compose up` the base file alone (silently drops overlay
   services).
-- Regenerate protos: `make proto` (buf + protoc-gen-go{,-grpc} in ~/go/bin),
-  commit the diff under `internal/pb/`.
+- Regenerate protos: `make proto` — buf + protoc-gen-go{,-grpc} are pinned
+  in go.mod's `tool` block and run from `vendor/`, no host tooling — and
+  commit the diff under `internal/pb/` (the `offline-build` CI job
+  regenerates and rejects drift).
 - Licensing/attribution: `LICENSE` (AGPL-3.0-only; Devalex LLC offers
   commercial exceptions, so external contributions need a CLA — see
   CONTRIBUTING.md) + hand-written `NOTICE` + generated `THIRD-PARTY-NOTICES`.
