@@ -98,6 +98,7 @@ Continuous aggregates: `probe_results_hourly` (from raw: samples, ok_samples, su
 - **TCP/TLS:** timed `DialContext` + `tls.Client.HandshakeContext`. **HTTP(S):** `httptrace` → dns/tcp/tls/ttfb/total + expected-status assertion. **DNS:** `codeberg.org/miekg/dns` (v2), configurable resolver/qname/qtype, RCODE check.
 - **NTP:** hand-rolled 48-byte SNTP client-mode request over UDP (stdlib only), single shot per run, default port 123; the transmit timestamp is a `crypto/rand` nonce so the originate-echo check authenticates the reply. Validates server mode, stratum 1–15, synchronized leap, nonzero transmit timestamp; Kiss-o'-Death (stratum 0) reports the kiss code. Reachability + RTT only — no clock-offset math. **Direct-only** (peer agents serve no time; `probeadmin.DirectOnly`).
 - **Traceroute:** UDP with incrementing TTL, ICMP time-exceeded read on a **raw** ICMP socket — unprivileged datagram ICMP does not deliver errors elicited by another socket's packets, so traceroute strictly requires CAP_NET_RAW (missing capability = ERROR result every cadence, never a skip); 3 probes/hop, max 30 hops, slower interval (~5 min); `path_hash = sha256(hop IPs)`.
+- **Path MTU:** ICMP echoes padded to candidate sizes with DF enforced (`x/sys/unix` `IP_PMTUDISC_PROBE` / `IPV6_DONTFRAG`, Linux-only — other platforms report ERROR), bounded binary search between `mtu.min`/`mtu.max` (defaults 1280/1500), 3 sends per size on a **raw** ICMP socket (CAP_NET_RAW strictly required, traceroute rationale); FragNeeded/PTB bounds the search and its advertised next-hop MTU is verified directly; silence above a proven-good size = suspected PMTU black hole → TIMEOUT, never healthy. All sizes are IP-packet bytes incl. header; results go to `path_mtu_current`/`path_mtu_events` via `mtuwatch` (traceroute-style side tables), never into latency columns.
 
 ## Outage detection (server-side)
 
@@ -165,6 +166,9 @@ browsers ──HTTPS────▶ │ nginx     │  SNI: lh.example ───
 
 **M6 — Packaging, rotation, air-gap hardening (1–2 wk).** Published agent container image (non-root UID 10001, `cap_net_raw` file capability, selfcheck entrypoint); control-plane release bundle = `docker save` image tarballs (server, proxy, timescaledb) + production compose file + docs; cert-rotation e2e (short-lifetime test mode); `selfcheck`; CI check that builds with the network disabled (proves vendoring is complete).
 *Verify:* agent image loads on a host with no internet and unprivileged ICMP works; control-plane bundle imports via `docker load` and starts on an offline host; 10-min cert lifetime → observed auto-renewal; `GOFLAGS=-mod=vendor GOPROXY=off make build` succeeds.
+
+**M7 — Path MTU probing (issue #23).** `path_mtu` probe type: agent prober (raw ICMP + DF probe mode, bounded search, black-hole detection), `PathMtuResult` proto, `path_mtu_current`/`path_mtu_events` + `mtuwatch`, probeadmin registration with int params, pair-detail API + UI card, docs.
+*Verify:* direct + mesh path_mtu probes converge on the dev stack; a black hole (drop >1400 without ICMP errors via iptables) reports TIMEOUT with the flag, never OK; missing NET_RAW → ERROR naming the capability.
 
 ## Dev environment
 

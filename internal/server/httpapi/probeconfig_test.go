@@ -460,6 +460,8 @@ func TestConfigProbeTypesRegistry(t *testing.T) {
 			Params     []struct {
 				Key          string `json:"key"`
 				Kind         string `json:"kind"`
+				Min          int    `json:"min"`
+				Max          int    `json:"max"`
 				RequiredMesh bool   `json:"required_mesh"`
 				MeshOnly     bool   `json:"mesh_only"`
 			} `json:"params"`
@@ -470,7 +472,7 @@ func TestConfigProbeTypesRegistry(t *testing.T) {
 	}
 	byType := map[string][]string{}
 	directOnly := map[string]bool{}
-	var tcpHasMeshOnlyPort bool
+	var tcpHasMeshOnlyPort, mtuHasIntBounds bool
 	for _, tt := range res.Types {
 		directOnly[tt.Type] = tt.DirectOnly
 		for _, p := range tt.Params {
@@ -478,10 +480,13 @@ func TestConfigProbeTypesRegistry(t *testing.T) {
 			if tt.Type == "tcp" && p.Key == "port" && p.MeshOnly && p.RequiredMesh {
 				tcpHasMeshOnlyPort = true
 			}
+			if tt.Type == "path_mtu" && p.Key == "mtu.min" && p.Kind == "int" && p.Min == 68 && p.Max == 9216 {
+				mtuHasIntBounds = true
+			}
 		}
 	}
-	if len(res.Types) != 7 {
-		t.Errorf("types = %d, want 7", len(res.Types))
+	if len(res.Types) != 8 {
+		t.Errorf("types = %d, want 8", len(res.Types))
 	}
 	if !tcpHasMeshOnlyPort {
 		t.Error("tcp must declare mesh-only required port")
@@ -501,6 +506,16 @@ func TestConfigProbeTypesRegistry(t *testing.T) {
 	}
 	if len(byType["ntp"]) != 0 {
 		t.Errorf("ntp params = %v, want none", byType["ntp"])
+	}
+	if want := []string{"mtu.min", "mtu.max", "mtu.family"}; !slicesEqual(byType["path_mtu"], want) {
+		t.Errorf("path_mtu params = %v, want %v", byType["path_mtu"], want)
+	}
+	// The SPA renders int params with client-side bounds off min/max.
+	if !mtuHasIntBounds {
+		t.Error("path_mtu mtu.min must declare kind int with min/max bounds")
+	}
+	if directOnly["path_mtu"] {
+		t.Error("path_mtu must support mesh templates")
 	}
 }
 

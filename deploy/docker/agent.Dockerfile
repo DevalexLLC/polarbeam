@@ -35,8 +35,8 @@ COPY --from=build /out/polarbeam-agent /usr/local/bin/polarbeam-agent
 # License + attribution notices travel with every redistribution, images
 # included. /licenses is the OCI convention.
 COPY LICENSE NOTICE THIRD-PARTY-NOTICES /licenses/
-# File capability grants raw ICMP (echo fallback + traceroute) to the
-# non-root user; libcap is build-time only.
+# File capability grants raw ICMP (echo fallback + traceroute + path MTU)
+# to the non-root user; libcap is build-time only.
 RUN apk add --no-cache libcap \
     && setcap cap_net_raw+ep /usr/local/bin/polarbeam-agent \
     && apk del libcap \

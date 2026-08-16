@@ -1,7 +1,7 @@
 # PolarBEAM probe reference
 
 PolarBEAM agents measure network and service reachability from the sites where
-they run. The current agent supports seven probe types:
+they run. The current agent supports eight probe types:
 
 - ICMP
 - TCP
@@ -10,6 +10,7 @@ they run. The current agent supports seven probe types:
 - DNS
 - NTP
 - traceroute
+- Path MTU
 
 The probes do not all use the same transport. PolarBEAM uses TCP, UDP, and
 ICMP depending on the probe. Probe workloads are configured centrally in the
@@ -32,6 +33,7 @@ and how to use them to validate network paths.
 | DNS | UDP only | Target port, default 53 | UDP DNS response |
 | NTP | UDP only | Target port, default 123 | UDP NTP response |
 | traceroute | Outbound UDP plus inbound ICMP | UDP 33434-33523 | ICMP time-exceeded or destination-unreachable |
+| Path MTU | ICMP or ICMPv6 with DF set | None | ICMP echo reply, Fragmentation Needed, or Packet Too Big |
 
 ICMP probing is not UDP on the wire. On Linux, the agent first tries an
 unprivileged datagram ICMP socket, but the resulting network packets are still
@@ -70,11 +72,16 @@ Agent egress depends on the configured workload:
 | UDP 53 or configured port | DNS target or resolver | DNS probe; no TCP fallback |
 | UDP 123 or configured port | NTP server target | NTP probe; no TCP fallback |
 | UDP 33434-33523 | Peer or external target | traceroute |
+| ICMP echo with DF set | Peer or external target | Path MTU probing |
 
 Stateful firewalls must permit corresponding return traffic. ICMP and
 traceroute also require the relevant echo-reply, time-exceeded, and
-destination-unreachable messages. The IPv6 equivalents are required for IPv6
-targets. A blanket ICMP or ICMPv6 deny policy breaks these probes.
+destination-unreachable messages. Path MTU probing additionally requires
+inbound ICMPv4 Fragmentation Needed (type 3 code 4) and ICMPv6 Packet Too Big
+(type 2), and these arrive from intermediate routers along the path, not just
+the target address — a policy that drops them makes every path look like a
+PMTU black hole. The IPv6 equivalents are required for IPv6 targets. A blanket
+ICMP or ICMPv6 deny policy breaks these probes.
 
 Mesh members are destinations as well as sources. When sites filter traffic
 independently, each member's probe address must also accept the corresponding
@@ -82,7 +89,7 @@ inbound traffic from its peers:
 
 | Protocol/port | Purpose |
 |---|---|
-| ICMP echo request | Peers' ICMP probes; the kernel replies |
+| ICMP echo request | Peers' ICMP and path MTU probes; the kernel replies |
 | TCP mesh-template ports | Peers' TCP and TLS probes against a real local service |
 | UDP 33434-33523 | Peers' traceroutes; the port-unreachable reply marks the destination reached |
 
@@ -110,8 +117,8 @@ B has three, one mesh template produces six A-to-B and six B-to-A agent-pair
 series. Each destination uses the peer agent's `probe_address`, recorded at
 enrollment.
 
-Mesh templates support ICMP, TCP, TLS, DNS, and traceroute. HTTP and NTP are
-direct only: HTTP requires a complete target URL, and an expanded NTP template
+Mesh templates support ICMP, TCP, TLS, DNS, traceroute, and Path MTU. HTTP and
+NTP are direct only: HTTP requires a complete target URL, and an expanded NTP template
 would query peer agents that do not serve time.
 
 TCP and TLS mesh templates require a `port` parameter between 1 and 65535.
@@ -130,9 +137,9 @@ forms:
 - An address with an optional port
 - A full URL
 
-Use an address for ICMP and traceroute, an address plus port for TCP and TLS,
-an address with an optional port for DNS and NTP, and a full URL for HTTP or
-HTTPS.
+Use an address for ICMP, traceroute, and Path MTU, an address plus port for
+TCP and TLS, an address with an optional port for DNS and NTP, and a full URL
+for HTTP or HTTPS.
 
 Target creation currently verifies that at least an address or URL exists,
 but it does not cross-check the target against a later probe type. For example,
@@ -147,7 +154,7 @@ Every probe has the following settings:
 | Setting | Meaning |
 |---|---|
 | Assignment | A mesh, or a source site plus external target |
-| Type | One of the seven supported types |
+| Type | One of the eight supported types |
 | Interval | Time between scheduled runs |
 | Timeout | Maximum duration of one run |
 | Train count | Packet count for ICMP trains |
@@ -173,6 +180,8 @@ Configuration validation requires:
   seconds unless explicit train settings shrink the train
 - Known parameters for the selected probe type
 - A port between 1 and 65535 for mesh TCP and TLS probes
+- Path MTU size bounds within 68–9216 bytes with `mtu.min` below `mtu.max`,
+  defaults substituted for whichever bound is not set
 
 Train count and spacing affect ICMP. The other current prober implementations
 do not use those fields.
@@ -456,6 +465,110 @@ Typical uses include:
 
 Traceroute can time out even when an application path works if firewalls,
 routers, or the destination suppress the required ICMP responses.
+
+## Path MTU
+
+Path MTU probing determines the largest IP packet a path carries without
+fragmentation. The prober sends ICMP echo requests padded to candidate sizes
+with the Don't Fragment behavior enforced (Linux `IP_PMTUDISC_PROBE` on IPv4;
+`IPV6_DONTFRAG` on IPv6, where routers never fragment anyway), bounded by a
+binary search between `mtu.min` and `mtu.max`. Each size gets up to three
+sends before it is judged, and a run tests at most about fifteen sizes — the
+search never scans the range. When a router answers with a valid ICMPv4
+Fragmentation Needed or ICMPv6 Packet Too Big, the advertised next-hop MTU is
+tested directly and, once verified end to end, accepted — the same shortcut
+real path MTU discovery uses.
+
+All sizes are IP packet bytes including the IP header, so results compare
+directly to interface and link MTUs. A 1500-byte result means a full Ethernet
+frame's IP packet passes; the ICMP payload the prober actually sent is 28
+bytes smaller on IPv4 (20-byte header + 8-byte echo header) and 48 bytes
+smaller on IPv6.
+
+The result contains:
+
+- The largest tested packet size that reached the destination
+- The smallest tested size that did not, when one exists
+- The next-hop MTU advertised by Fragmentation Needed or Packet Too Big,
+  when a plausible one was seen
+- The IP version probed
+- Whether a PMTU black hole is suspected
+- The round-trip time of the successful probe at the largest passing size
+- Whether the upper bound came from the local interface rather than the path
+
+Status semantics:
+
+- A converged measurement is `OK`, including a path whose MTU is below
+  `mtu.max` — a valid ICMP error answer is a successful measurement, not a
+  failure. The pair detail view shows the measured value.
+- A path that passes smaller packets while larger ones vanish with no ICMP
+  error is a suspected PMTU black hole and reports `TIMEOUT`, never healthy.
+  This is the failure mode that breaks VPN, SD-WAN, and overlay traffic while
+  pings and TCP handshakes keep succeeding.
+- A search that cannot converge inside the run timeout reports `TIMEOUT`
+  naming non-convergence.
+- Resolution failures report `DNS_FAILURE`; missing privileges, unsupported
+  platforms, and local send limits below `mtu.min` report `ERROR` with the
+  reason.
+
+The server keeps the latest usable measurement per direction and records an
+event whenever the measured MTU or black-hole state changes, mirroring how
+traceroute path changes are tracked. Path MTU results never contribute
+latency or loss to the pair charts.
+
+Parameters:
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `mtu.min` | 1280 | Smallest IP packet size to test, bytes including IP header (68–9216) |
+| `mtu.max` | 1500 | Largest IP packet size to test (68–9216, must exceed `mtu.min`) |
+| `mtu.family` | prefer IPv4 | Force `4` or `6` when a hostname resolves to both |
+
+On jumbo-frame networks, raise `mtu.max` (for example to 9000): the probe
+only reports the largest size it tested, so the default range would report a
+clean 1500 on a jumbo path and never look higher. Creating such a probe
+prints a non-blocking advisory, because paths beyond the local segment
+rarely carry jumbo frames and the reported value will honestly be the
+far-end bottleneck. The agent's own egress interface must also carry jumbo
+frames — a size the kernel cannot send is reported as a local constraint,
+not a path measurement — and since the agent runs in a container, the
+**container network's** MTU is what counts. Docker bridge networks default
+to 1500 regardless of the host NIC, so run jumbo-probing agents with
+`--network host` or on a network created with
+`com.docker.network.driver.mtu=9000`. The destination needs no
+configuration; its kernel echoes whatever arrives.
+
+Path MTU probes work as mesh templates and direct assignments. Mesh
+expansion probes each peer agent's probe address; no port parameter is
+needed because the transport is ICMP.
+
+Like traceroute, Path MTU strictly requires `CAP_NET_RAW` (`--cap-add
+NET_RAW` on the agent container): unprivileged datagram ICMP sockets cannot
+observe the Fragmentation Needed and Packet Too Big errors elicited by the
+prober's own packets. The probe additionally uses Linux-only PMTU-probe
+socket options, so it reports `ERROR` on other agent platforms. A missing
+capability produces an error result on every cadence rather than silently
+skipping the probe. `polarbeam-agent selfcheck` reports availability as the
+`path_mtu` check.
+
+A timeout of at least 10 seconds is recommended — a worst-case search sends
+up to about 45 probes and reports honest non-convergence when the budget is
+too small. A typical cadence is five minutes with a 15-second timeout: path
+MTU changes when routing or tunnel encapsulation changes, not per packet.
+
+Typical uses include:
+
+- Verify a VPN, SD-WAN, GRE, or VXLAN path carries the MTU applications need
+- Detect PMTU black holes where small probes pass and bulk traffic stalls
+- Confirm jumbo-frame paths inside a datacenter fabric end to end
+- Catch MTU regressions after carrier, tunnel, or overlay changes
+- Explain application stalls that ICMP and TCP handshake probes miss
+
+Routers rate-limit the ICMP errors this probe depends on, so a heavily
+rate-limited path can occasionally read as a black hole; the three-send
+retry absorbs isolated loss but not sustained suppression. On ECMP paths,
+probes of different sizes may hash onto different links, in which case the
+reported value reflects the smallest MTU among them.
 
 ## Result statuses and interpretation
 

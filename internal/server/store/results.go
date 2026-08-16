@@ -39,6 +39,11 @@ type ResultRow struct {
 	// hypertable column: hops go to traceroute_current/path_events via
 	// pathwatch, and only for rows the insert genuinely added.
 	Traceroute *TraceroutePayload
+
+	// PathMtu rides the row the same way: measurements go to
+	// path_mtu_current/path_mtu_events via mtuwatch, never to hypertable
+	// columns.
+	PathMtu *PathMtuPayload
 }
 
 // TraceroutePayload is the wire TracerouteResult mapped for pathwatch.
@@ -46,6 +51,19 @@ type TraceroutePayload struct {
 	DestReached bool
 	PathHash    []byte
 	Hops        []byte // JSON array mirroring the wire Hop messages
+}
+
+// PathMtuPayload is the wire PathMtuResult mapped for mtuwatch. Usable
+// marks a converged measurement worth folding into current/events.
+type PathMtuPayload struct {
+	LargestOK       int32
+	SmallestFailed  int32
+	NextHopMTU      int32
+	IPVersion       int16
+	BlackHole       bool
+	LocalConstraint bool
+	RttUS           *int32
+	Usable          bool
 }
 
 // InsertResultsTx bulk-inserts a batch for one agent in a single statement

@@ -24,6 +24,7 @@ var TypeNames = map[string]pb.ProbeType{
 	"dns":        pb.ProbeType_PROBE_TYPE_DNS,
 	"ntp":        pb.ProbeType_PROBE_TYPE_NTP,
 	"traceroute": pb.ProbeType_PROBE_TYPE_TRACEROUTE,
+	"path_mtu":   pb.ProbeType_PROBE_TYPE_PATH_MTU,
 }
 
 // Names returns the accepted type names, sorted for deterministic output.
@@ -60,6 +61,15 @@ func TypeName(t int16) string {
 const (
 	DefaultTrainCount   = 10
 	DefaultTrainSpacing = 200 * time.Millisecond
+)
+
+// Path MTU size bounds and defaults, in IP-packet bytes including the IP
+// header. Keep in lockstep with internal/agent/probes/pathmtu.go.
+const (
+	DefaultMTUMin = 1280
+	DefaultMTUMax = 1500
+	MTUFloor      = 68
+	MTUCeil       = 9216
 )
 
 // FieldNames carries the surface-specific spelling of each setting so one
@@ -130,6 +140,7 @@ const (
 	KindBool   ParamKind = "bool"   // "true" or "false"
 	KindEnum   ParamKind = "enum"   // one of Enum (case-insensitive)
 	KindStatus ParamKind = "status" // exact HTTP status ("200") or class ("2xx")
+	KindInt    ParamKind = "int"    // integer within [Min, Max]
 )
 
 // ParamSpec describes one type-specific param key. The registry is the only
@@ -141,6 +152,8 @@ type ParamSpec struct {
 	Hint           string    `json:"hint"`
 	Kind           ParamKind `json:"kind"`
 	Enum           []string  `json:"enum,omitempty"`
+	Min            int       `json:"min,omitempty"` // KindInt only
+	Max            int       `json:"max,omitempty"` // KindInt only
 	RequiredMesh   bool      `json:"required_mesh,omitempty"`
 	RequiredDirect bool      `json:"required_direct,omitempty"`
 	MeshOnly       bool      `json:"mesh_only,omitempty"`
@@ -179,6 +192,14 @@ var registry = map[pb.ProbeType][]ParamSpec{
 	},
 	pb.ProbeType_PROBE_TYPE_NTP:        {},
 	pb.ProbeType_PROBE_TYPE_TRACEROUTE: {},
+	pb.ProbeType_PROBE_TYPE_PATH_MTU: {
+		{Key: "mtu.min", Kind: KindInt, Min: MTUFloor, Max: MTUCeil,
+			Hint: fmt.Sprintf("smallest IP packet size to test, bytes including IP header (default %d)", DefaultMTUMin)},
+		{Key: "mtu.max", Kind: KindInt, Min: MTUFloor, Max: MTUCeil,
+			Hint: fmt.Sprintf("largest IP packet size to test (default %d)", DefaultMTUMax)},
+		{Key: "mtu.family", Kind: KindEnum, Enum: []string{"4", "6"},
+			Hint: "force IP version (default: prefer IPv4)"},
+	},
 }
 
 // Params returns the registry entry for a type (nil for unknown types —
@@ -251,10 +272,15 @@ func ValidateMeshMemberRemoval(meshName string, membersAfter, templates int) []s
 // rate-limit faster pollers, answering with kiss-o'-death RATE.
 const NTPRecommendedMinInterval = 60 * time.Second
 
+// PathMTURecommendedMinTimeout is the shortest per-run timeout that lets a
+// worst-case path MTU search (a handful of sizes, three sends each, with a
+// floor on per-send waits) converge instead of reporting TIMEOUT.
+const PathMTURecommendedMinTimeout = 10 * time.Second
+
 // Warnings reports configurations that are valid, will run, and are almost
 // certainly not what the operator meant. They never block a write — each
 // case has a legitimate use — so callers surface them alongside success.
-func Warnings(t pb.ProbeType, mesh bool, interval time.Duration, params map[string]string) []string {
+func Warnings(t pb.ProbeType, mesh bool, interval, timeout time.Duration, params map[string]string) []string {
 	var out []string
 	// A mesh dns probe has no target row: expansion points it at the peer
 	// AGENT's probe address, so it queries another agent's host on port 53
@@ -272,6 +298,20 @@ func Warnings(t pb.ProbeType, mesh bool, interval time.Duration, params map[stri
 	if t == pb.ProbeType_PROBE_TYPE_NTP && interval > 0 && interval < NTPRecommendedMinInterval {
 		out = append(out, fmt.Sprintf("ntp probes more frequent than %s risk rate limiting (kiss-o'-death RATE) from public NTP servers; "+
 			"use an interval of at least %s unless you operate the server", NTPRecommendedMinInterval, NTPRecommendedMinInterval))
+	}
+	if t == pb.ProbeType_PROBE_TYPE_PATH_MTU {
+		// The search bounds its per-send waits against the timeout, but a
+		// short budget can only end in an honest "did not converge" TIMEOUT.
+		if timeout > 0 && timeout < PathMTURecommendedMinTimeout {
+			out = append(out, fmt.Sprintf("a path MTU search sends up to ~45 probes per run; timeouts under %s may not converge "+
+				"and will report TIMEOUT instead of a measurement", PathMTURecommendedMinTimeout))
+		}
+		if v := params["mtu.max"]; v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > DefaultMTUMax {
+				out = append(out, fmt.Sprintf("mtu.max %d exceeds standard Ethernet (%d): paths beyond the local segment rarely "+
+					"carry jumbo frames, so expect the reported MTU to be the far-end bottleneck", n, DefaultMTUMax))
+			}
+		}
 	}
 	return out
 }
@@ -327,6 +367,31 @@ func ValidateParams(t pb.ProbeType, mesh bool, params map[string]string) []strin
 			problems = append(problems, fmt.Sprintf("params: %q is required for %s%s probes", s.Key, mode, TypeName(int16(t))))
 		}
 	}
+
+	// Cross-field rule for path_mtu, checked against EFFECTIVE values so a
+	// lone mtu.min above the default max (or vice versa) is caught too. The
+	// prober re-checks the same rule, but write time is the honest place.
+	if t == pb.ProbeType_PROBE_TYPE_PATH_MTU {
+		effMin, effMax := DefaultMTUMin, DefaultMTUMax
+		minOK, maxOK := true, true
+		if v := params["mtu.min"]; v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				effMin = n
+			} else {
+				minOK = false // already reported by validateValue
+			}
+		}
+		if v := params["mtu.max"]; v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				effMax = n
+			} else {
+				maxOK = false
+			}
+		}
+		if minOK && maxOK && effMin >= effMax {
+			problems = append(problems, fmt.Sprintf("params: mtu.min (%d) must be less than mtu.max (%d)", effMin, effMax))
+		}
+	}
 	return problems
 }
 
@@ -350,6 +415,11 @@ func validateValue(spec ParamSpec, v string) string {
 			((v[1] == 'x' && v[2] == 'x') || (v[1] >= '0' && v[1] <= '9' && v[2] >= '0' && v[2] <= '9'))
 		if !ok {
 			return fmt.Sprintf(`params: %q must be an exact status ("200") or a class ("2xx"), got %q`, spec.Key, v)
+		}
+	case KindInt:
+		n, err := strconv.Atoi(v)
+		if err != nil || n < spec.Min || n > spec.Max {
+			return fmt.Sprintf("params: %q must be an integer between %d and %d, got %q", spec.Key, spec.Min, spec.Max, v)
 		}
 	case KindString:
 		if strings.TrimSpace(v) == "" {

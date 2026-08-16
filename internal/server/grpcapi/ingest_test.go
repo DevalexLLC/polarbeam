@@ -145,6 +145,87 @@ func TestResultToRowTraceroute(t *testing.T) {
 	}
 }
 
+func TestResultToRowPathMtu(t *testing.T) {
+	now := time.Now()
+	base := func(status pb.ProbeStatus, m *pb.PathMtuResult) *pb.ProbeResult {
+		r := validResult(now)
+		r.Type = pb.ProbeType_PROBE_TYPE_PATH_MTU
+		r.Status = status
+		r.PathMtu = m
+		return r
+	}
+
+	// A clean OK measurement maps fully and is usable.
+	row, err := resultToRow(base(pb.ProbeStatus_PROBE_STATUS_OK, &pb.PathMtuResult{
+		LargestOkBytes: 1400, SmallestFailedBytes: 1500, NextHopMtuBytes: 1400,
+		IpVersion: 4, RttUs: 311,
+	}), now)
+	if err != nil {
+		t.Fatalf("resultToRow: %v", err)
+	}
+	p := row.PathMtu
+	if p == nil || p.LargestOK != 1400 || p.SmallestFailed != 1500 || p.NextHopMTU != 1400 ||
+		p.IPVersion != 4 || p.RttUS == nil || *p.RttUS != 311 || !p.Usable {
+		t.Errorf("payload = %+v, want mapped usable measurement", p)
+	}
+
+	// -1 RTT means not measured (NULL).
+	row, err = resultToRow(base(pb.ProbeStatus_PROBE_STATUS_OK, &pb.PathMtuResult{
+		LargestOkBytes: 1500, IpVersion: 6, RttUs: -1,
+	}), now)
+	if err != nil {
+		t.Fatalf("resultToRow: %v", err)
+	}
+	if row.PathMtu.RttUS != nil || row.PathMtu.IPVersion != 6 {
+		t.Errorf("payload = %+v, want nil rtt and ip_version 6", row.PathMtu)
+	}
+
+	// A black-hole TIMEOUT still brackets the MTU: usable.
+	row, err = resultToRow(base(pb.ProbeStatus_PROBE_STATUS_TIMEOUT, &pb.PathMtuResult{
+		LargestOkBytes: 1400, SmallestFailedBytes: 1401, IpVersion: 4,
+		BlackHoleSuspected: true, RttUs: -1,
+	}), now)
+	if err != nil {
+		t.Fatalf("resultToRow: %v", err)
+	}
+	if !row.PathMtu.Usable || !row.PathMtu.BlackHole {
+		t.Errorf("black-hole payload = %+v, want usable with flag", row.PathMtu)
+	}
+
+	// A non-converged TIMEOUT (no black hole) and a run with no delivered
+	// size must not fold into current/events.
+	for name, m := range map[string]*pb.PathMtuResult{
+		"partial timeout": {LargestOkBytes: 1280, IpVersion: 4, RttUs: -1},
+		"nothing passed":  {LargestOkBytes: 0, SmallestFailedBytes: 1280, IpVersion: 4, RttUs: -1, BlackHoleSuspected: false},
+	} {
+		row, err := resultToRow(base(pb.ProbeStatus_PROBE_STATUS_TIMEOUT, m), now)
+		if err != nil {
+			t.Fatalf("%s: resultToRow: %v", name, err)
+		}
+		if row.PathMtu.Usable {
+			t.Errorf("%s: payload must not be usable: %+v", name, row.PathMtu)
+		}
+	}
+}
+
+func TestResultToRowPathMtuRejects(t *testing.T) {
+	now := time.Now()
+	cases := map[string]*pb.PathMtuResult{
+		"oversized largest_ok": {LargestOkBytes: 1 << 20, IpVersion: 4},
+		"oversized next_hop":   {LargestOkBytes: 1400, NextHopMtuBytes: 1 << 20, IpVersion: 4},
+		"bad ip_version":       {LargestOkBytes: 1400, IpVersion: 5},
+		"missing ip_version":   {LargestOkBytes: 1400},
+	}
+	for name, m := range cases {
+		r := validResult(now)
+		r.Type = pb.ProbeType_PROBE_TYPE_PATH_MTU
+		r.PathMtu = m
+		if _, err := resultToRow(r, now); err == nil {
+			t.Errorf("%s: expected rejection", name)
+		}
+	}
+}
+
 func TestResultToRowTracerouteRejectsBadHash(t *testing.T) {
 	now := time.Now()
 	r := validResult(now)

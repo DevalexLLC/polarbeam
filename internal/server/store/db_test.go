@@ -252,3 +252,53 @@ func TestEnsureSiteUpsert(t *testing.T) {
 		t.Errorf("sites rows = %d, want 1", n)
 	}
 }
+
+// TestCurrentPathMTUs pins the per-pair lookup: agent/target filtering and
+// the nullable rtt_us column.
+func TestCurrentPathMTUs(t *testing.T) {
+	ctx, s := newStore(t)
+	agentA, agentB := uuid.New(), uuid.New()
+	probeA, probeB := uuid.New(), uuid.New()
+	targetA, targetB := uuid.New(), uuid.New()
+
+	insert := func(agentID, probeID, targetID uuid.UUID, mtu int32, rtt *int32) {
+		t.Helper()
+		if _, err := s.Pool().Exec(ctx, `
+			INSERT INTO path_mtu_current (agent_id, probe_id, target_id, updated_at,
+				largest_ok_bytes, smallest_failed_bytes, next_hop_mtu_bytes,
+				ip_version, black_hole, local_constraint, rtt_us)
+			VALUES ($1, $2, $3, now(), $4, 0, 0, 4, false, false, $5)`,
+			agentID, probeID, targetID, mtu, rtt); err != nil {
+			t.Fatalf("insert path_mtu_current: %v", err)
+		}
+	}
+	rtt := int32(420)
+	insert(agentA, probeA, targetA, 1400, &rtt)
+	insert(agentB, probeB, targetB, 1500, nil)
+
+	got, err := s.CurrentPathMTUs(ctx, []uuid.UUID{agentA}, []uuid.UUID{targetA})
+	if err != nil {
+		t.Fatalf("CurrentPathMTUs: %v", err)
+	}
+	if len(got) != 1 || got[0].AgentID != agentA || got[0].ProbeID != probeA ||
+		got[0].LargestOK != 1400 || got[0].RttUS == nil || *got[0].RttUS != 420 {
+		t.Errorf("got %+v, want agentA's 1400-byte row with rtt 420", got)
+	}
+
+	// The other direction's agent/target pair must not leak in.
+	got, err = s.CurrentPathMTUs(ctx, []uuid.UUID{agentA}, []uuid.UUID{targetB})
+	if err != nil {
+		t.Fatalf("CurrentPathMTUs: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("cross-pair lookup returned %+v, want none", got)
+	}
+
+	got, err = s.CurrentPathMTUs(ctx, []uuid.UUID{agentB}, []uuid.UUID{targetB})
+	if err != nil {
+		t.Fatalf("CurrentPathMTUs: %v", err)
+	}
+	if len(got) != 1 || got[0].RttUS != nil {
+		t.Errorf("got %+v, want agentB's row with null rtt", got)
+	}
+}

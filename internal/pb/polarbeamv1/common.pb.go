@@ -41,6 +41,7 @@ const (
 	ProbeType_PROBE_TYPE_DNS         ProbeType = 5
 	ProbeType_PROBE_TYPE_TRACEROUTE  ProbeType = 6
 	ProbeType_PROBE_TYPE_NTP         ProbeType = 7
+	ProbeType_PROBE_TYPE_PATH_MTU    ProbeType = 8
 )
 
 // Enum value maps for ProbeType.
@@ -54,6 +55,7 @@ var (
 		5: "PROBE_TYPE_DNS",
 		6: "PROBE_TYPE_TRACEROUTE",
 		7: "PROBE_TYPE_NTP",
+		8: "PROBE_TYPE_PATH_MTU",
 	}
 	ProbeType_value = map[string]int32{
 		"PROBE_TYPE_UNSPECIFIED": 0,
@@ -64,6 +66,7 @@ var (
 		"PROBE_TYPE_DNS":         5,
 		"PROBE_TYPE_TRACEROUTE":  6,
 		"PROBE_TYPE_NTP":         7,
+		"PROBE_TYPE_PATH_MTU":    8,
 	}
 )
 
@@ -666,6 +669,111 @@ func (x *TracerouteResult) GetPathHash() []byte {
 	return nil
 }
 
+// Path MTU probe outcome. All sizes are IP PACKET bytes INCLUDING the IP
+// header, so they compare directly to interface and link MTUs.
+type PathMtuResult struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Largest tested packet that reached the destination; 0 = none did.
+	LargestOkBytes uint32 `protobuf:"varint,1,opt,name=largest_ok_bytes,json=largestOkBytes,proto3" json:"largest_ok_bytes,omitempty"`
+	// Smallest tested packet that did not; 0 = unknown (every size passed).
+	SmallestFailedBytes uint32 `protobuf:"varint,2,opt,name=smallest_failed_bytes,json=smallestFailedBytes,proto3" json:"smallest_failed_bytes,omitempty"`
+	// Next-hop MTU advertised by ICMPv4 Fragmentation Needed / ICMPv6
+	// Packet Too Big; 0 = no such message seen or it carried no plausible
+	// value.
+	NextHopMtuBytes uint32 `protobuf:"varint,3,opt,name=next_hop_mtu_bytes,json=nextHopMtuBytes,proto3" json:"next_hop_mtu_bytes,omitempty"`
+	// IP version actually probed: 4 or 6.
+	IpVersion uint32 `protobuf:"varint,4,opt,name=ip_version,json=ipVersion,proto3" json:"ip_version,omitempty"`
+	// Larger sizes vanished without any ICMP error while smaller ones
+	// succeeded — the signature of a PMTU black hole.
+	BlackHoleSuspected bool `protobuf:"varint,5,opt,name=black_hole_suspected,json=blackHoleSuspected,proto3" json:"black_hole_suspected,omitempty"`
+	// RTT of the successful echo at largest_ok_bytes; -1 = not measured.
+	RttUs int64 `protobuf:"varint,6,opt,name=rtt_us,json=rttUs,proto3" json:"rtt_us,omitempty"`
+	// The upper bound came from a local send limit (EMSGSIZE), not the
+	// network.
+	LocalConstraint bool `protobuf:"varint,7,opt,name=local_constraint,json=localConstraint,proto3" json:"local_constraint,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *PathMtuResult) Reset() {
+	*x = PathMtuResult{}
+	mi := &file_polarbeam_v1_common_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PathMtuResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PathMtuResult) ProtoMessage() {}
+
+func (x *PathMtuResult) ProtoReflect() protoreflect.Message {
+	mi := &file_polarbeam_v1_common_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PathMtuResult.ProtoReflect.Descriptor instead.
+func (*PathMtuResult) Descriptor() ([]byte, []int) {
+	return file_polarbeam_v1_common_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *PathMtuResult) GetLargestOkBytes() uint32 {
+	if x != nil {
+		return x.LargestOkBytes
+	}
+	return 0
+}
+
+func (x *PathMtuResult) GetSmallestFailedBytes() uint32 {
+	if x != nil {
+		return x.SmallestFailedBytes
+	}
+	return 0
+}
+
+func (x *PathMtuResult) GetNextHopMtuBytes() uint32 {
+	if x != nil {
+		return x.NextHopMtuBytes
+	}
+	return 0
+}
+
+func (x *PathMtuResult) GetIpVersion() uint32 {
+	if x != nil {
+		return x.IpVersion
+	}
+	return 0
+}
+
+func (x *PathMtuResult) GetBlackHoleSuspected() bool {
+	if x != nil {
+		return x.BlackHoleSuspected
+	}
+	return false
+}
+
+func (x *PathMtuResult) GetRttUs() int64 {
+	if x != nil {
+		return x.RttUs
+	}
+	return 0
+}
+
+func (x *PathMtuResult) GetLocalConstraint() bool {
+	if x != nil {
+		return x.LocalConstraint
+	}
+	return false
+}
+
 // One completed probe run.
 type ProbeResult struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
@@ -683,13 +791,14 @@ type ProbeResult struct {
 	JitterUs      int64             `protobuf:"varint,10,opt,name=jitter_us,json=jitterUs,proto3" json:"jitter_us,omitempty"`
 	Timings       *Timings          `protobuf:"bytes,11,opt,name=timings,proto3" json:"timings,omitempty"`
 	Traceroute    *TracerouteResult `protobuf:"bytes,12,opt,name=traceroute,proto3" json:"traceroute,omitempty"`
+	PathMtu       *PathMtuResult    `protobuf:"bytes,13,opt,name=path_mtu,json=pathMtu,proto3" json:"path_mtu,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ProbeResult) Reset() {
 	*x = ProbeResult{}
-	mi := &file_polarbeam_v1_common_proto_msgTypes[6]
+	mi := &file_polarbeam_v1_common_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -701,7 +810,7 @@ func (x *ProbeResult) String() string {
 func (*ProbeResult) ProtoMessage() {}
 
 func (x *ProbeResult) ProtoReflect() protoreflect.Message {
-	mi := &file_polarbeam_v1_common_proto_msgTypes[6]
+	mi := &file_polarbeam_v1_common_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -714,7 +823,7 @@ func (x *ProbeResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeResult.ProtoReflect.Descriptor instead.
 func (*ProbeResult) Descriptor() ([]byte, []int) {
-	return file_polarbeam_v1_common_proto_rawDescGZIP(), []int{6}
+	return file_polarbeam_v1_common_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ProbeResult) GetProbeId() string {
@@ -801,6 +910,13 @@ func (x *ProbeResult) GetTraceroute() *TracerouteResult {
 	return nil
 }
 
+func (x *ProbeResult) GetPathMtu() *PathMtuResult {
+	if x != nil {
+		return x.PathMtu
+	}
+	return nil
+}
+
 var File_polarbeam_v1_common_proto protoreflect.FileDescriptor
 
 const file_polarbeam_v1_common_proto_rawDesc = "" +
@@ -843,7 +959,16 @@ const file_polarbeam_v1_common_proto_rawDesc = "" +
 	"\x10TracerouteResult\x12%\n" +
 	"\x04hops\x18\x01 \x03(\v2\x11.polarbeam.v1.HopR\x04hops\x12!\n" +
 	"\fdest_reached\x18\x02 \x01(\bR\vdestReached\x12\x1b\n" +
-	"\tpath_hash\x18\x03 \x01(\fR\bpathHash\"\xde\x03\n" +
+	"\tpath_hash\x18\x03 \x01(\fR\bpathHash\"\xad\x02\n" +
+	"\rPathMtuResult\x12(\n" +
+	"\x10largest_ok_bytes\x18\x01 \x01(\rR\x0elargestOkBytes\x122\n" +
+	"\x15smallest_failed_bytes\x18\x02 \x01(\rR\x13smallestFailedBytes\x12+\n" +
+	"\x12next_hop_mtu_bytes\x18\x03 \x01(\rR\x0fnextHopMtuBytes\x12\x1d\n" +
+	"\n" +
+	"ip_version\x18\x04 \x01(\rR\tipVersion\x120\n" +
+	"\x14black_hole_suspected\x18\x05 \x01(\bR\x12blackHoleSuspected\x12\x15\n" +
+	"\x06rtt_us\x18\x06 \x01(\x03R\x05rttUs\x12)\n" +
+	"\x10local_constraint\x18\a \x01(\bR\x0flocalConstraint\"\x96\x04\n" +
 	"\vProbeResult\x12\x19\n" +
 	"\bprobe_id\x18\x01 \x01(\tR\aprobeId\x12+\n" +
 	"\x04type\x18\x02 \x01(\x0e2\x17.polarbeam.v1.ProbeTypeR\x04type\x12\x1b\n" +
@@ -860,7 +985,8 @@ const file_polarbeam_v1_common_proto_rawDesc = "" +
 	"\atimings\x18\v \x01(\v2\x15.polarbeam.v1.TimingsR\atimings\x12>\n" +
 	"\n" +
 	"traceroute\x18\f \x01(\v2\x1e.polarbeam.v1.TracerouteResultR\n" +
-	"traceroute*\xbc\x01\n" +
+	"traceroute\x126\n" +
+	"\bpath_mtu\x18\r \x01(\v2\x1b.polarbeam.v1.PathMtuResultR\apathMtu*\xd5\x01\n" +
 	"\tProbeType\x12\x1a\n" +
 	"\x16PROBE_TYPE_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fPROBE_TYPE_ICMP\x10\x01\x12\x12\n" +
@@ -869,7 +995,8 @@ const file_polarbeam_v1_common_proto_rawDesc = "" +
 	"\x0fPROBE_TYPE_HTTP\x10\x04\x12\x12\n" +
 	"\x0ePROBE_TYPE_DNS\x10\x05\x12\x19\n" +
 	"\x15PROBE_TYPE_TRACEROUTE\x10\x06\x12\x12\n" +
-	"\x0ePROBE_TYPE_NTP\x10\a*\xeb\x01\n" +
+	"\x0ePROBE_TYPE_NTP\x10\a\x12\x17\n" +
+	"\x13PROBE_TYPE_PATH_MTU\x10\b*\xeb\x01\n" +
 	"\vProbeStatus\x12\x1c\n" +
 	"\x18PROBE_STATUS_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fPROBE_STATUS_OK\x10\x01\x12\x18\n" +
@@ -898,7 +1025,7 @@ func file_polarbeam_v1_common_proto_rawDescGZIP() []byte {
 }
 
 var file_polarbeam_v1_common_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_polarbeam_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_polarbeam_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_polarbeam_v1_common_proto_goTypes = []any{
 	(ProbeType)(0),                // 0: polarbeam.v1.ProbeType
 	(ProbeStatus)(0),              // 1: polarbeam.v1.ProbeStatus
@@ -909,31 +1036,33 @@ var file_polarbeam_v1_common_proto_goTypes = []any{
 	(*Timings)(nil),               // 6: polarbeam.v1.Timings
 	(*Hop)(nil),                   // 7: polarbeam.v1.Hop
 	(*TracerouteResult)(nil),      // 8: polarbeam.v1.TracerouteResult
-	(*ProbeResult)(nil),           // 9: polarbeam.v1.ProbeResult
-	nil,                           // 10: polarbeam.v1.ProbeSpec.ParamsEntry
-	(*durationpb.Duration)(nil),   // 11: google.protobuf.Duration
-	(*timestamppb.Timestamp)(nil), // 12: google.protobuf.Timestamp
+	(*PathMtuResult)(nil),         // 9: polarbeam.v1.PathMtuResult
+	(*ProbeResult)(nil),           // 10: polarbeam.v1.ProbeResult
+	nil,                           // 11: polarbeam.v1.ProbeSpec.ParamsEntry
+	(*durationpb.Duration)(nil),   // 12: google.protobuf.Duration
+	(*timestamppb.Timestamp)(nil), // 13: google.protobuf.Timestamp
 }
 var file_polarbeam_v1_common_proto_depIdxs = []int32{
 	2,  // 0: polarbeam.v1.Target.kind:type_name -> polarbeam.v1.TargetKind
 	0,  // 1: polarbeam.v1.ProbeSpec.type:type_name -> polarbeam.v1.ProbeType
 	3,  // 2: polarbeam.v1.ProbeSpec.target:type_name -> polarbeam.v1.Target
-	11, // 3: polarbeam.v1.ProbeSpec.interval:type_name -> google.protobuf.Duration
-	11, // 4: polarbeam.v1.ProbeSpec.timeout:type_name -> google.protobuf.Duration
-	11, // 5: polarbeam.v1.ProbeSpec.train_spacing:type_name -> google.protobuf.Duration
-	10, // 6: polarbeam.v1.ProbeSpec.params:type_name -> polarbeam.v1.ProbeSpec.ParamsEntry
+	12, // 3: polarbeam.v1.ProbeSpec.interval:type_name -> google.protobuf.Duration
+	12, // 4: polarbeam.v1.ProbeSpec.timeout:type_name -> google.protobuf.Duration
+	12, // 5: polarbeam.v1.ProbeSpec.train_spacing:type_name -> google.protobuf.Duration
+	11, // 6: polarbeam.v1.ProbeSpec.params:type_name -> polarbeam.v1.ProbeSpec.ParamsEntry
 	7,  // 7: polarbeam.v1.TracerouteResult.hops:type_name -> polarbeam.v1.Hop
 	0,  // 8: polarbeam.v1.ProbeResult.type:type_name -> polarbeam.v1.ProbeType
-	12, // 9: polarbeam.v1.ProbeResult.started_at:type_name -> google.protobuf.Timestamp
+	13, // 9: polarbeam.v1.ProbeResult.started_at:type_name -> google.protobuf.Timestamp
 	1,  // 10: polarbeam.v1.ProbeResult.status:type_name -> polarbeam.v1.ProbeStatus
 	5,  // 11: polarbeam.v1.ProbeResult.rtt:type_name -> polarbeam.v1.RttStats
 	6,  // 12: polarbeam.v1.ProbeResult.timings:type_name -> polarbeam.v1.Timings
 	8,  // 13: polarbeam.v1.ProbeResult.traceroute:type_name -> polarbeam.v1.TracerouteResult
-	14, // [14:14] is the sub-list for method output_type
-	14, // [14:14] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	9,  // 14: polarbeam.v1.ProbeResult.path_mtu:type_name -> polarbeam.v1.PathMtuResult
+	15, // [15:15] is the sub-list for method output_type
+	15, // [15:15] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_polarbeam_v1_common_proto_init() }
@@ -947,7 +1076,7 @@ func file_polarbeam_v1_common_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_polarbeam_v1_common_proto_rawDesc), len(file_polarbeam_v1_common_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   8,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

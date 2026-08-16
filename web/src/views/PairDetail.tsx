@@ -16,8 +16,10 @@ import {
 import { buildThresholdResolver } from '../severity'
 import type {
   CurrentPath,
+  CurrentPathMtu,
   DirectionSummary,
   PairResponse,
+  PathMtuResponse,
   SeriesPoint,
   SeriesResponse,
   SettingsResponse,
@@ -296,6 +298,42 @@ function PathList({ title, dir, paths }: { title: string; dir: 'a' | 'b'; paths:
   )
 }
 
+// MtuList renders one direction's current path MTU measurements (a site
+// can field several agents, so this is a list). Sizes are IP-packet bytes
+// including headers — comparable directly to interface MTUs.
+function MtuList({ title, dir, mtus }: { title: string; dir: 'a' | 'b'; mtus: CurrentPathMtu[] }) {
+  return (
+    <div className="path-current">
+      <h4>
+        <span className={'swatch series-' + dir} /> {title}
+      </h4>
+      {mtus.length === 0 ? (
+        <p className="muted">No path MTU measurement yet.</p>
+      ) : (
+        mtus.map((m) => (
+          <div key={m.probe_id} className="path-chain">
+            <div className="path-meta">
+              <span className="mono">{m.agent}</span>
+              <span className="hint" title={fmtTime(m.updated_at)}>
+                {fmtAgo(m.updated_at)}
+              </span>
+            </div>
+            <div className="mono">
+              {m.largest_ok_bytes} bytes (IPv{m.ip_version})
+              {m.rtt_us !== null && <span className="hint"> {fmtLatency(m.rtt_us)}</span>}
+            </div>
+            {m.next_hop_mtu_bytes > 0 && <div className="hint">ICMP-reported next-hop MTU {m.next_hop_mtu_bytes}</div>}
+            {m.black_hole && (
+              <div className="hint">black hole suspected: larger packets vanish without any ICMP error</div>
+            )}
+            {m.local_constraint && <div className="hint">limited by the local interface, not the network</div>}
+          </div>
+        ))
+      )}
+    </div>
+  )
+}
+
 export default function PairDetail({
   a,
   b,
@@ -314,6 +352,7 @@ export default function PairDetail({
   const [pair, setPair] = useState<PairResponse | null>(null)
   const [series, setSeries] = useState<SeriesResponse | null>(null)
   const [paths, setPaths] = useState<TracerouteResponse | null>(null)
+  const [mtus, setMtus] = useState<PathMtuResponse | null>(null)
   const [settings, setSettings] = useState<SettingsResponse | null>(null)
   const [error, setError] = useState('')
 
@@ -330,13 +369,15 @@ export default function PairDetail({
         `/api/v1/pairs/${encodeURIComponent(a)}/${encodeURIComponent(b)}/series?metric=${metric}&window=${win}`,
       ),
       apiGet<TracerouteResponse>(`/api/v1/traceroute/${encodeURIComponent(a)}/${encodeURIComponent(b)}`),
+      apiGet<PathMtuResponse>(`/api/v1/path-mtu/${encodeURIComponent(a)}/${encodeURIComponent(b)}`),
       apiGet<SettingsResponse>('/api/v1/settings'),
     ])
-      .then(([p, s, tr, st]) => {
+      .then(([p, s, tr, pm, st]) => {
         if (gen !== loadGen.current) return
         setPair(p)
         setSeries(s)
         setPaths(tr)
+        setMtus(pm)
         setSettings(st)
         setError('')
       })
@@ -538,6 +579,19 @@ export default function PairDetail({
         <div className="path-pair">
           <PathList title={`${a} → ${b}`} dir="a" paths={paths?.a_to_b.paths ?? []} />
           <PathList title={`${b} → ${a}`} dir="b" paths={paths?.b_to_a.paths ?? []} />
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-head">
+          <span className="eyebrow">Path MTU</span>
+          <span className="hint">
+            largest IP packet each direction carries without fragmentation (bytes incl. IP header)
+          </span>
+        </div>
+        <div className="path-pair">
+          <MtuList title={`${a} → ${b}`} dir="a" mtus={mtus?.a_to_b.mtus ?? []} />
+          <MtuList title={`${b} → ${a}`} dir="b" mtus={mtus?.b_to_a.mtus ?? []} />
         </div>
       </div>
 

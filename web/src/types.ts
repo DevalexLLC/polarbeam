@@ -299,6 +299,30 @@ export interface TracerouteResponse {
   b_to_a: { paths: CurrentPath[] }
 }
 
+// GET /api/v1/path-mtu/{a}/{b} — latest usable path MTU measurement per
+// direction. Sizes are IP-packet bytes including the IP header.
+export interface CurrentPathMtu {
+  // Series identity: unique even when one source hostname measures
+  // several destination agents or templates.
+  probe_id: string
+  agent: string
+  updated_at: string
+  largest_ok_bytes: number
+  smallest_failed_bytes: number
+  next_hop_mtu_bytes: number
+  ip_version: number
+  black_hole: boolean
+  local_constraint: boolean
+  rtt_us: number | null
+}
+
+export interface PathMtuResponse {
+  a: string
+  b: string
+  a_to_b: { mtus: CurrentPathMtu[] }
+  b_to_a: { mtus: CurrentPathMtu[] }
+}
+
 export const WINDOWS = ['24h', '7d', '30d', '90d', '365d'] as const
 export type Window = (typeof WINDOWS)[number]
 
@@ -306,7 +330,7 @@ export type Window = (typeof WINDOWS)[number]
 // admin-only. Cadence fields are wire integer milliseconds; the probes form
 // converts to seconds at the edge like the thresholds form does µs↔ms.
 
-export const PROBE_TYPES = ['icmp', 'tcp', 'tls', 'http', 'dns', 'ntp', 'traceroute'] as const
+export const PROBE_TYPES = ['icmp', 'tcp', 'tls', 'http', 'dns', 'ntp', 'traceroute', 'path_mtu'] as const
 export type ProbeTypeName = (typeof PROBE_TYPES)[number]
 
 export interface TargetConfig {
@@ -405,8 +429,11 @@ export interface ProbesConfigResponse {
 export interface ParamSpec {
   key: string
   hint: string
-  kind: 'string' | 'port' | 'bool' | 'enum' | 'status'
+  kind: 'string' | 'port' | 'bool' | 'enum' | 'status' | 'int'
   enum?: string[]
+  // int only: inclusive bounds mirrored into client-side validation.
+  min?: number
+  max?: number
   required_mesh?: boolean
   required_direct?: boolean
   mesh_only?: boolean

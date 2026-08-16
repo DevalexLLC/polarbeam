@@ -13,6 +13,7 @@ import (
 
 	pb "github.com/devalexllc/polarbeam/internal/pb/polarbeamv1"
 	"github.com/devalexllc/polarbeam/internal/server/meshexpand"
+	"github.com/devalexllc/polarbeam/internal/server/mtuwatch"
 	"github.com/devalexllc/polarbeam/internal/server/outage"
 	"github.com/devalexllc/polarbeam/internal/server/pathwatch"
 	"github.com/devalexllc/polarbeam/internal/server/store"
@@ -175,6 +176,13 @@ func resultToRow(r *pb.ProbeResult, now time.Time) (store.ResultRow, error) {
 		}
 		row.Traceroute = payload
 	}
+	if m := r.GetPathMtu(); m != nil {
+		payload, err := pathMtuPayload(m, r.GetStatus())
+		if err != nil {
+			return row, err
+		}
+		row.PathMtu = payload
+	}
 	return row, nil
 }
 
@@ -217,6 +225,61 @@ func tracePayload(tr *pb.TracerouteResult) (*store.TraceroutePayload, error) {
 		PathHash:    tr.GetPathHash(),
 		Hops:        raw,
 	}, nil
+}
+
+// maxPathMtuBytes caps sizes from the wire; the prober tests at most 9216
+// bytes, anything beyond 64 KiB is a broken or hostile client.
+const maxPathMtuBytes = 1 << 16
+
+// pathMtuPayload maps the wire PathMtuResult to the mtuwatch payload. A
+// measurement is usable when it converged on a delivered size: OK runs,
+// and black-hole runs (which report TIMEOUT but bracket the MTU just as
+// tightly). Non-converged partials would flap current/events.
+func pathMtuPayload(m *pb.PathMtuResult, st pb.ProbeStatus) (*store.PathMtuPayload, error) {
+	if m.GetLargestOkBytes() > maxPathMtuBytes || m.GetSmallestFailedBytes() > maxPathMtuBytes ||
+		m.GetNextHopMtuBytes() > maxPathMtuBytes {
+		return nil, fmt.Errorf("path MTU sizes exceed the %d-byte limit", maxPathMtuBytes)
+	}
+	if v := m.GetIpVersion(); v != 4 && v != 6 {
+		return nil, fmt.Errorf("path MTU ip_version %d, want 4 or 6", v)
+	}
+	usable := m.GetLargestOkBytes() > 0 &&
+		(st == pb.ProbeStatus_PROBE_STATUS_OK ||
+			(st == pb.ProbeStatus_PROBE_STATUS_TIMEOUT && m.GetBlackHoleSuspected()))
+	return &store.PathMtuPayload{
+		LargestOK:       int32(m.GetLargestOkBytes()),
+		SmallestFailed:  int32(m.GetSmallestFailedBytes()),
+		NextHopMTU:      int32(m.GetNextHopMtuBytes()),
+		IPVersion:       int16(m.GetIpVersion()),
+		BlackHole:       m.GetBlackHoleSuspected(),
+		LocalConstraint: m.GetLocalConstraint(),
+		RttUS:           usColumn(m.GetRttUs()),
+		Usable:          usable,
+	}, nil
+}
+
+// toMTURuns extracts the path MTU payloads from genuinely inserted rows.
+func toMTURuns(rows []store.ResultRow) []mtuwatch.Run {
+	var runs []mtuwatch.Run
+	for _, r := range rows {
+		if r.PathMtu == nil {
+			continue
+		}
+		runs = append(runs, mtuwatch.Run{
+			ProbeID:         r.ProbeID,
+			TargetID:        r.TargetID,
+			Time:            r.Time,
+			LargestOK:       r.PathMtu.LargestOK,
+			SmallestFailed:  r.PathMtu.SmallestFailed,
+			NextHopMTU:      r.PathMtu.NextHopMTU,
+			IPVersion:       r.PathMtu.IPVersion,
+			BlackHole:       r.PathMtu.BlackHole,
+			LocalConstraint: r.PathMtu.LocalConstraint,
+			RttUS:           r.PathMtu.RttUS,
+			Usable:          r.PathMtu.Usable,
+		})
+	}
+	return runs
 }
 
 // toPathRuns extracts the traceroute payloads from genuinely inserted rows.
