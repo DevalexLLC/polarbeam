@@ -683,9 +683,9 @@ docker exec polarbeam-agent polarbeam-agent selfcheck \
 docker logs --tail=100 polarbeam-agent
 ```
 
-`NET_RAW` enables ICMP and traceroute. TCP, TLS, HTTP, DNS, and NTP probes do
-not need it, but the recommended standard agent includes it so all supported
-probe types work.
+`NET_RAW` enables ICMP, traceroute, and path MTU probing. TCP, TLS, HTTP,
+DNS, and NTP probes do not need it, but the recommended standard agent
+includes it so all supported probe types work.
 
 ## 9. Enroll the remaining sites
 
@@ -821,6 +821,7 @@ Probe-specific rules include:
 |---|---|
 | `icmp` | target address; optional train count and spacing |
 | `traceroute` | target address; agent needs `NET_RAW` |
+| `path_mtu` | target address; agent needs `NET_RAW`; optional `mtu.min`, `mtu.max`, `mtu.family` |
 | `tcp` | direct target address and port, or mesh `port` parameter |
 | `tls` | TCP requirements; optional `tls.sni` and `tls.insecure_skip_verify` |
 | `http` | direct URL target only; optional method, expected status, and TLS verification override |
@@ -1026,18 +1027,23 @@ Outbound requirements depend on configured probes:
 | UDP 53 or configured port | DNS target/resolver | DNS probes; no TCP fallback |
 | UDP 123 or configured port | NTP server target | NTP probes; no TCP fallback |
 | UDP 33434-33523 | peer agents/targets | traceroute probes |
+| ICMP echo request (DF set) | peer agents/targets | path MTU probes |
 
 Inbound requirements for mesh destinations are:
 
 | Protocol/port | Purpose |
 |---|---|
-| ICMP echo request | peers' ICMP probes; the kernel replies |
+| ICMP echo request | peers' ICMP and path MTU probes; the kernel replies |
 | TCP mesh-template ports | peers' TCP/TLS probes against a real local service |
 | UDP 33434-33523 | peers' traceroutes; the kernel's ICMP port-unreachable reply marks destination reached |
 
 Allow related ICMP echo replies, time-exceeded messages, and port/host
-unreachable messages back to the probing host. Blanket inbound ICMP drops
-break ICMP and traceroute. IPv6 targets require the ICMPv6 equivalents, and
+unreachable messages back to the probing host. Path MTU probing additionally
+needs inbound ICMPv4 Fragmentation Needed (type 3 code 4) and ICMPv6 Packet
+Too Big (type 2) at the probing host, and those arrive from intermediate
+routers along the path, not just the target — dropping them makes every path
+look like a PMTU black hole. Blanket inbound ICMP drops
+break ICMP, traceroute, and path MTU. IPv6 targets require the ICMPv6 equivalents, and
 ICMPv6 must not be blanket-dropped.
 
 Agents expose no operator-facing management port.
