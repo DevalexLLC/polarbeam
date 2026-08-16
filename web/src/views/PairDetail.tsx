@@ -271,7 +271,7 @@ function PathList({ title, dir, paths }: { title: string; dir: 'a' | 'b'; paths:
         <p className="muted">No traceroute yet. Traces run on a slower cadence.</p>
       ) : (
         paths.map((p) => (
-          <div key={p.agent} className="path-chain">
+          <div key={p.agent_id + ':' + p.probe_id} className="path-chain">
             <div className="path-meta">
               <span className="mono">{p.agent}</span>
               <span className="hint" title={fmtTime(p.updated_at)}>
@@ -311,7 +311,7 @@ function MtuList({ title, dir, mtus }: { title: string; dir: 'a' | 'b'; mtus: Cu
         <p className="muted">No path MTU measurement yet.</p>
       ) : (
         mtus.map((m) => (
-          <div key={m.probe_id} className="path-chain">
+          <div key={m.agent_id + ':' + m.probe_id} className="path-chain">
             <div className="path-meta">
               <span className="mono">{m.agent}</span>
               <span className="hint" title={fmtTime(m.updated_at)}>

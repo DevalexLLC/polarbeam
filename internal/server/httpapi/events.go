@@ -95,6 +95,12 @@ func (a *api) handlePathEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 type currentPathJSON struct {
+	// (agent_id, probe_id) is the series identity: several destination
+	// agents or templates give one source hostname several probe IDs,
+	// while several source agents at one site share a probe ID and
+	// differ only by agent ID.
+	AgentID     string          `json:"agent_id"`
+	ProbeID     string          `json:"probe_id"`
 	Agent       string          `json:"agent"`
 	UpdatedAt   time.Time       `json:"updated_at"`
 	DestReached bool            `json:"dest_reached"`
@@ -106,8 +112,10 @@ func toCurrentPathJSON(paths []store.CurrentPath) []currentPathJSON {
 	out := make([]currentPathJSON, len(paths))
 	for i, p := range paths {
 		out[i] = currentPathJSON{
-			Agent: p.AgentHostname, UpdatedAt: p.UpdatedAt, DestReached: p.DestReached,
-			PathHash: hex.EncodeToString(p.PathHash), Hops: json.RawMessage(p.Hops),
+			AgentID: p.AgentID.String(), ProbeID: p.ProbeID.String(),
+			Agent: p.AgentHostname, UpdatedAt: p.UpdatedAt,
+			DestReached: p.DestReached, PathHash: hex.EncodeToString(p.PathHash),
+			Hops: json.RawMessage(p.Hops),
 		}
 	}
 	return out
@@ -136,9 +144,11 @@ func (a *api) handleTraceroute(w http.ResponseWriter, r *http.Request) {
 }
 
 type currentMTUJSON struct {
-	// The series identity: one source hostname appears in several rows
-	// when the destination site fields several agents or several
-	// templates exist, and the probe ID is what tells them apart.
+	// (agent_id, probe_id) is the series identity: several destination
+	// agents or templates give one source hostname several probe IDs,
+	// while several source agents at one site share a probe ID and
+	// differ only by agent ID.
+	AgentID         string    `json:"agent_id"`
 	ProbeID         string    `json:"probe_id"`
 	Agent           string    `json:"agent"`
 	UpdatedAt       time.Time `json:"updated_at"`
@@ -155,7 +165,8 @@ func toCurrentMTUJSON(mtus []store.CurrentPathMTU) []currentMTUJSON {
 	out := make([]currentMTUJSON, len(mtus))
 	for i, m := range mtus {
 		out[i] = currentMTUJSON{
-			ProbeID: m.ProbeID.String(), Agent: m.AgentHostname, UpdatedAt: m.UpdatedAt,
+			AgentID: m.AgentID.String(), ProbeID: m.ProbeID.String(),
+			Agent: m.AgentHostname, UpdatedAt: m.UpdatedAt,
 			LargestOKBytes: m.LargestOK, SmallestFailed: m.SmallestFailed,
 			NextHopMTUBytes: m.NextHopMTU, IPVersion: m.IPVersion,
 			BlackHole: m.BlackHole, LocalConstraint: m.LocalConstraint, RttUS: m.RttUS,

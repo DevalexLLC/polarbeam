@@ -48,6 +48,7 @@ type fakeDB struct {
 	// canonicalizes by name where the real store uses uuid order)
 	pathThresholds map[string]*store.PathThresholdOverride
 
+	paths    []store.CurrentPath
 	pathMTUs []store.CurrentPathMTU
 
 	targets     []store.TargetInfo
@@ -381,8 +382,16 @@ func (f *fakeDB) ListOutages(_ context.Context, _ time.Duration) ([]store.Outage
 func (f *fakeDB) ListPathEvents(_ context.Context, _ time.Duration) ([]store.PathEventInfo, error) {
 	return nil, nil
 }
-func (f *fakeDB) CurrentPaths(_ context.Context, _, _ []uuid.UUID) ([]store.CurrentPath, error) {
-	return nil, nil
+func (f *fakeDB) CurrentPaths(_ context.Context, srcAgents, _ []uuid.UUID) ([]store.CurrentPath, error) {
+	var out []store.CurrentPath
+	for _, p := range f.paths {
+		for _, id := range srcAgents {
+			if p.AgentID == id {
+				out = append(out, p)
+			}
+		}
+	}
+	return out, nil
 }
 func (f *fakeDB) CurrentPathMTUs(_ context.Context, srcAgents, _ []uuid.UUID) ([]store.CurrentPathMTU, error) {
 	var out []store.CurrentPathMTU
@@ -1461,6 +1470,7 @@ func TestPathMTUEndpoint(t *testing.T) {
 		B    string `json:"b"`
 		AToB struct {
 			MTUs []struct {
+				AgentID        string `json:"agent_id"`
 				ProbeID        string `json:"probe_id"`
 				Agent          string `json:"agent"`
 				LargestOKBytes int32  `json:"largest_ok_bytes"`
@@ -1488,16 +1498,100 @@ func TestPathMTUEndpoint(t *testing.T) {
 		res.AToB.MTUs[0].RttUS == nil || *res.AToB.MTUs[0].RttUS != 311 {
 		t.Errorf("a_to_b = %+v, want nyc-1 with 1400/1400 and rtt 311", res.AToB.MTUs)
 	}
-	// probe_id is the row identity: one source hostname can measure
-	// several destination agents, so the SPA keys rows on it.
-	if res.AToB.MTUs[0].ProbeID != nycProbe.String() {
-		t.Errorf("a_to_b probe_id = %q, want %s", res.AToB.MTUs[0].ProbeID, nycProbe)
+	// (agent_id, probe_id) is the row identity: source agents at one site
+	// share a probe ID, so the SPA keys rows on the composite.
+	if res.AToB.MTUs[0].AgentID != nycAgent.String() || res.AToB.MTUs[0].ProbeID != nycProbe.String() {
+		t.Errorf("a_to_b identity = %q/%q, want %s/%s",
+			res.AToB.MTUs[0].AgentID, res.AToB.MTUs[0].ProbeID, nycAgent, nycProbe)
 	}
 	if len(res.BToA.MTUs) != 1 || !res.BToA.MTUs[0].BlackHole || res.BToA.MTUs[0].RttUS != nil {
 		t.Errorf("b_to_a = %+v, want lon-1 black hole with null rtt", res.BToA.MTUs)
 	}
 
 	req = httptest.NewRequest("GET", "/api/v1/path-mtu/nowhere/lon", nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "nowhere") {
+		t.Errorf("unknown site = %d %s, want 404 naming it", w.Code, w.Body)
+	}
+}
+
+// TestTracerouteEndpoint pins the per-pair traceroute shape: directional
+// path lists keyed by the pair segments, hex path hash, raw hops JSON,
+// and the (agent_id, probe_id) row identity the SPA keys on — two source
+// agents at one site legitimately share a probe ID.
+func TestTracerouteEndpoint(t *testing.T) {
+	f := newFakeDB()
+	nycAgent, nycAgent2, lonAgent := uuid.New(), uuid.New(), uuid.New()
+	f.endpoints = map[string]*store.SiteEndpoints{
+		"nyc": {SiteInfo: store.SiteInfo{Name: "nyc"}, AgentIDs: []uuid.UUID{nycAgent, nycAgent2}},
+		"lon": {SiteInfo: store.SiteInfo{Name: "lon"}, AgentIDs: []uuid.UUID{lonAgent}},
+	}
+	nycProbe, lonProbe := uuid.New(), uuid.New()
+	f.paths = []store.CurrentPath{
+		{AgentID: nycAgent, ProbeID: nycProbe, AgentHostname: "nyc-1", UpdatedAt: time.Now(),
+			DestReached: true, PathHash: []byte{0xab, 0xcd},
+			Hops: []byte(`[{"ttl":1,"addrs":["10.0.0.1"],"rtt_us":[500]}]`)},
+		// Same probe as nyc-1: direct probes are assigned site-wide, so
+		// only the agent ID tells the two source series apart.
+		{AgentID: nycAgent2, ProbeID: nycProbe, AgentHostname: "nyc-2", UpdatedAt: time.Now(),
+			DestReached: true, PathHash: []byte{0xab, 0xce}, Hops: []byte(`[]`)},
+		{AgentID: lonAgent, ProbeID: lonProbe, AgentHostname: "lon-1", UpdatedAt: time.Now(),
+			PathHash: []byte{0x01}, Hops: []byte(`[]`)},
+	}
+	h := newTestAPI(t, f)
+	cookie, _ := loginAndCookie(t, h, f)
+
+	req := httptest.NewRequest("GET", "/api/v1/traceroute/nyc/lon", nil)
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("traceroute = %d %s", w.Code, w.Body)
+	}
+	var res struct {
+		A    string `json:"a"`
+		B    string `json:"b"`
+		AToB struct {
+			Paths []struct {
+				AgentID     string          `json:"agent_id"`
+				ProbeID     string          `json:"probe_id"`
+				Agent       string          `json:"agent"`
+				DestReached bool            `json:"dest_reached"`
+				PathHash    string          `json:"path_hash"`
+				Hops        json.RawMessage `json:"hops"`
+			} `json:"paths"`
+		} `json:"a_to_b"`
+		BToA struct {
+			Paths []struct {
+				Agent       string `json:"agent"`
+				DestReached bool   `json:"dest_reached"`
+			} `json:"paths"`
+		} `json:"b_to_a"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if res.A != "nyc" || res.B != "lon" {
+		t.Errorf("pair = %s/%s, want nyc/lon", res.A, res.B)
+	}
+	if len(res.AToB.Paths) != 2 || res.AToB.Paths[0].Agent != "nyc-1" ||
+		!res.AToB.Paths[0].DestReached || res.AToB.Paths[0].PathHash != "abcd" ||
+		!strings.Contains(string(res.AToB.Paths[0].Hops), "10.0.0.1") {
+		t.Errorf("a_to_b = %+v, want nyc-1 reached with hash abcd and hops, then nyc-2", res.AToB.Paths)
+	}
+	// (agent_id, probe_id) is the row identity: the two nyc agents share
+	// the site-wide probe, so the SPA keys rows on the composite.
+	if res.AToB.Paths[0].AgentID != nycAgent.String() || res.AToB.Paths[1].AgentID != nycAgent2.String() ||
+		res.AToB.Paths[0].ProbeID != nycProbe.String() || res.AToB.Paths[1].ProbeID != nycProbe.String() {
+		t.Errorf("a_to_b identities = %+v, want both nyc agents sharing probe %s", res.AToB.Paths, nycProbe)
+	}
+	if len(res.BToA.Paths) != 1 || res.BToA.Paths[0].Agent != "lon-1" || res.BToA.Paths[0].DestReached {
+		t.Errorf("b_to_a = %+v, want lon-1 not reached", res.BToA.Paths)
+	}
+
+	req = httptest.NewRequest("GET", "/api/v1/traceroute/nowhere/lon", nil)
 	req.AddCookie(cookie)
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, req)

@@ -302,3 +302,82 @@ func TestCurrentPathMTUs(t *testing.T) {
 		t.Errorf("got %+v, want agentB's row with null rtt", got)
 	}
 }
+
+// TestCurrentPaths pins the per-pair traceroute lookup: agent/target
+// filtering and the (agent_id, probe_id) series identity — one agent
+// holds several rows toward the same target set (one per probe), and two
+// source agents legitimately share a site-wide probe ID.
+func TestCurrentPaths(t *testing.T) {
+	ctx, s := newStore(t)
+	agentA, agentA2, agentB := uuid.New(), uuid.New(), uuid.New()
+	probe1, probe2, probeB := uuid.New(), uuid.New(), uuid.New()
+	targetA, targetB := uuid.New(), uuid.New()
+
+	insert := func(agentID, probeID, targetID uuid.UUID, reached bool, hash []byte) {
+		t.Helper()
+		if _, err := s.Pool().Exec(ctx, `
+			INSERT INTO traceroute_current (agent_id, probe_id, target_id, updated_at,
+				dest_reached, path_hash, hops)
+			VALUES ($1, $2, $3, now(), $4, $5, '[]'::jsonb)`,
+			agentID, probeID, targetID, reached, hash); err != nil {
+			t.Fatalf("insert traceroute_current: %v", err)
+		}
+	}
+	insert(agentA, probe1, targetA, true, []byte{0x01})
+	insert(agentA, probe2, targetA, false, []byte{0x02})
+	// Second source agent sharing probe1: distinct series per the
+	// (agent_id, probe_id) primary key.
+	insert(agentA2, probe1, targetA, true, []byte{0x04})
+	insert(agentB, probeB, targetB, true, []byte{0x03})
+
+	got, err := s.CurrentPaths(ctx, []uuid.UUID{agentA}, []uuid.UUID{targetA})
+	if err != nil {
+		t.Fatalf("CurrentPaths: %v", err)
+	}
+	if len(got) != 2 || got[0].AgentID != agentA || got[1].AgentID != agentA ||
+		got[0].ProbeID == got[1].ProbeID {
+		t.Fatalf("got %+v, want agentA's two rows with distinct probe IDs", got)
+	}
+	// Same hostname ('' — no agents row) and same agent both times, so
+	// probe_id is the final tiebreaker: ascending, per the ORDER BY.
+	lo, hi := probe1, probe2
+	if hi.String() < lo.String() {
+		lo, hi = hi, lo
+	}
+	if got[0].ProbeID != lo || got[1].ProbeID != hi {
+		t.Errorf("order = %s, %s, want %s, %s", got[0].ProbeID, got[1].ProbeID, lo, hi)
+	}
+
+	// Both source agents together: the shared probe1 appears once per
+	// agent — distinct series, told apart by agent ID alone.
+	got, err = s.CurrentPaths(ctx, []uuid.UUID{agentA, agentA2}, []uuid.UUID{targetA})
+	if err != nil {
+		t.Fatalf("CurrentPaths: %v", err)
+	}
+	sharedAgents := map[uuid.UUID]bool{}
+	for _, p := range got {
+		if p.ProbeID == probe1 {
+			sharedAgents[p.AgentID] = true
+		}
+	}
+	if len(got) != 3 || !sharedAgents[agentA] || !sharedAgents[agentA2] {
+		t.Errorf("got %+v, want 3 rows with probe %s under both agents", got, probe1)
+	}
+
+	// The other direction's agent/target pair must not leak in.
+	got, err = s.CurrentPaths(ctx, []uuid.UUID{agentA}, []uuid.UUID{targetB})
+	if err != nil {
+		t.Fatalf("CurrentPaths: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("cross-pair lookup returned %+v, want none", got)
+	}
+
+	got, err = s.CurrentPaths(ctx, []uuid.UUID{agentB}, []uuid.UUID{targetB})
+	if err != nil {
+		t.Fatalf("CurrentPaths: %v", err)
+	}
+	if len(got) != 1 || got[0].ProbeID != probeB || !got[0].DestReached {
+		t.Errorf("got %+v, want agentB's reached row", got)
+	}
+}
