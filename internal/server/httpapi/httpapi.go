@@ -86,6 +86,7 @@ type DB interface {
 	ListOutages(ctx context.Context, window time.Duration) ([]store.OutageInfo, error)
 	ListPathEvents(ctx context.Context, window time.Duration) ([]store.PathEventInfo, error)
 	CurrentPaths(ctx context.Context, srcAgents, dstTargets []uuid.UUID) ([]store.CurrentPath, error)
+	CurrentPathMTUs(ctx context.Context, srcAgents, dstTargets []uuid.UUID) ([]store.CurrentPathMTU, error)
 
 	GetBannerSettings(ctx context.Context) (*store.BannerSettings, error)
 	UpdateBannerSettings(ctx context.Context, b store.BannerSettings) (*store.BannerSettings, error)
@@ -229,6 +230,7 @@ func newHandler(sdb DB, static fs.FS, providers OIDCProviders) http.Handler {
 	mux.Handle("GET /api/v1/outages", a.withSession(a.handleOutages))
 	mux.Handle("GET /api/v1/path-events", a.withSession(a.handlePathEvents))
 	mux.Handle("GET /api/v1/traceroute/{a}/{b}", a.withSession(a.handleTraceroute))
+	mux.Handle("GET /api/v1/path-mtu/{a}/{b}", a.withSession(a.handlePathMTU))
 
 	// Unmatched API paths are JSON 404s; the SPA fallback must never
 	// shadow the API namespace.

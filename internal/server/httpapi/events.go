@@ -134,3 +134,50 @@ func (a *api) handleTraceroute(w http.ResponseWriter, r *http.Request) {
 		"b_to_a": map[string]any{"paths": toCurrentPathJSON(bToA)},
 	})
 }
+
+type currentMTUJSON struct {
+	Agent           string    `json:"agent"`
+	UpdatedAt       time.Time `json:"updated_at"`
+	LargestOKBytes  int32     `json:"largest_ok_bytes"`
+	SmallestFailed  int32     `json:"smallest_failed_bytes"`
+	NextHopMTUBytes int32     `json:"next_hop_mtu_bytes"`
+	IPVersion       int16     `json:"ip_version"`
+	BlackHole       bool      `json:"black_hole"`
+	LocalConstraint bool      `json:"local_constraint"`
+	RttUS           *int32    `json:"rtt_us"`
+}
+
+func toCurrentMTUJSON(mtus []store.CurrentPathMTU) []currentMTUJSON {
+	out := make([]currentMTUJSON, len(mtus))
+	for i, m := range mtus {
+		out[i] = currentMTUJSON{
+			Agent: m.AgentHostname, UpdatedAt: m.UpdatedAt,
+			LargestOKBytes: m.LargestOK, SmallestFailed: m.SmallestFailed,
+			NextHopMTUBytes: m.NextHopMTU, IPVersion: m.IPVersion,
+			BlackHole: m.BlackHole, LocalConstraint: m.LocalConstraint, RttUS: m.RttUS,
+		}
+	}
+	return out
+}
+
+func (a *api) handlePathMTU(w http.ResponseWriter, r *http.Request) {
+	ea, eb, ok := a.pairEndpoints(w, r)
+	if !ok {
+		return
+	}
+	aToB, err := a.db.CurrentPathMTUs(r.Context(), ea.AgentIDs, eb.TargetIDs)
+	if err != nil {
+		internalError(w, "path MTU a→b", err)
+		return
+	}
+	bToA, err := a.db.CurrentPathMTUs(r.Context(), eb.AgentIDs, ea.TargetIDs)
+	if err != nil {
+		internalError(w, "path MTU b→a", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"a": ea.Name, "b": eb.Name,
+		"a_to_b": map[string]any{"mtus": toCurrentMTUJSON(aToB)},
+		"b_to_a": map[string]any{"mtus": toCurrentMTUJSON(bToA)},
+	})
+}

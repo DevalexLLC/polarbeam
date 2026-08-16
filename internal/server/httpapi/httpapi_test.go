@@ -48,6 +48,8 @@ type fakeDB struct {
 	// canonicalizes by name where the real store uses uuid order)
 	pathThresholds map[string]*store.PathThresholdOverride
 
+	pathMTUs []store.CurrentPathMTU
+
 	targets     []store.TargetInfo
 	meshes      []store.MeshGroupInfo
 	probes      []store.ProbeConfigInfo
@@ -381,6 +383,17 @@ func (f *fakeDB) ListPathEvents(_ context.Context, _ time.Duration) ([]store.Pat
 }
 func (f *fakeDB) CurrentPaths(_ context.Context, _, _ []uuid.UUID) ([]store.CurrentPath, error) {
 	return nil, nil
+}
+func (f *fakeDB) CurrentPathMTUs(_ context.Context, srcAgents, _ []uuid.UUID) ([]store.CurrentPathMTU, error) {
+	var out []store.CurrentPathMTU
+	for _, m := range f.pathMTUs {
+		for _, id := range srcAgents {
+			if m.AgentID == id {
+				out = append(out, m)
+			}
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeDB) GetOIDCSettings(_ context.Context) (*store.OIDCSettings, error) {
@@ -1411,5 +1424,77 @@ func TestEventsRequireSession(t *testing.T) {
 		if w.Code != http.StatusUnauthorized {
 			t.Errorf("GET %s without session = %d, want 401", path, w.Code)
 		}
+	}
+}
+
+// TestPathMTUEndpoint pins the per-pair path MTU shape: directional lists
+// keyed by the pair segments, nullable rtt_us, and a 404 naming an unknown
+// site (same contract as the traceroute endpoint).
+func TestPathMTUEndpoint(t *testing.T) {
+	f := newFakeDB()
+	nycAgent, lonAgent := uuid.New(), uuid.New()
+	f.endpoints = map[string]*store.SiteEndpoints{
+		"nyc": {SiteInfo: store.SiteInfo{Name: "nyc"}, AgentIDs: []uuid.UUID{nycAgent}},
+		"lon": {SiteInfo: store.SiteInfo{Name: "lon"}, AgentIDs: []uuid.UUID{lonAgent}},
+	}
+	rtt := int32(311)
+	f.pathMTUs = []store.CurrentPathMTU{
+		{AgentID: nycAgent, AgentHostname: "nyc-1", UpdatedAt: time.Now(),
+			LargestOK: 1400, SmallestFailed: 1500, NextHopMTU: 1400,
+			IPVersion: 4, RttUS: &rtt},
+		{AgentID: lonAgent, AgentHostname: "lon-1", UpdatedAt: time.Now(),
+			LargestOK: 1400, SmallestFailed: 1401, IPVersion: 4, BlackHole: true},
+	}
+	h := newTestAPI(t, f)
+	cookie, _ := loginAndCookie(t, h, f)
+
+	req := httptest.NewRequest("GET", "/api/v1/path-mtu/nyc/lon", nil)
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("path-mtu = %d %s", w.Code, w.Body)
+	}
+	var res struct {
+		A    string `json:"a"`
+		B    string `json:"b"`
+		AToB struct {
+			MTUs []struct {
+				Agent          string `json:"agent"`
+				LargestOKBytes int32  `json:"largest_ok_bytes"`
+				NextHopMTU     int32  `json:"next_hop_mtu_bytes"`
+				BlackHole      bool   `json:"black_hole"`
+				RttUS          *int32 `json:"rtt_us"`
+			} `json:"mtus"`
+		} `json:"a_to_b"`
+		BToA struct {
+			MTUs []struct {
+				Agent     string `json:"agent"`
+				BlackHole bool   `json:"black_hole"`
+				RttUS     *int32 `json:"rtt_us"`
+			} `json:"mtus"`
+		} `json:"b_to_a"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if res.A != "nyc" || res.B != "lon" {
+		t.Errorf("pair = %s/%s, want nyc/lon", res.A, res.B)
+	}
+	if len(res.AToB.MTUs) != 1 || res.AToB.MTUs[0].Agent != "nyc-1" ||
+		res.AToB.MTUs[0].LargestOKBytes != 1400 || res.AToB.MTUs[0].NextHopMTU != 1400 ||
+		res.AToB.MTUs[0].RttUS == nil || *res.AToB.MTUs[0].RttUS != 311 {
+		t.Errorf("a_to_b = %+v, want nyc-1 with 1400/1400 and rtt 311", res.AToB.MTUs)
+	}
+	if len(res.BToA.MTUs) != 1 || !res.BToA.MTUs[0].BlackHole || res.BToA.MTUs[0].RttUS != nil {
+		t.Errorf("b_to_a = %+v, want lon-1 black hole with null rtt", res.BToA.MTUs)
+	}
+
+	req = httptest.NewRequest("GET", "/api/v1/path-mtu/nowhere/lon", nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "nowhere") {
+		t.Errorf("unknown site = %d %s, want 404 naming it", w.Code, w.Body)
 	}
 }
