@@ -94,15 +94,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		AssignedProbeIDs: st.EnabledProbeIDs,
 	})
 
-	grpcTLS := &tls.Config{
-		MinVersion:     tls.VersionTLS12,
-		GetCertificate: certProvider.get,
-		// Enrollment arrives with no client certificate; AgentService RPCs
-		// enforce a verified cert themselves. Certs that ARE presented get
-		// verified against the built-in CA here.
-		ClientAuth: tls.VerifyClientCertIfGiven,
-		ClientCAs:  authority.Pool(),
-	}
+	grpcTLS := newGRPCTLSConfig(certProvider.get, authority.Pool())
 	grpcLis, err := net.Listen("tcp", cfg.Listen.GRPC)
 	if err != nil {
 		return fmt.Errorf("listen grpc %s: %w", cfg.Listen.GRPC, err)
@@ -262,6 +254,29 @@ func (p *grpcCertProvider) rotate(ctx context.Context, authority *ca.CA, dir, ho
 		p.cert = cert
 		p.mu.Unlock()
 		slog.Info("rotated gRPC server certificate", "hostname", hostname, "not_after", cert.Leaf.NotAfter)
+	}
+}
+
+// newGRPCTLSConfig builds the agent gRPC listener's TLS config. TLS 1.3 and
+// hybrid ML-KEM groups are pinned, not defaulted: key-exchange strength is a
+// harvest-now-decrypt-later defence, so a peer whose TLS stack cannot do a
+// post-quantum hybrid must fail the handshake rather than silently degrade
+// to classical ECDH. Non-Go agents need X25519MLKEM768 or one of the listed
+// NIST-curve hybrids.
+func newGRPCTLSConfig(getCert func(*tls.ClientHelloInfo) (*tls.Certificate, error), clientCAs *x509.CertPool) *tls.Config {
+	return &tls.Config{
+		MinVersion: tls.VersionTLS13,
+		CurvePreferences: []tls.CurveID{
+			tls.X25519MLKEM768,
+			tls.SecP256r1MLKEM768,
+			tls.SecP384r1MLKEM1024,
+		},
+		GetCertificate: getCert,
+		// Enrollment arrives with no client certificate; AgentService RPCs
+		// enforce a verified cert themselves. Certs that ARE presented get
+		// verified against the built-in CA here.
+		ClientAuth: tls.VerifyClientCertIfGiven,
+		ClientCAs:  clientCAs,
 	}
 }
 
