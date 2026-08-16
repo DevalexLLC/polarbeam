@@ -524,6 +524,20 @@ Parameters:
 | `mtu.max` | 1500 | Largest IP packet size to test (68–9216, must exceed `mtu.min`) |
 | `mtu.family` | prefer IPv4 | Force `4` or `6` when a hostname resolves to both |
 
+On jumbo-frame networks, raise `mtu.max` (for example to 9000): the probe
+only reports the largest size it tested, so the default range would report a
+clean 1500 on a jumbo path and never look higher. Creating such a probe
+prints a non-blocking advisory, because paths beyond the local segment
+rarely carry jumbo frames and the reported value will honestly be the
+far-end bottleneck. The agent's own egress interface must also carry jumbo
+frames — a size the kernel cannot send is reported as a local constraint,
+not a path measurement — and since the agent runs in a container, the
+**container network's** MTU is what counts. Docker bridge networks default
+to 1500 regardless of the host NIC, so run jumbo-probing agents with
+`--network host` or on a network created with
+`com.docker.network.driver.mtu=9000`. The destination needs no
+configuration; its kernel echoes whatever arrives.
+
 Path MTU probes work as mesh templates and direct assignments. Mesh
 expansion probes each peer agent's probe address; no port parameter is
 needed because the transport is ICMP.
