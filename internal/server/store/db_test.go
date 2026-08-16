@@ -280,8 +280,8 @@ func TestCurrentPathMTUs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CurrentPathMTUs: %v", err)
 	}
-	if len(got) != 1 || got[0].AgentID != agentA || got[0].LargestOK != 1400 ||
-		got[0].RttUS == nil || *got[0].RttUS != 420 {
+	if len(got) != 1 || got[0].AgentID != agentA || got[0].ProbeID != probeA ||
+		got[0].LargestOK != 1400 || got[0].RttUS == nil || *got[0].RttUS != 420 {
 		t.Errorf("got %+v, want agentA's 1400-byte row with rtt 420", got)
 	}
 

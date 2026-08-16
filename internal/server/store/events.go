@@ -156,9 +156,13 @@ func (s *Store) CurrentPaths(ctx context.Context, srcAgents, dstTargets []uuid.U
 }
 
 // CurrentPathMTU is one path_mtu_current row for a direction of a site
-// pair. Sizes are IP-packet bytes including the IP header.
+// pair. Sizes are IP-packet bytes including the IP header. ProbeID is the
+// series identity: with several agents at the destination site (or
+// several templates) one source hostname legitimately appears in
+// multiple rows, and the probe ID is what tells them apart.
 type CurrentPathMTU struct {
 	AgentID         uuid.UUID
+	ProbeID         uuid.UUID
 	AgentHostname   string
 	UpdatedAt       time.Time
 	LargestOK       int32
@@ -174,13 +178,13 @@ type CurrentPathMTU struct {
 // of srcAgents to any of dstTargets (a site can field several agents).
 func (s *Store) CurrentPathMTUs(ctx context.Context, srcAgents, dstTargets []uuid.UUID) ([]CurrentPathMTU, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT mc.agent_id, COALESCE(a.hostname, ''), mc.updated_at,
+		SELECT mc.agent_id, mc.probe_id, COALESCE(a.hostname, ''), mc.updated_at,
 			mc.largest_ok_bytes, mc.smallest_failed_bytes, mc.next_hop_mtu_bytes,
 			mc.ip_version, mc.black_hole, mc.local_constraint, mc.rtt_us
 		FROM path_mtu_current mc
 		LEFT JOIN agents a ON a.id = mc.agent_id
 		WHERE mc.agent_id = ANY($1) AND mc.target_id = ANY($2)
-		ORDER BY a.hostname`, srcAgents, dstTargets)
+		ORDER BY a.hostname, mc.probe_id`, srcAgents, dstTargets)
 	if err != nil {
 		return nil, fmt.Errorf("current path MTUs: %w", err)
 	}
@@ -189,7 +193,7 @@ func (s *Store) CurrentPathMTUs(ctx context.Context, srcAgents, dstTargets []uui
 	var out []CurrentPathMTU
 	for rows.Next() {
 		var m CurrentPathMTU
-		if err := rows.Scan(&m.AgentID, &m.AgentHostname, &m.UpdatedAt,
+		if err := rows.Scan(&m.AgentID, &m.ProbeID, &m.AgentHostname, &m.UpdatedAt,
 			&m.LargestOK, &m.SmallestFailed, &m.NextHopMTU,
 			&m.IPVersion, &m.BlackHole, &m.LocalConstraint, &m.RttUS); err != nil {
 			return nil, fmt.Errorf("scan current path MTU: %w", err)

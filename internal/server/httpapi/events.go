@@ -136,6 +136,10 @@ func (a *api) handleTraceroute(w http.ResponseWriter, r *http.Request) {
 }
 
 type currentMTUJSON struct {
+	// The series identity: one source hostname appears in several rows
+	// when the destination site fields several agents or several
+	// templates exist, and the probe ID is what tells them apart.
+	ProbeID         string    `json:"probe_id"`
 	Agent           string    `json:"agent"`
 	UpdatedAt       time.Time `json:"updated_at"`
 	LargestOKBytes  int32     `json:"largest_ok_bytes"`
@@ -151,7 +155,7 @@ func toCurrentMTUJSON(mtus []store.CurrentPathMTU) []currentMTUJSON {
 	out := make([]currentMTUJSON, len(mtus))
 	for i, m := range mtus {
 		out[i] = currentMTUJSON{
-			Agent: m.AgentHostname, UpdatedAt: m.UpdatedAt,
+			ProbeID: m.ProbeID.String(), Agent: m.AgentHostname, UpdatedAt: m.UpdatedAt,
 			LargestOKBytes: m.LargestOK, SmallestFailed: m.SmallestFailed,
 			NextHopMTUBytes: m.NextHopMTU, IPVersion: m.IPVersion,
 			BlackHole: m.BlackHole, LocalConstraint: m.LocalConstraint, RttUS: m.RttUS,

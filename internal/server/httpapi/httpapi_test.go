@@ -1438,11 +1438,12 @@ func TestPathMTUEndpoint(t *testing.T) {
 		"lon": {SiteInfo: store.SiteInfo{Name: "lon"}, AgentIDs: []uuid.UUID{lonAgent}},
 	}
 	rtt := int32(311)
+	nycProbe, lonProbe := uuid.New(), uuid.New()
 	f.pathMTUs = []store.CurrentPathMTU{
-		{AgentID: nycAgent, AgentHostname: "nyc-1", UpdatedAt: time.Now(),
+		{AgentID: nycAgent, ProbeID: nycProbe, AgentHostname: "nyc-1", UpdatedAt: time.Now(),
 			LargestOK: 1400, SmallestFailed: 1500, NextHopMTU: 1400,
 			IPVersion: 4, RttUS: &rtt},
-		{AgentID: lonAgent, AgentHostname: "lon-1", UpdatedAt: time.Now(),
+		{AgentID: lonAgent, ProbeID: lonProbe, AgentHostname: "lon-1", UpdatedAt: time.Now(),
 			LargestOK: 1400, SmallestFailed: 1401, IPVersion: 4, BlackHole: true},
 	}
 	h := newTestAPI(t, f)
@@ -1460,6 +1461,7 @@ func TestPathMTUEndpoint(t *testing.T) {
 		B    string `json:"b"`
 		AToB struct {
 			MTUs []struct {
+				ProbeID        string `json:"probe_id"`
 				Agent          string `json:"agent"`
 				LargestOKBytes int32  `json:"largest_ok_bytes"`
 				NextHopMTU     int32  `json:"next_hop_mtu_bytes"`
@@ -1485,6 +1487,11 @@ func TestPathMTUEndpoint(t *testing.T) {
 		res.AToB.MTUs[0].LargestOKBytes != 1400 || res.AToB.MTUs[0].NextHopMTU != 1400 ||
 		res.AToB.MTUs[0].RttUS == nil || *res.AToB.MTUs[0].RttUS != 311 {
 		t.Errorf("a_to_b = %+v, want nyc-1 with 1400/1400 and rtt 311", res.AToB.MTUs)
+	}
+	// probe_id is the row identity: one source hostname can measure
+	// several destination agents, so the SPA keys rows on it.
+	if res.AToB.MTUs[0].ProbeID != nycProbe.String() {
+		t.Errorf("a_to_b probe_id = %q, want %s", res.AToB.MTUs[0].ProbeID, nycProbe)
 	}
 	if len(res.BToA.MTUs) != 1 || !res.BToA.MTUs[0].BlackHole || res.BToA.MTUs[0].RttUS != nil {
 		t.Errorf("b_to_a = %+v, want lon-1 black hole with null rtt", res.BToA.MTUs)

@@ -311,7 +311,7 @@ function MtuList({ title, dir, mtus }: { title: string; dir: 'a' | 'b'; mtus: Cu
         <p className="muted">No path MTU measurement yet.</p>
       ) : (
         mtus.map((m) => (
-          <div key={m.agent} className="path-chain">
+          <div key={m.probe_id} className="path-chain">
             <div className="path-meta">
               <span className="mono">{m.agent}</span>
               <span className="hint" title={fmtTime(m.updated_at)}>

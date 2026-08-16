@@ -780,10 +780,12 @@ func expandedProbeIDs(ctx context.Context, tx pgx.Tx, id uuid.UUID, meshID *uuid
 // cleanupSeries closes the open probe_failing event of every listed series
 // — the probe stops producing results, so ingest's 3-OK close can never
 // happen; closed_at = now() honestly records when monitoring was removed.
-// deleteRows additionally drops series_state and traceroute_current (the
-// probe is gone for good); a disable instead resets the hysteresis
-// counters but keeps last_time, so a spool replay after re-enable still
-// dedupes against out-of-order stragglers.
+// deleteRows additionally drops series_state, traceroute_current, and
+// path_mtu_current (the probe is gone for good; the pair endpoints select
+// current rows by agent/target alone, so a surviving row would be served
+// forever); a disable instead resets the hysteresis counters but keeps
+// last_time, so a spool replay after re-enable still dedupes against
+// out-of-order stragglers.
 func cleanupSeries(ctx context.Context, tx pgx.Tx, probeIDs []uuid.UUID, deleteRows bool) error {
 	if len(probeIDs) == 0 {
 		return nil
@@ -799,6 +801,9 @@ func cleanupSeries(ctx context.Context, tx pgx.Tx, probeIDs []uuid.UUID, deleteR
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM traceroute_current WHERE probe_id = ANY($1)`, probeIDs); err != nil {
 			return fmt.Errorf("delete traceroute state: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM path_mtu_current WHERE probe_id = ANY($1)`, probeIDs); err != nil {
+			return fmt.Errorf("delete path MTU state: %w", err)
 		}
 		return nil
 	}

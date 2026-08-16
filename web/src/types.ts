@@ -302,6 +302,9 @@ export interface TracerouteResponse {
 // GET /api/v1/path-mtu/{a}/{b} — latest usable path MTU measurement per
 // direction. Sizes are IP-packet bytes including the IP header.
 export interface CurrentPathMtu {
+  // Series identity: unique even when one source hostname measures
+  // several destination agents or templates.
+  probe_id: string
   agent: string
   updated_at: string
   largest_ok_bytes: number
