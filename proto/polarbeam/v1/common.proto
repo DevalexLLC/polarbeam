@@ -22,6 +22,7 @@ enum ProbeType {
   PROBE_TYPE_DNS = 5;
   PROBE_TYPE_TRACEROUTE = 6;
   PROBE_TYPE_NTP = 7;
+  PROBE_TYPE_PATH_MTU = 8;
 }
 
 enum ProbeStatus {
@@ -106,6 +107,29 @@ message TracerouteResult {
   bytes path_hash = 3;
 }
 
+// Path MTU probe outcome. All sizes are IP PACKET bytes INCLUDING the IP
+// header, so they compare directly to interface and link MTUs.
+message PathMtuResult {
+  // Largest tested packet that reached the destination; 0 = none did.
+  uint32 largest_ok_bytes = 1;
+  // Smallest tested packet that did not; 0 = unknown (every size passed).
+  uint32 smallest_failed_bytes = 2;
+  // Next-hop MTU advertised by ICMPv4 Fragmentation Needed / ICMPv6
+  // Packet Too Big; 0 = no such message seen or it carried no plausible
+  // value.
+  uint32 next_hop_mtu_bytes = 3;
+  // IP version actually probed: 4 or 6.
+  uint32 ip_version = 4;
+  // Larger sizes vanished without any ICMP error while smaller ones
+  // succeeded — the signature of a PMTU black hole.
+  bool black_hole_suspected = 5;
+  // RTT of the successful echo at largest_ok_bytes; -1 = not measured.
+  int64 rtt_us = 6;
+  // The upper bound came from a local send limit (EMSGSIZE), not the
+  // network.
+  bool local_constraint = 7;
+}
+
 // One completed probe run.
 message ProbeResult {
   string probe_id = 1;
@@ -122,4 +146,5 @@ message ProbeResult {
   int64 jitter_us = 10;
   Timings timings = 11;
   TracerouteResult traceroute = 12;
+  PathMtuResult path_mtu = 13;
 }
