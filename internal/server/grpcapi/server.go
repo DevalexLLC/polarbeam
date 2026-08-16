@@ -18,6 +18,7 @@ import (
 	pb "github.com/devalexllc/polarbeam/internal/pb/polarbeamv1"
 	"github.com/devalexllc/polarbeam/internal/server/ca"
 	"github.com/devalexllc/polarbeam/internal/server/meshexpand"
+	"github.com/devalexllc/polarbeam/internal/server/mtuwatch"
 	"github.com/devalexllc/polarbeam/internal/server/outage"
 	"github.com/devalexllc/polarbeam/internal/server/pathwatch"
 	"github.com/devalexllc/polarbeam/internal/server/store"
@@ -283,6 +284,11 @@ func (s *Server) PushResults(ctx context.Context, req *pb.PushResultsRequest) (*
 		slog.Error("pathwatch bookkeeping failed", "agent", id.AgentID, "err", err)
 		return nil, status.Error(codes.Unavailable, "result insert failed, retry")
 	}
+	mtuChanges, err := mtuwatch.Apply(ctx, tx, id.AgentID, toMTURuns(inserted))
+	if err != nil {
+		slog.Error("mtuwatch bookkeeping failed", "agent", id.AgentID, "err", err)
+		return nil, status.Error(codes.Unavailable, "result insert failed, retry")
+	}
 	if err := tx.Commit(ctx); err != nil {
 		slog.Error("result tx commit failed", "agent", id.AgentID, "err", err)
 		return nil, status.Error(codes.Unavailable, "result insert failed, retry")
@@ -296,6 +302,10 @@ func (s *Server) PushResults(ctx context.Context, req *pb.PushResultsRequest) (*
 	}
 	for _, ch := range changes {
 		slog.Warn("traceroute path changed", "agent", id.AgentID, "probe", ch.ProbeID, "event", ch.EventID)
+	}
+	for _, ch := range mtuChanges {
+		slog.Warn("path MTU changed", "agent", id.AgentID, "probe", ch.ProbeID,
+			"old_bytes", ch.OldMTU, "new_bytes", ch.NewMTU, "black_hole", ch.NewBlack, "event", ch.EventID)
 	}
 	if rejected > 0 {
 		slog.Warn("push contained rejected results", "agent", id.AgentID,
