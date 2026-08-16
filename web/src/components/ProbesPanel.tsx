@@ -18,6 +18,10 @@ const PROBE_PAGE = 25
 // (internal/server/probeadmin): a zero train budgets as 10 × 200 ms.
 const DEFAULT_TRAIN_COUNT = 10
 const DEFAULT_TRAIN_SPACING_MS = 200
+// Path MTU prober defaults (internal/agent/probes/pathmtu.go), used only
+// for the client-side mtu.min < mtu.max cross-check.
+const DEFAULT_MTU_MIN = 1280
+const DEFAULT_MTU_MAX = 1500
 // Stable identity for the not-yet-loaded case: a fresh `[]` per render would
 // change the memo key every render and defeat the pagination memo below.
 const NO_PROBES: ProbeConfig[] = []
@@ -125,6 +129,24 @@ function validate(d: ProbeDraft, specs: ParamSpec[]): { errors: string[]; body: 
     }
     if (spec.kind === 'status' && !/^[1-5](xx|[0-9]{2})$/.test(v)) {
       errors.push(`${spec.key} must be an exact status ("200") or a class ("2xx")`)
+    }
+    if (spec.kind === 'int') {
+      const n = Number(v)
+      const min = spec.min ?? Number.MIN_SAFE_INTEGER
+      const max = spec.max ?? Number.MAX_SAFE_INTEGER
+      if (!Number.isInteger(n) || n < min || n > max) {
+        errors.push(`${spec.key} must be an integer between ${min} and ${max}`)
+      }
+    }
+  }
+
+  // Mirrors probeadmin's path_mtu cross-check: effective values with the
+  // prober defaults substituted, so a lone out-of-range bound is caught.
+  if (d.type === 'path_mtu') {
+    const effMin = Number(params['mtu.min'] ?? DEFAULT_MTU_MIN)
+    const effMax = Number(params['mtu.max'] ?? DEFAULT_MTU_MAX)
+    if (Number.isInteger(effMin) && Number.isInteger(effMax) && effMin >= effMax) {
+      errors.push(`mtu.min (${effMin}) must be less than mtu.max (${effMax})`)
     }
   }
 
@@ -411,6 +433,28 @@ export default function ProbesPanel({
                     ))}
                   </select>
                   <span className="hint">{spec.hint}</span>
+                </span>
+              </label>
+            )
+          }
+          if (spec.kind === 'int') {
+            return (
+              <label key={spec.key} className="threshold-field">
+                <span className="eyebrow">{label}</span>
+                <span className="threshold-input">
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={d.params[spec.key] ?? ''}
+                    placeholder={spec.hint}
+                    disabled={busy}
+                    onChange={(e) => setParam(spec.key, e.target.value)}
+                  />
+                  {spec.min !== undefined && spec.max !== undefined && (
+                    <span className="hint">
+                      {spec.min}–{spec.max}
+                    </span>
+                  )}
                 </span>
               </label>
             )
