@@ -11,7 +11,7 @@ Shape: a central control plane with a lightweight Go agent at each site (shipped
 - **Storage:** PostgreSQL + TimescaleDB; continuous aggregates for raw → hourly → daily; 365-day retention with percentiles.
 - **Dashboard:** custom React/TypeScript SPA embedded in the server binary via `go:embed`.
 - **mTLS:** built-in CA in the control plane; one-time join tokens; auto-rotating client certs.
-- **Protocol:** gRPC over port 443 with mTLS (server-streamed config snapshots, batched result pushes).
+- **Protocol:** gRPC over port 443 with mTLS (server-streamed config snapshots, batched result pushes). The gRPC listener enforces TLS 1.3 with hybrid ML-KEM (post-quantum) key exchange only — no classical fallback; future non-Go agents' TLS stacks must support X25519MLKEM768 (or a SecP256r1/SecP384r1 ML-KEM hybrid).
 - **Language:** Go for both binaries.
 - **Agent form factor:** a **single static Go binary** (`polarbeam-agent`, built with `CGO_ENABLED=0`) — no runtime dependencies, no sidecars; it ships as a container image, and its only on-disk footprint is a config file plus `/var/lib/polarbeam-agent/{pki,spool}` which it creates itself.
 - **Control plane deployment:** everything runs in containers (proxy + server + TimescaleDB) via compose; no bare-metal server install.
