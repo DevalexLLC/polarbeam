@@ -38,6 +38,7 @@ func DefaultRegistry() Registry {
 		pb.ProbeType_PROBE_TYPE_DNS:        DNS{},
 		pb.ProbeType_PROBE_TYPE_NTP:        NTP{},
 		pb.ProbeType_PROBE_TYPE_TRACEROUTE: Traceroute{},
+		pb.ProbeType_PROBE_TYPE_PATH_MTU:   PathMTU{},
 	}
 }
 

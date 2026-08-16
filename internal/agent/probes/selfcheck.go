@@ -2,6 +2,7 @@ package probes
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"time"
@@ -29,6 +30,7 @@ func SelfCheck(stateDir string) []Check {
 
 	dgram := trySocket("udp4")
 	raw := trySocket("ip4:icmp")
+	pmtu := tryPathMTU()
 	checks = append(checks,
 		Check{
 			Name: "icmp (datagram)", OK: dgram == nil, Fatal: false,
@@ -51,6 +53,11 @@ func SelfCheck(stateDir string) []Check {
 			Name: "traceroute", OK: raw == nil, Fatal: false,
 			Detail: detailOr(raw, "raw ICMP socket available",
 				"traceroute requires a raw ICMP socket (CAP_NET_RAW)"),
+		},
+		Check{
+			Name: "path_mtu", OK: pmtu == nil, Fatal: false,
+			Detail: detailOr(pmtu, "raw ICMP socket and PMTU-probe socket options available",
+				"path MTU probing requires a raw ICMP socket (CAP_NET_RAW) and Linux PMTU-probe socket options"),
 		},
 	)
 
@@ -138,6 +145,21 @@ func trySocket(network string) error {
 	}
 	conn.Close()
 	return nil
+}
+
+// tryPathMTU verifies both requirements of the path MTU prober: a raw
+// ICMP socket and the Linux PMTU-probe socket options.
+func tryPathMTU() error {
+	conn, err := net.ListenPacket("ip4:icmp", "")
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	ipConn, ok := conn.(*net.IPConn)
+	if !ok {
+		return fmt.Errorf("unexpected raw socket type %T", conn)
+	}
+	return setDontFragment(ipConn, false)
 }
 
 func detailOr(err error, ok, remedy string) string {
