@@ -258,7 +258,7 @@ func cmdProbe(args []string) error {
 		site := fs.String("site", "", "site whose agents run the probe (with --target)")
 		target := fs.String("target", "", "target name to probe (with --site)")
 		mesh := fs.String("mesh", "", "mesh group to expand over every member agent, both directions (instead of --site/--target)")
-		typeName := fs.String("type", "", "probe type: icmp, tcp, tls, http, dns, traceroute, ntp")
+		typeName := fs.String("type", "", "probe type: icmp, tcp, tls, http, dns, traceroute, ntp, path_mtu")
 		interval := fs.Duration("interval", 30*time.Second, "run interval")
 		timeout := fs.Duration("timeout", 5*time.Second, "per-run timeout")
 		trainCount := fs.Int("train-count", 0, "packets per run for train probes (icmp); 0 = prober default (10)")
@@ -317,7 +317,7 @@ func cmdProbe(args []string) error {
 		// remaining impossible to miss on a terminal. A probe created
 		// disabled measures nothing, so nothing to advise on yet.
 		if *enabled {
-			for _, warning := range probeadmin.Warnings(probeType, meshMode, *interval, params) {
+			for _, warning := range probeadmin.Warnings(probeType, meshMode, *interval, *timeout, params) {
 				fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
 			}
 		}

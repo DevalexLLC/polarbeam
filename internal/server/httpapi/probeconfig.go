@@ -365,7 +365,8 @@ func (a *api) handleProbePost(w http.ResponseWriter, r *http.Request) {
 	// as the PUT path).
 	out := map[string]any{"id": id.String()}
 	if enabled {
-		if warnings := probeadmin.Warnings(probeType, meshMode, time.Duration(in.IntervalMS)*time.Millisecond, in.Params); len(warnings) > 0 {
+		if warnings := probeadmin.Warnings(probeType, meshMode,
+			time.Duration(in.IntervalMS)*time.Millisecond, time.Duration(in.TimeoutMS)*time.Millisecond, in.Params); len(warnings) > 0 {
 			out["warnings"] = warnings
 		}
 	}
@@ -435,7 +436,8 @@ func (a *api) handleProbePut(w http.ResponseWriter, r *http.Request) {
 	// that just stopped it.
 	out := toProbeCfgJSON(*updated)
 	if enabled {
-		out.Warnings = probeadmin.Warnings(probeType, current.Mesh != "", time.Duration(in.IntervalMS)*time.Millisecond, in.Params)
+		out.Warnings = probeadmin.Warnings(probeType, current.Mesh != "",
+			time.Duration(in.IntervalMS)*time.Millisecond, time.Duration(in.TimeoutMS)*time.Millisecond, in.Params)
 	}
 	writeJSON(w, http.StatusOK, out)
 }

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	pb "github.com/devalexllc/polarbeam/internal/pb/polarbeamv1"
+	"github.com/devalexllc/polarbeam/internal/server/probeadmin"
 	"github.com/devalexllc/polarbeam/internal/server/store"
 )
 
@@ -129,25 +130,10 @@ func directionStatus(rows []store.MatrixRow) string {
 	}
 }
 
+// probeTypeName delegates to probeadmin so a new probe type can never
+// render as "unknown" here while the config API knows its name.
 func probeTypeName(t int16) string {
-	switch pb.ProbeType(t) {
-	case pb.ProbeType_PROBE_TYPE_ICMP:
-		return "icmp"
-	case pb.ProbeType_PROBE_TYPE_TCP:
-		return "tcp"
-	case pb.ProbeType_PROBE_TYPE_TLS:
-		return "tls"
-	case pb.ProbeType_PROBE_TYPE_HTTP:
-		return "http"
-	case pb.ProbeType_PROBE_TYPE_DNS:
-		return "dns"
-	case pb.ProbeType_PROBE_TYPE_NTP:
-		return "ntp"
-	case pb.ProbeType_PROBE_TYPE_TRACEROUTE:
-		return "traceroute"
-	default:
-		return "unknown"
-	}
+	return probeadmin.TypeName(t)
 }
 
 func probeStatusName(s int16) string {

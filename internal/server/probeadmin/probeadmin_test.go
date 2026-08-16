@@ -20,7 +20,7 @@ func TestParseType(t *testing.T) {
 		t.Fatal("ParseType(smtp) succeeded")
 	}
 	// The accepted list must be sorted so error text is deterministic.
-	want := `unknown probe type "smtp" (accepted: dns, http, icmp, ntp, tcp, tls, traceroute)`
+	want := `unknown probe type "smtp" (accepted: dns, http, icmp, ntp, path_mtu, tcp, tls, traceroute)`
 	if err.Error() != want {
 		t.Errorf("error = %q, want %q", err, want)
 	}
@@ -157,6 +157,37 @@ func TestValidateParams(t *testing.T) {
 		{"ntp unknown key", pb.ProbeType_PROBE_TYPE_NTP, false, map[string]string{"ntp.version": "4"},
 			[]string{`unknown key "ntp.version" for probe type ntp (accepted: none)`}},
 		{"ntp direct ok", pb.ProbeType_PROBE_TYPE_NTP, false, nil, nil},
+		{"path_mtu defaults ok", pb.ProbeType_PROBE_TYPE_PATH_MTU, false, nil, nil},
+		{"path_mtu mesh ok", pb.ProbeType_PROBE_TYPE_PATH_MTU, true,
+			map[string]string{"mtu.min": "1280", "mtu.max": "1500", "mtu.family": "4"}, nil},
+		{"path_mtu int not a number", pb.ProbeType_PROBE_TYPE_PATH_MTU, false,
+			map[string]string{"mtu.max": "big"},
+			[]string{`"mtu.max" must be an integer between 68 and 9216, got "big"`}},
+		{"path_mtu int out of bounds", pb.ProbeType_PROBE_TYPE_PATH_MTU, false,
+			map[string]string{"mtu.min": "40"},
+			[]string{`"mtu.min" must be an integer between 68 and 9216`}},
+		{"path_mtu family bad", pb.ProbeType_PROBE_TYPE_PATH_MTU, false,
+			map[string]string{"mtu.family": "5"},
+			[]string{`unsupported mtu.family "5" (accepted: 4, 6)`}},
+		{"path_mtu inverted range", pb.ProbeType_PROBE_TYPE_PATH_MTU, false,
+			map[string]string{"mtu.min": "1400", "mtu.max": "1300"},
+			[]string{"mtu.min (1400) must be less than mtu.max (1300)"}},
+		{"path_mtu equal range", pb.ProbeType_PROBE_TYPE_PATH_MTU, false,
+			map[string]string{"mtu.min": "1400", "mtu.max": "1400"},
+			[]string{"mtu.min (1400) must be less than mtu.max (1400)"}},
+		// Cross-check runs against EFFECTIVE values: a lone bound must be
+		// compared with the other side's default.
+		{"path_mtu min above default max", pb.ProbeType_PROBE_TYPE_PATH_MTU, false,
+			map[string]string{"mtu.min": "2000"},
+			[]string{"mtu.min (2000) must be less than mtu.max (1500)"}},
+		{"path_mtu max below default min", pb.ProbeType_PROBE_TYPE_PATH_MTU, false,
+			map[string]string{"mtu.max": "1000"},
+			[]string{"mtu.min (1280) must be less than mtu.max (1000)"}},
+		// An unparseable bound is reported once by the kind check, not
+		// again by the cross-check.
+		{"path_mtu bad value skips cross-check", pb.ProbeType_PROBE_TYPE_PATH_MTU, false,
+			map[string]string{"mtu.min": "nope"},
+			[]string{`"mtu.min" must be an integer between 68 and 9216, got "nope"`}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -238,20 +269,26 @@ func TestWarnings(t *testing.T) {
 		typ      pb.ProbeType
 		mesh     bool
 		interval time.Duration
+		timeout  time.Duration
 		params   map[string]string
 		wantSub  string // "" = no warning expected
 	}{
-		{"mesh dns without resolver warns", pb.ProbeType_PROBE_TYPE_DNS, true, 30 * time.Second, dnsQ, "dns.resolver"},
-		{"mesh dns with explicit resolver is silent", pb.ProbeType_PROBE_TYPE_DNS, true, 30 * time.Second, dnsResolved, ""},
-		{"direct dns is silent", pb.ProbeType_PROBE_TYPE_DNS, false, 30 * time.Second, dnsQ, ""},
-		{"mesh icmp is silent", pb.ProbeType_PROBE_TYPE_ICMP, true, 30 * time.Second, nil, ""},
-		{"ntp under a minute warns", pb.ProbeType_PROBE_TYPE_NTP, false, 30 * time.Second, nil, "rate limiting"},
-		{"ntp at a minute is silent", pb.ProbeType_PROBE_TYPE_NTP, false, 60 * time.Second, nil, ""},
-		{"ntp above a minute is silent", pb.ProbeType_PROBE_TYPE_NTP, false, 5 * time.Minute, nil, ""},
-		{"fast interval on other types is silent", pb.ProbeType_PROBE_TYPE_TCP, false, time.Second, nil, ""},
+		{"mesh dns without resolver warns", pb.ProbeType_PROBE_TYPE_DNS, true, 30 * time.Second, 5 * time.Second, dnsQ, "dns.resolver"},
+		{"mesh dns with explicit resolver is silent", pb.ProbeType_PROBE_TYPE_DNS, true, 30 * time.Second, 5 * time.Second, dnsResolved, ""},
+		{"direct dns is silent", pb.ProbeType_PROBE_TYPE_DNS, false, 30 * time.Second, 5 * time.Second, dnsQ, ""},
+		{"mesh icmp is silent", pb.ProbeType_PROBE_TYPE_ICMP, true, 30 * time.Second, 5 * time.Second, nil, ""},
+		{"ntp under a minute warns", pb.ProbeType_PROBE_TYPE_NTP, false, 30 * time.Second, 5 * time.Second, nil, "rate limiting"},
+		{"ntp at a minute is silent", pb.ProbeType_PROBE_TYPE_NTP, false, 60 * time.Second, 5 * time.Second, nil, ""},
+		{"ntp above a minute is silent", pb.ProbeType_PROBE_TYPE_NTP, false, 5 * time.Minute, 5 * time.Second, nil, ""},
+		{"fast interval on other types is silent", pb.ProbeType_PROBE_TYPE_TCP, false, time.Second, 500 * time.Millisecond, nil, ""},
+		{"path_mtu short timeout warns", pb.ProbeType_PROBE_TYPE_PATH_MTU, false, 30 * time.Second, 5 * time.Second, nil, "may not converge"},
+		{"path_mtu ample timeout is silent", pb.ProbeType_PROBE_TYPE_PATH_MTU, false, 60 * time.Second, 15 * time.Second, nil, ""},
+		{"path_mtu jumbo max warns", pb.ProbeType_PROBE_TYPE_PATH_MTU, false, 60 * time.Second, 15 * time.Second,
+			map[string]string{"mtu.max": "9000"}, "jumbo"},
+		{"short timeout on other types is silent", pb.ProbeType_PROBE_TYPE_TCP, false, 30 * time.Second, 2 * time.Second, nil, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got := Warnings(c.typ, c.mesh, c.interval, c.params)
+			got := Warnings(c.typ, c.mesh, c.interval, c.timeout, c.params)
 			if (c.wantSub != "") != (len(got) > 0) {
 				t.Fatalf("Warnings = %v, want warning %v", got, c.wantSub != "")
 			}
@@ -266,17 +303,25 @@ func TestWarnings(t *testing.T) {
 // that warns must still pass validation, or the warning would be a lie.
 func TestWarningsNeverBlock(t *testing.T) {
 	params := map[string]string{"dns.qname": "example.internal"}
-	if len(Warnings(pb.ProbeType_PROBE_TYPE_DNS, true, 30*time.Second, params)) == 0 {
+	if len(Warnings(pb.ProbeType_PROBE_TYPE_DNS, true, 30*time.Second, 5*time.Second, params)) == 0 {
 		t.Fatal("expected the mesh-dns warning for this fixture")
 	}
 	if problems := ValidateParams(pb.ProbeType_PROBE_TYPE_DNS, true, params); len(problems) > 0 {
 		t.Errorf("a warned config must still validate, got %v", problems)
 	}
 
-	if len(Warnings(pb.ProbeType_PROBE_TYPE_NTP, false, 30*time.Second, nil)) == 0 {
+	if len(Warnings(pb.ProbeType_PROBE_TYPE_NTP, false, 30*time.Second, 5*time.Second, nil)) == 0 {
 		t.Fatal("expected the ntp cadence warning for this fixture")
 	}
 	if problems := ValidateSettings(pb.ProbeType_PROBE_TYPE_NTP, 30*time.Second, 5*time.Second, 0, 0, cliFields); len(problems) > 0 {
+		t.Errorf("a warned config must still validate, got %v", problems)
+	}
+
+	mtuParams := map[string]string{"mtu.max": "9000"}
+	if len(Warnings(pb.ProbeType_PROBE_TYPE_PATH_MTU, false, 30*time.Second, 5*time.Second, mtuParams)) < 2 {
+		t.Fatal("expected the path_mtu timeout and jumbo warnings for this fixture")
+	}
+	if problems := ValidateParams(pb.ProbeType_PROBE_TYPE_PATH_MTU, false, mtuParams); len(problems) > 0 {
 		t.Errorf("a warned config must still validate, got %v", problems)
 	}
 }
