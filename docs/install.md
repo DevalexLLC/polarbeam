@@ -49,6 +49,25 @@ The control-plane host needs:
 - DNS records for `<dashboard-name>` and `<grpc-name>`
 - an HTTPS certificate and private key valid for `<dashboard-name>`
 
+Hardware depends almost entirely on how many sites you mesh and how often
+they probe. Starting points, assuming the suggested workload from
+`docs/probes.md` at default cadences:
+
+| Host | vCPU | RAM | Disk (SSD) | Network |
+|---|---|---|---|---|
+| Control plane, ≤10 sites | 2 | 4 GB | 20 GB | < 1 Mbps |
+| Control plane, ~50 sites | 4 | 8 GB | 150 GB | < 1 Mbps |
+| Control plane, ~100 sites | 4–8 | 16 GB | 500 GB | ~1 Mbps |
+| Any agent host | < 5% of one core | 128 MB | 1 GB free | KB/s |
+
+Database storage dominates the control-plane numbers and plateaus at a
+steady state set by retention, so disk is a one-time provisioning decision
+rather than open-ended growth. On the agent host, keep free space above the
+result-spool cap (256 MiB by default): the agent deliberately exits rather
+than drop measurements when its state volume cannot be written.
+`docs/sizing.md` explains the sizing model behind these figures and how to
+measure a running deployment.
+
 Confirm the container tools before continuing:
 
 ```sh

@@ -80,6 +80,12 @@ cp "${ROOT}/deploy/compose/docker-compose.yml" "${OUT}/"
 cp "${ROOT}/deploy/compose/server.example.yaml" "${OUT}/"
 cp "${ROOT}/deploy/compose/env.example" "${OUT}/"
 cp "${ROOT}/docs/install.md" "${OUT}/"
+# install.md refers operators to docs/sizing.md and docs/probes.md; ship them
+# under docs/ so those repo-root-relative references resolve in the bundle.
+# install.md is duplicated there so probes.md's sibling link to it works too.
+mkdir -p "${OUT}/docs"
+cp "${ROOT}/docs/sizing.md" "${ROOT}/docs/probes.md" \
+   "${ROOT}/docs/install.md" "${OUT}/docs/"
 # The license and attribution notices travel with every redistribution
 # (AGPL-3.0 conveyance terms + third-party license obligations).
 cp "${ROOT}/LICENSE" "${ROOT}/NOTICE" "${ROOT}/THIRD-PARTY-NOTICES" "${OUT}/"
