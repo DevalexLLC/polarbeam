@@ -620,7 +620,8 @@ per site, one template produces 9,900 directional assignments. At a 30-second
 cadence, a 10-packet ICMP template produces about 330 runs and 3,300 echo
 requests per second across the fleet. Multiple agents per site multiply that
 work further. Regional or topology-specific meshes are often more useful than
-one unrestricted global mesh.
+one unrestricted global mesh. `docs/sizing.md` translates assignment counts
+into control-plane hardware and storage requirements.
 
 ### Layered validation of a critical application
 
