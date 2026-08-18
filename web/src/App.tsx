@@ -14,6 +14,7 @@ import Outages from './views/Outages'
 import PairDetail from './views/PairDetail'
 import Paths from './views/Paths'
 import Settings from './views/Settings'
+import TargetDetail from './views/TargetDetail'
 
 // Hash routing stays dependency-free and preserves the original route names
 // as aliases, so bookmarks survive the information-architecture cleanup.
@@ -43,6 +44,7 @@ const SETTINGS_TABS: SettingsTab[] = [
 type Route =
   | { view: 'overview' }
   | { view: 'pair'; a: string; b: string }
+  | { view: 'target'; id: string }
   | { view: 'incidents' }
   | { view: 'routes' }
   | { view: 'agents'; agent: string | null }
@@ -64,6 +66,11 @@ function parseHash(hash: string): Route {
   if (parts[0] === 'pair' && parts[1] && parts[2]) {
     return { view: 'pair', a: decodeSegment(parts[1]), b: decodeSegment(parts[2]) }
   }
+  // #/target/<id> is the per-target drill-down; a bad id shows the view's
+  // own loud not-found rather than silently landing on the overview.
+  if (parts[0] === 'target' && parts[1]) {
+    return { view: 'target', id: decodeSegment(parts[1]) }
+  }
   if (parts[0] === 'incidents' || parts[0] === 'outages') return { view: 'incidents' }
   if (parts[0] === 'routes' || parts[0] === 'paths') return { view: 'routes' }
   // #/agents/<id> deep-links to that agent's expanded detail; the hash is
@@ -82,8 +89,9 @@ function parseHash(hash: string): Route {
 }
 
 const NAV: Array<{ href: string; label: string; isActive: (r: Route) => boolean }> = [
-  // Pair detail is reached from the Overview matrix, so it keeps Overview lit.
-  { href: '#/', label: 'Overview', isActive: (r) => r.view === 'overview' || r.view === 'pair' },
+  // Pair and target detail are drill-downs reached from other views, so
+  // they keep Overview lit rather than adding nav entries.
+  { href: '#/', label: 'Overview', isActive: (r) => r.view === 'overview' || r.view === 'pair' || r.view === 'target' },
   { href: '#/incidents', label: 'Incidents', isActive: (r) => r.view === 'incidents' },
   { href: '#/routes', label: 'Routes', isActive: (r) => r.view === 'routes' },
   { href: '#/agents', label: 'Agents', isActive: (r) => r.view === 'agents' },
@@ -278,6 +286,9 @@ export default function App() {
             // a stale series from the previous pair would otherwise keep
             // rendering under the new names when the new fetch fails.
             <PairDetail key={`${route.a}/${route.b}`} a={route.a} b={route.b} onAuthError={onAuthError} />
+          ) : route.view === 'target' ? (
+            // Keyed on the id for the same remount-on-switch reason.
+            <TargetDetail key={route.id} id={route.id} onAuthError={onAuthError} />
           ) : route.view === 'incidents' ? (
             <Outages onAuthError={onAuthError} />
           ) : route.view === 'agents' ? (

@@ -132,6 +132,9 @@ func (a *api) handleAgentHealth(w http.ResponseWriter, r *http.Request) {
 type agentProbeHealthJSON struct {
 	ProbeID string `json:"probe_id"`
 	Type    string `json:"type"`
+	// TargetID links to the target detail page; null when the target row is
+	// gone (the SPA renders the label unlinked).
+	TargetID *string `json:"target_id"`
 	// TargetKind is "agent" or "external"; "" when the target row is gone.
 	TargetKind string `json:"target_kind"`
 	// Target is the external target's name; null for agent-kind targets,
@@ -181,6 +184,10 @@ func (a *api) handleAgentProbeHealth(w http.ResponseWriter, r *http.Request) {
 				Error:      row.OpenError,
 				DstSite:    row.DstSite,
 				Buckets:    []agentHealthBucketJSON{},
+			}
+			if row.TargetID != nil {
+				tid := row.TargetID.String()
+				p.TargetID = &tid
 			}
 			if row.TargetKind != nil {
 				p.TargetKind = *row.TargetKind
@@ -359,11 +366,18 @@ type directionJSON struct {
 // direction assembles one direction's summary (aggregates over the window,
 // status from the latest results inside the staleness horizon).
 func (a *api) direction(r *http.Request, src, dst *store.SiteEndpoints, spec windowSpec) (directionJSON, error) {
-	sum, err := a.db.PairSummary(r.Context(), src.AgentIDs, dst.TargetIDs, spec.Window, spec.Source)
+	return a.directionFor(r, src.AgentIDs, dst.TargetIDs, spec)
+}
+
+// directionFor is direction on raw endpoint ID sets — the target detail
+// page aims a site's agents at a single target ID instead of a peer site's
+// target set.
+func (a *api) directionFor(r *http.Request, srcAgents, dstTargets []uuid.UUID, spec windowSpec) (directionJSON, error) {
+	sum, err := a.db.PairSummary(r.Context(), srcAgents, dstTargets, spec.Window, spec.Source)
 	if err != nil {
 		return directionJSON{}, err
 	}
-	latest, err := a.db.DirectionLatest(r.Context(), src.AgentIDs, dst.TargetIDs, staleHorizon)
+	latest, err := a.db.DirectionLatest(r.Context(), srcAgents, dstTargets, staleHorizon)
 	if err != nil {
 		return directionJSON{}, err
 	}

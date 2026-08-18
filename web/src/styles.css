@@ -1064,6 +1064,19 @@ table.agents tr:last-child td {
   font-weight: 650;
 }
 
+/* A chip that is a link (pair detail → target detail) keeps the chip look;
+   affordance is the hover lift, mirroring table.matrix cell links. */
+a.check-chip {
+  text-decoration: none;
+  cursor: pointer;
+}
+
+a.check-chip:hover {
+  border-color: var(--border-strong);
+  color: var(--ink);
+  transform: translateY(-1px);
+}
+
 .check-indicator {
   width: 7px;
   height: 7px;
@@ -2497,6 +2510,27 @@ button.primary:disabled {
 
 .text-link:hover {
   text-decoration: underline;
+}
+
+/* Inline drill-down links inside data surfaces (target names in the
+   Targets tables and Agents probe rows, site names on target source
+   cards): inherit the surrounding ink so tables stay calm, and show the
+   affordance as an engraved underline that sharpens to accent on hover —
+   never the browser default blue. */
+table.events td a,
+.probe-strip-label a,
+.pair-card h3 a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+}
+
+table.events td a:hover,
+.probe-strip-label a:hover,
+.pair-card h3 a:hover {
+  color: var(--accent);
+  text-decoration-color: currentColor;
 }
 
 .chip-alert {

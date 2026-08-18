@@ -56,7 +56,7 @@ func TestApplyOnFreshDatabase(t *testing.T) {
 	}
 
 	// The schema features later migrations and the server depend on
-	// actually materialized: the hypertable, all three continuous
+	// actually materialized: the hypertable, all five continuous
 	// aggregates, and the toolkit extension the percentile columns need.
 	var n int
 	if err := conn.QueryRow(ctx, `SELECT count(*) FROM timescaledb_information.hypertables
@@ -70,8 +70,8 @@ func TestApplyOnFreshDatabase(t *testing.T) {
 		`SELECT count(*) FROM timescaledb_information.continuous_aggregates`).Scan(&n); err != nil {
 		t.Fatalf("cagg check: %v", err)
 	}
-	if n != 3 {
-		t.Errorf("continuous aggregates = %d, want 3 (hourly, daily, health)", n)
+	if n != 5 {
+		t.Errorf("continuous aggregates = %d, want 5 (hourly, daily, health, stage hourly, stage daily)", n)
 	}
 	if err := conn.QueryRow(ctx,
 		`SELECT count(*) FROM pg_extension WHERE extname = 'timescaledb_toolkit'`).Scan(&n); err != nil {

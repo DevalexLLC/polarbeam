@@ -82,6 +82,9 @@ export interface AgentHealthResponse {
 export interface AgentProbeHealth {
   probe_id: string
   type: string
+  // Links to the target detail page (#/target/{id}); null when the target
+  // row is gone — render the label unlinked then.
+  target_id: string | null
   target_kind: 'agent' | 'external' | ''
   target: string | null
   dst_site: string | null
@@ -127,6 +130,9 @@ export type CellStatus = 'ok' | 'degraded' | 'down' | 'stale'
 export interface MatrixProbe {
   type: string
   status: string
+  // Present on pair-detail checks (links the chip to its target's detail
+  // page); absent on matrix cell probes, which fold to site pairs.
+  target_id?: string
   latency_us: number | null
   latency_source: string
   loss_pct: number | null
@@ -240,6 +246,82 @@ export interface SeriesResponse {
   latency_source: string
   a_to_b: { latency_source: string; points: SeriesPoint[] }
   b_to_a: { latency_source: string; points: SeriesPoint[] }
+}
+
+// GET /api/v1/targets/{id}* — the target detail page. dst_site is the
+// owning agent's site for agent-kind targets (the page titles those by
+// site; targets.name is a synthesized handle) and null for external ones.
+export interface TargetInfo {
+  id: string
+  kind: 'agent' | 'external'
+  name: string
+  address: string
+  port: number
+  url: string
+  dst_site: string | null
+}
+
+export interface TargetSourceSummary extends DirectionSummary {
+  site: string
+}
+
+export interface TargetSummaryResponse {
+  target: TargetInfo
+  window: string
+  source: SeriesSource
+  // One entry per site probing this target; [] until something probes it.
+  sources: TargetSourceSummary[]
+}
+
+export interface TargetSeriesResponse {
+  metric: 'latency' | 'loss'
+  window: string
+  resolution_s: number
+  source: SeriesSource
+  sources: { site: string; latency_source: string; points: SeriesPoint[] }[]
+}
+
+// One bucket of per-stage successful averages (µs); null = no probe
+// measured that stage in the bucket. samples counts successful probes.
+export interface StagePoint {
+  t: number
+  dns_us: number | null
+  tcp_connect_us: number | null
+  tls_handshake_us: number | null
+  ttfb_us: number | null
+  total_us: number | null
+  samples: number
+}
+
+export interface TargetStagesResponse {
+  window: string
+  resolution_s: number
+  source: SeriesSource
+  points: StagePoint[]
+}
+
+// GET /api/v1/targets/{id}/health — per-probe 24h strips from the target's
+// side: source agent/site labels, and agent_id feeds the existing
+// /api/v1/agents/{agent_id}/health/bucket slot drill-down.
+export interface TargetHealthProbe {
+  agent_id: string
+  site: string
+  hostname: string
+  probe_id: string
+  type: string
+  last_status: string
+  last_time: string
+  failing: boolean
+  open_since: string | null
+  error: string | null
+  buckets: AgentHealthBucket[]
+}
+
+export interface TargetHealthResponse {
+  window: string
+  bucket_s: number
+  target: TargetInfo
+  probes: TargetHealthProbe[]
 }
 
 export interface OutageEvent {

@@ -113,3 +113,51 @@ func TestHealthAggregateKeepsStripSemantics(t *testing.T) {
 		}
 	}
 }
+
+// The target detail page's stage queries filter and fold on exactly these
+// group keys, compute averages as sum/count (so the daily rollup must stay
+// sums-only), freeze status = 1 as the only success, and rely on the live
+// tail of materialized_only = false. The cagg definitions are immutable once
+// shipped, so pin the contract.
+func TestStageAggregatesKeepStageSemantics(t *testing.T) {
+	hourly, err := migrations.ReadFile("sql/0014_stage_hourly_cagg.notx.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(hourly)
+	wants := []string{
+		"GROUP BY bucket, agent_id, target_id, probe_type",
+		"timescaledb.materialized_only = false",
+	}
+	for _, stage := range []string{"dns", "tcp", "tls", "ttfb", "total"} {
+		wants = append(wants,
+			stage+"_sum_us",
+			stage+"_count",
+		)
+	}
+	// Every timing measure aggregates successful probes only.
+	wants = append(wants, "FILTER (WHERE status = 1)")
+	for _, want := range wants {
+		if !strings.Contains(sql, want) {
+			t.Errorf("stage hourly aggregate missing %q", want)
+		}
+	}
+	if strings.Contains(stripLineComments(sql), "avg(") {
+		t.Error("stage hourly aggregate must store sums/counts, never avg() — the daily rollup would be wrong")
+	}
+
+	daily, err := migrations.ReadFile("sql/0015_stage_daily_cagg.notx.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dsql := string(daily)
+	if !strings.Contains(dsql, "FROM probe_results_stage_hourly") {
+		t.Error("stage daily aggregate must roll up the hourly stage cagg")
+	}
+	if !strings.Contains(dsql, "agent_id, target_id, probe_type") {
+		t.Error("stage daily aggregate does not preserve the hourly group keys")
+	}
+	if strings.Contains(stripLineComments(dsql), "avg(") {
+		t.Error("stage daily aggregate must re-sum, never avg()")
+	}
+}
