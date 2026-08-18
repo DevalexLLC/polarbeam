@@ -20,6 +20,10 @@ web/node_modules/
 .claude/settings.local.json
 .claude/worktrees/
 
+# Playwright MCP output (headless-browser screenshots/snapshots/logs from
+# local verification sessions)
+.playwright-mcp/
+
 # TypeScript incremental build cache
 web/tsconfig.tsbuildinfo
 
