@@ -665,6 +665,13 @@ Interpret the combination as follows:
 - TLS succeeds but HTTP fails: investigate the reverse proxy or application.
 - All succeed but TTFB rises: investigate application or backend performance.
 
+The dashboard's target detail page (Settings → Targets → click the target
+name) charts these stages over time: DNS lookup, TCP connect, TLS
+handshake, TTFB, and total, averaged per bucket from whichever probe types
+measure them (`http` reports the full set; `tls`, `tcp`, and `dns` report
+their subsets), alongside per-source-site latency/loss charts and
+per-probe health strips.
+
 Repeat the direct assignments for each source site that needs independent
 coverage.
 

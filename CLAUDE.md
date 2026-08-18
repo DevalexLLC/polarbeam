@@ -110,8 +110,12 @@ Full design + milestone plan: `docs/architecture.md`.
   prod runs `polarbeam-server migrate` explicitly. **Once a migration has shipped in
   any release, it is immutable** — schema changes get a new numbered file
   (the `Pending` preflight tracks filenames, not content, so editing an
-  applied file silently skips the change on upgrades). Pre-first-release,
-  editing `0001_init.sql` is fine; recreate dev DBs with `down -v`.
+  applied file silently skips the change on upgrades). Releases exist
+  (v0.1.0+), so every migration on a release tag is frozen — check
+  `git tag --contains` when unsure; only files added since the latest
+  release may still be edited (recreate dev DBs with `make reset`). Never
+  drop-and-recreate a shipped cagg either: it can only rematerialize from
+  raw (14d retention), destroying long-window aggregate history.
 - Conventional Commits (`feat(scope): ...`); see CONTRIBUTING.md.
 - Branch → PR is ENFORCED, not convention: a GitHub ruleset protects `main`
   with no bypass actors, so even the repo owner cannot push to it. Work on a
