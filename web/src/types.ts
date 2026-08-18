@@ -244,7 +244,7 @@ export interface SeriesResponse {
 
 export interface OutageEvent {
   id: string
-  kind: 'probe_failing' | 'agent_offline'
+  kind: 'probe_failing' | 'agent_offline' | 'probe_degraded'
   agent: string
   src_site: string
   dst_site: string | null

@@ -89,7 +89,12 @@ function IncidentGroupRow({ group }: { group: IncidentGroup }) {
     (earliest, event) => (Date.parse(event.opened_at) < Date.parse(earliest) ? event.opened_at : earliest),
     group.events[0].opened_at,
   )
-  const label = group.kind === 'agent_offline' ? 'Agents offline' : 'Probe failures'
+  const label =
+    group.kind === 'agent_offline'
+      ? 'Agents offline'
+      : group.kind === 'probe_degraded'
+        ? 'Probes degraded'
+        : 'Probe failures'
   const affectedCount = new Set(group.events.map(target)).size
   let idHash = 0
   for (let i = 0; i < group.key.length; i++) idHash = (idHash * 31 + group.key.charCodeAt(i)) >>> 0
@@ -378,7 +383,10 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
               <span className="sr-only">Clear time filter</span>
             </button>
           ) : (
-            <span className="hint">Opens after 3 failures · resolves after 3 successes</span>
+            <span className="hint">
+              Failing opens after 3 failures · degraded after 3 critical-threshold breaches · both resolve after 3 clean
+              successes
+            </span>
           )}
         </div>
         {groups.length === 0 ? (

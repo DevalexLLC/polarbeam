@@ -222,7 +222,7 @@ func (s *Server) PushResults(ctx context.Context, req *pb.PushResultsRequest) (*
 			slog.Warn("rejecting malformed probe result", "agent", id.AgentID, "err", err)
 			continue
 		}
-		if targetID, ok := assigned[row.ProbeID]; !ok || targetID != row.TargetID {
+		if a, ok := assigned[row.ProbeID]; !ok || a.TargetID != row.TargetID {
 			rejected++
 			slog.Warn("rejecting result for probe not assigned to agent",
 				"agent", id.AgentID, "target", row.TargetID, "probe", row.ProbeID)
@@ -274,7 +274,7 @@ func (s *Server) PushResults(ctx context.Context, req *pb.PushResultsRequest) (*
 		slog.Error("result insert failed", "agent", id.AgentID, "count", len(rows), "err", err)
 		return nil, status.Error(codes.Unavailable, "result insert failed, retry")
 	}
-	transitions, err := outage.Apply(ctx, tx, id.AgentID, toOutageResults(inserted))
+	transitions, err := outage.Apply(ctx, tx, id.AgentID, toOutageResults(inserted, assigned))
 	if err != nil {
 		slog.Error("outage bookkeeping failed", "agent", id.AgentID, "err", err)
 		return nil, status.Error(codes.Unavailable, "result insert failed, retry")
@@ -295,9 +295,9 @@ func (s *Server) PushResults(ctx context.Context, req *pb.PushResultsRequest) (*
 	}
 	for _, tr := range transitions {
 		if tr.Opened {
-			slog.Warn("outage opened", "agent", id.AgentID, "probe", tr.ProbeID, "since", tr.At)
+			slog.Warn("outage opened", "agent", id.AgentID, "probe", tr.ProbeID, "kind", tr.Kind, "since", tr.At)
 		} else {
-			slog.Info("outage closed", "agent", id.AgentID, "probe", tr.ProbeID, "at", tr.At)
+			slog.Info("outage closed", "agent", id.AgentID, "probe", tr.ProbeID, "kind", tr.Kind, "at", tr.At)
 		}
 	}
 	for _, ch := range changes {

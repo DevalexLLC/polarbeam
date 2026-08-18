@@ -1333,12 +1333,16 @@ func TestEventsEndpoints(t *testing.T) {
 	f := newFakeDB()
 	closed := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
 	dst, target, ptype := "nyc", "nyc-agent", int16(1)
+	degradedErr := "latency at or above critical threshold (40ms)"
 	f.outages = []store.OutageInfo{
 		{ID: uuid.New(), Kind: "probe_failing", AgentHostname: "syd-1", SrcSite: "syd",
 			DstSite: &dst, TargetName: &target, ProbeType: &ptype,
 			OpenedAt: closed.Add(-time.Hour)},
 		{ID: uuid.New(), Kind: "agent_offline", AgentHostname: "lon-1", SrcSite: "lon",
 			OpenedAt: closed.Add(-2 * time.Hour), ClosedAt: &closed},
+		{ID: uuid.New(), Kind: "probe_degraded", AgentHostname: "syd-1", SrcSite: "syd",
+			DstSite: &dst, TargetName: &target, ProbeType: &ptype,
+			OpenedAt: closed.Add(-30 * time.Minute), Error: &degradedErr},
 	}
 	h := newTestAPI(t, f)
 	cookie, _ := loginAndCookie(t, h, f)
@@ -1352,10 +1356,14 @@ func TestEventsEndpoints(t *testing.T) {
 	}
 	body := w.Body.String()
 	// probe_failing rows carry the mapped type name; agent_offline rows null
-	// it. The server clock ships as "now" — the timeline's grid anchor.
+	// it. probe_degraded flows through kind-agnostically with its open_error.
+	// The server clock ships as "now" — the timeline's grid anchor.
 	if !strings.Contains(body, `"probe_type":"icmp"`) || !strings.Contains(body, `"kind":"agent_offline"`) ||
 		!strings.Contains(body, `"now":`) {
 		t.Errorf("outages body missing expected fields: %s", body)
+	}
+	if !strings.Contains(body, `"kind":"probe_degraded"`) || !strings.Contains(body, degradedErr) {
+		t.Errorf("outages body missing probe_degraded passthrough: %s", body)
 	}
 
 	// Empty results serve well-formed shapes, not nulls that break the SPA.

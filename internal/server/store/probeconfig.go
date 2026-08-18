@@ -777,9 +777,10 @@ func expandedProbeIDs(ctx context.Context, tx pgx.Tx, id uuid.UUID, meshID *uuid
 	return expandMeshProbeIDs([]uuid.UUID{id}, members, targets), nil
 }
 
-// cleanupSeries closes the open probe_failing event of every listed series
-// — the probe stops producing results, so ingest's 3-OK close can never
-// happen; closed_at = now() honestly records when monitoring was removed.
+// cleanupSeries closes the open probe_failing or probe_degraded event of
+// every listed series — the probe stops producing results, so ingest's
+// 3-result close can never happen; closed_at = now() honestly records when
+// monitoring was removed.
 // deleteRows additionally drops series_state, traceroute_current, and
 // path_mtu_current (the probe is gone for good; the pair endpoints select
 // current rows by agent/target alone, so a surviving row would be served
@@ -790,9 +791,11 @@ func cleanupSeries(ctx context.Context, tx pgx.Tx, probeIDs []uuid.UUID, deleteR
 	if len(probeIDs) == 0 {
 		return nil
 	}
+	// The kind list matches outage_events_probe_open_kind_idx's predicate
+	// verbatim (a broader predicate could not use the partial index).
 	if _, err := tx.Exec(ctx, `
 		UPDATE outage_events SET closed_at = now()
-		WHERE probe_id = ANY($1) AND kind = 'probe_failing' AND closed_at IS NULL`, probeIDs); err != nil {
+		WHERE probe_id = ANY($1) AND kind IN ('probe_failing', 'probe_degraded') AND closed_at IS NULL`, probeIDs); err != nil {
 		return fmt.Errorf("close open events: %w", err)
 	}
 	if deleteRows {
@@ -810,7 +813,9 @@ func cleanupSeries(ctx context.Context, tx pgx.Tx, probeIDs []uuid.UUID, deleteR
 	if _, err := tx.Exec(ctx, `
 		UPDATE series_state
 		SET open_event_id = NULL, consec_fails = 0, consec_oks = 0,
-		    first_fail_at = NULL, first_ok_at = NULL
+		    consec_degraded = 0, consec_clean = 0,
+		    first_fail_at = NULL, first_ok_at = NULL,
+		    first_degraded_at = NULL, first_clean_at = NULL
 		WHERE probe_id = ANY($1)`, probeIDs); err != nil {
 		return fmt.Errorf("reset series state: %w", err)
 	}
@@ -818,14 +823,18 @@ func cleanupSeries(ctx context.Context, tx pgx.Tx, probeIDs []uuid.UUID, deleteR
 }
 
 // DirectProbeRow is a direct (site-scoped) probe assignment for one agent.
+// DstSiteID is the site of an agent-kind target (nil for external targets);
+// ingest uses it to resolve per-pair threshold overrides. It never enters
+// the config snapshot, so it cannot perturb config_hash.
 type DirectProbeRow struct {
-	ID       uuid.UUID
-	Settings ProbeSettings
-	TargetID uuid.UUID
-	Kind     string
-	Address  string
-	Port     int32
-	URL      string
+	ID        uuid.UUID
+	Settings  ProbeSettings
+	TargetID  uuid.UUID
+	Kind      string
+	Address   string
+	Port      int32
+	URL       string
+	DstSiteID *uuid.UUID
 }
 
 // MeshProbeRow is a mesh probe template applying to the agent's site.
@@ -865,9 +874,10 @@ func (s *Store) LoadAgentConfigInputs(ctx context.Context, agentID uuid.UUID) (A
 	batch.Queue(`SELECT site_id FROM agents WHERE id = $1`, agentID)
 	batch.Queue(`
 		SELECT pc.id, pc.probe_type, pc.interval_ms, pc.timeout_ms, pc.train_count, pc.train_spacing_ms, pc.params,
-		       t.id, t.kind, t.address, t.port, t.url
+		       t.id, t.kind, t.address, t.port, t.url, dta.site_id
 		FROM probe_configs pc
 		JOIN targets t ON t.id = pc.target_id
+		LEFT JOIN agents dta ON dta.id = t.agent_id
 		JOIN agents a ON a.site_id = pc.site_id
 		WHERE a.id = $1 AND pc.enabled
 		ORDER BY pc.created_at`, agentID)
@@ -906,7 +916,7 @@ func (s *Store) LoadAgentConfigInputs(ctx context.Context, agentID uuid.UUID) (A
 		)
 		if err := rows.Scan(&d.ID, &d.Settings.ProbeType, &intervalMS, &timeoutMS,
 			&d.Settings.TrainCount, &trainSpacingMS, &d.Settings.Params,
-			&d.TargetID, &d.Kind, &d.Address, &d.Port, &d.URL); err != nil {
+			&d.TargetID, &d.Kind, &d.Address, &d.Port, &d.URL, &d.DstSiteID); err != nil {
 			rows.Close()
 			return in, fmt.Errorf("load config inputs: direct probes: %w", err)
 		}

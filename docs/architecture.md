@@ -102,7 +102,7 @@ Continuous aggregates: `probe_results_hourly` (from raw: samples, ok_samples, su
 
 ## Outage detection (server-side)
 
-`series_state`-backed hysteresis: open `probe_failing` outage after **3 consecutive failures**, close after **3 consecutive successes** — updated in the ingest transaction. A 30 s sweep detects silence: no result in 3×interval + stale `last_seen_at` → single `agent_offline` event per agent (not per series). Restart-durable, no flapping. "Recent outages" = open events or ended within the query window.
+`series_state`-backed hysteresis: open `probe_failing` outage after **3 consecutive failures**, close after **3 consecutive successes** — updated in the ingest transaction. The same machinery opens a `probe_degraded` event after **3 consecutive successes breaching the critical latency/loss thresholds** (the effective per-direction values: global `dashboard_settings` merged with the site-pair `path_thresholds` override; external targets grade on the global values; warn-tier breaches stay live-view-only) and closes it after 3 consecutive clean successes. Grading happens at ingest against then-current thresholds (edits converge within the 30 s assignment-cache TTL; spool replay grades at replay time). At most one probe event is open per series — down supersedes degraded: a failing streak closes an open degraded event and opens `probe_failing` at the same instant, and vice versa on recovery into a still-breaching link. A 30 s sweep detects silence: no result in 3×interval + stale `last_seen_at` → single `agent_offline` event per agent (not per series). Restart-durable, no flapping. "Recent outages" = open events or ended within the query window.
 
 ## Agent disk spool
 

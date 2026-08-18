@@ -13,7 +13,8 @@ import (
 // overrides keyed on the unordered pair. A and B are site names, A < B
 // lexically (the DB canonicalizes by uuid order; names are sorted here only
 // for display). Nil metric fields inherit the global dashboard_settings
-// value — merging happens in httpapi and the SPA, never here.
+// value — merging happens in httpapi, the SPA, and
+// internal/server/thresholds, never here.
 type PathThresholdOverride struct {
 	A             string
 	B             string
@@ -59,6 +60,45 @@ func (s *Store) ListPathThresholds(ctx context.Context) ([]PathThresholdOverride
 			return nil, fmt.Errorf("list path thresholds: %w", err)
 		}
 		out = append(out, *o)
+	}
+	return out, rows.Err()
+}
+
+// PathThresholdPair is one path_thresholds row keyed by site IDs in the
+// table's canonical (uuid bytewise) order — the ingest-side consumer needs
+// no names and must not pay the sites joins.
+type PathThresholdPair struct {
+	SiteAID       uuid.UUID
+	SiteBID       uuid.UUID
+	LatencyWarnUS *int64
+	LatencyCritUS *int64
+	LossWarnPct   *float64
+	LossCritPct   *float64
+}
+
+// PathThresholdPairs returns the overrides involving one site, keyed by
+// canonical site-ID pair. Ingest resolves thresholds per source agent, and
+// only pairs containing the agent's site can apply — an unfiltered load
+// would be O(agents × all overrides) every cache refresh. The PK prefix
+// serves the a-side arm, path_thresholds_b_idx the b-side.
+func (s *Store) PathThresholdPairs(ctx context.Context, siteID uuid.UUID) ([]PathThresholdPair, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT site_a_id, site_b_id, latency_warn_us, latency_crit_us, loss_warn_pct, loss_crit_pct
+		  FROM path_thresholds
+		 WHERE site_a_id = $1 OR site_b_id = $1`, siteID)
+	if err != nil {
+		return nil, fmt.Errorf("path threshold pairs: %w", err)
+	}
+	defer rows.Close()
+
+	var out []PathThresholdPair
+	for rows.Next() {
+		var p PathThresholdPair
+		if err := rows.Scan(&p.SiteAID, &p.SiteBID,
+			&p.LatencyWarnUS, &p.LatencyCritUS, &p.LossWarnPct, &p.LossCritPct); err != nil {
+			return nil, fmt.Errorf("path threshold pairs: %w", err)
+		}
+		out = append(out, p)
 	}
 	return out, rows.Err()
 }

@@ -57,6 +57,8 @@ function targetKey(o: OutageEvent): string {
 
 function incidentCause(o: OutageEvent): string {
   if (o.kind === 'agent_offline') return 'Agent connection lost'
+  // The degraded open_error is already a stable threshold description.
+  if (o.kind === 'probe_degraded') return o.error || 'Critical threshold breached'
   const error = o.error?.toLowerCase() ?? ''
   if (error.includes('connection refused')) return 'Connection refused'
   if (error.includes('timeout') || error.includes('deadline exceeded')) return 'Timed out'
