@@ -84,6 +84,14 @@ type fakeDB struct {
 	directionLatest      []store.MatrixRow
 	passedLatencySources []string
 	lastSource           store.Source // source passed to the last PairSeries/PairSummary call
+
+	targetEndpoints map[uuid.UUID]*store.TargetEndpoints
+	stageBuckets    []store.StageBucket
+	targetHealth    []store.TargetProbeHealthRow
+	// arguments of the last TargetStageSeries / TargetProbeHealth call
+	lastStageAgents  []uuid.UUID
+	lastStageTarget  uuid.UUID
+	lastTargetHealth uuid.UUID
 }
 
 func newFakeDB() *fakeDB {
@@ -348,6 +356,19 @@ func (f *fakeDB) PairLatencySource(_ context.Context, srcAgents, _ []uuid.UUID, 
 }
 func (f *fakeDB) DirectionLatest(_ context.Context, _, _ []uuid.UUID, _ time.Duration) ([]store.MatrixRow, error) {
 	return f.directionLatest, nil
+}
+func (f *fakeDB) TargetEndpoints(_ context.Context, targetID uuid.UUID) (*store.TargetEndpoints, error) {
+	return f.targetEndpoints[targetID], nil
+}
+func (f *fakeDB) TargetStageSeries(_ context.Context, srcAgents []uuid.UUID, targetID uuid.UUID, _, _ time.Duration, source store.Source) ([]store.StageBucket, error) {
+	f.lastSource = source
+	f.lastStageAgents = srcAgents
+	f.lastStageTarget = targetID
+	return f.stageBuckets, nil
+}
+func (f *fakeDB) TargetProbeHealth(_ context.Context, targetID uuid.UUID, _, _ time.Duration) ([]store.TargetProbeHealthRow, error) {
+	f.lastTargetHealth = targetID
+	return f.targetHealth, nil
 }
 func (f *fakeDB) GetSettings(_ context.Context) (*store.ThresholdSettings, error) {
 	if f.settings == nil {

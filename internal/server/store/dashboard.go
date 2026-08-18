@@ -144,12 +144,13 @@ type AgentHealthBucket struct {
 // per-probe health detail. Label columns repeat on every bucket row of a
 // series; Bucket/Samples/OK are nil for a series with no samples in the
 // window (the LEFT JOIN's single row), so configured-but-silent series
-// still appear. TargetKind/TargetName are nil when the target row is gone
-// (series_state carries no FK to targets); DstSite is nil for external
-// targets.
+// still appear. TargetID/TargetKind/TargetName are nil when the target row
+// is gone (series_state carries no FK to targets); DstSite is nil for
+// external targets.
 type AgentProbeHealthRow struct {
 	ProbeID    uuid.UUID
 	ProbeType  int16
+	TargetID   *uuid.UUID
 	TargetKind *string
 	TargetName *string
 	DstSite    *string
@@ -488,7 +489,7 @@ func (s *Store) AgentProbeHealth(ctx context.Context, agentID uuid.UUID, window,
 		return nil, fmt.Errorf("agent probe health: %w", err)
 	}
 	rows, err := s.pool.Query(ctx,
-		`SELECT ss.probe_id, ss.probe_type, t.kind, t.name, dst.name,
+		`SELECT ss.probe_id, ss.probe_type, t.id, t.kind, t.name, dst.name,
 		        ss.last_status, ss.last_time, oe.opened_at, oe.open_error,
 		        b.bucket, b.samples, b.ok
 		   FROM series_state ss
@@ -513,7 +514,7 @@ func (s *Store) AgentProbeHealth(ctx context.Context, agentID uuid.UUID, window,
 	var out []AgentProbeHealthRow
 	for rows.Next() {
 		var r AgentProbeHealthRow
-		if err := rows.Scan(&r.ProbeID, &r.ProbeType, &r.TargetKind, &r.TargetName, &r.DstSite,
+		if err := rows.Scan(&r.ProbeID, &r.ProbeType, &r.TargetID, &r.TargetKind, &r.TargetName, &r.DstSite,
 			&r.LastStatus, &r.LastTime, &r.OpenedAt, &r.OpenError,
 			&r.Bucket, &r.Samples, &r.OK); err != nil {
 			return nil, fmt.Errorf("agent probe health: %w", err)

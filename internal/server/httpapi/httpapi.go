@@ -61,6 +61,9 @@ type DB interface {
 	PairSummary(ctx context.Context, srcAgents, dstTargets []uuid.UUID, window time.Duration, source store.Source) (*store.PairSummaryRow, error)
 	PairLatencySource(ctx context.Context, srcAgents, dstTargets []uuid.UUID, window time.Duration, source store.Source) (string, error)
 	DirectionLatest(ctx context.Context, srcAgents, dstTargets []uuid.UUID, horizon time.Duration) ([]store.MatrixRow, error)
+	TargetEndpoints(ctx context.Context, targetID uuid.UUID) (*store.TargetEndpoints, error)
+	TargetStageSeries(ctx context.Context, srcAgents []uuid.UUID, targetID uuid.UUID, bucket, window time.Duration, source store.Source) ([]store.StageBucket, error)
+	TargetProbeHealth(ctx context.Context, targetID uuid.UUID, window, bucket time.Duration) ([]store.TargetProbeHealthRow, error)
 
 	GetSettings(ctx context.Context) (*store.ThresholdSettings, error)
 	UpdateSettings(ctx context.Context, ts store.ThresholdSettings) (*store.ThresholdSettings, error)
@@ -227,6 +230,12 @@ func newHandler(sdb DB, static fs.FS, providers OIDCProviders) http.Handler {
 	mux.Handle("DELETE /api/v1/config/tokens/{id}", adminWrite(a.handleTokenDelete))
 	mux.Handle("GET /api/v1/pairs/{a}/{b}", a.withSession(a.handlePair))
 	mux.Handle("GET /api/v1/pairs/{a}/{b}/series", a.withSession(a.handleSeries))
+	// Target detail: reads any-session (the /config/targets precedent). The
+	// strips' slot drill-down reuses /agents/{id}/health/bucket.
+	mux.Handle("GET /api/v1/targets/{id}", a.withSession(a.handleTargetSummary))
+	mux.Handle("GET /api/v1/targets/{id}/series", a.withSession(a.handleTargetSeries))
+	mux.Handle("GET /api/v1/targets/{id}/stages", a.withSession(a.handleTargetStages))
+	mux.Handle("GET /api/v1/targets/{id}/health", a.withSession(a.handleTargetHealth))
 	mux.Handle("GET /api/v1/outages", a.withSession(a.handleOutages))
 	mux.Handle("GET /api/v1/path-events", a.withSession(a.handlePathEvents))
 	mux.Handle("GET /api/v1/traceroute/{a}/{b}", a.withSession(a.handleTraceroute))
