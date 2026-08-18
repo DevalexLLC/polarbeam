@@ -136,19 +136,22 @@ interface Slot {
   t: number
   openOffline: number
   openProbe: number
+  openDegraded: number
   resOffline: number
   resProbe: number
+  resDegraded: number
 }
 
 function slotTotal(s: Slot): number {
-  return s.openOffline + s.openProbe + s.resOffline + s.resProbe
+  return s.openOffline + s.openProbe + s.openDegraded + s.resOffline + s.resProbe + s.resDegraded
 }
 
 // The window's incidents as bucketed bars (hand-rolled SVG — uPlot is
 // for real charts). Severity is derived from kind — agents offline are a
-// harder failure than probes failing — since outage events carry no
-// severity field of their own. Bars stack by kind, probe failures at the
-// baseline and agent outages above, each kind solid (open) under muted
+// harder failure than probes failing, which is harder than probes merely
+// degraded — since outage events carry no severity field of their own.
+// Bars stack by kind, degraded probes at the baseline, then probe
+// failures, then agent outages, each kind solid (open) under muted
 // (resolved).
 // Heights use sqrt scaling: outage counts are heavy-tailed, and one
 // agent-offline cascade would flatten every other bar under linear.
@@ -182,7 +185,15 @@ export default function IncidentTimeline({
   const { slots, maxTotal, peak } = useMemo(() => {
     const built: Slot[] = []
     for (let i = 0; i < GRID_SLOTS; i++)
-      built.push({ t: startMs + i * bucketMs, openOffline: 0, openProbe: 0, resOffline: 0, resProbe: 0 })
+      built.push({
+        t: startMs + i * bucketMs,
+        openOffline: 0,
+        openProbe: 0,
+        openDegraded: 0,
+        resOffline: 0,
+        resProbe: 0,
+        resDegraded: 0,
+      })
     for (const e of events) {
       // Same future-skew clamps as overlapsBucket — the two must agree.
       const closed = Math.min(e.closed_at ? Date.parse(e.closed_at) : nowMs, nowMs)
@@ -197,8 +208,10 @@ export default function IncidentTimeline({
         const s = built[i]
         if (e.closed_at == null) {
           if (e.kind === 'agent_offline') s.openOffline++
+          else if (e.kind === 'probe_degraded') s.openDegraded++
           else s.openProbe++
         } else if (e.kind === 'agent_offline') s.resOffline++
+        else if (e.kind === 'probe_degraded') s.resDegraded++
         else s.resProbe++
       }
     }
@@ -241,10 +254,11 @@ export default function IncidentTimeline({
   const slot = hover ? slots[hover.i] : null
   const tip = slot
     ? {
-        open: slot.openOffline + slot.openProbe,
-        res: slot.resOffline + slot.resProbe,
+        open: slot.openOffline + slot.openProbe + slot.openDegraded,
+        res: slot.resOffline + slot.resProbe + slot.resDegraded,
         offline: slot.openOffline + slot.resOffline,
         probe: slot.openProbe + slot.resProbe,
+        degraded: slot.openDegraded + slot.resDegraded,
       }
     : null
   return (
@@ -267,8 +281,8 @@ export default function IncidentTimeline({
         {slots.map((s) => {
           const i = (s.t - startMs) / bucketMs
           const x = i * SLOT_W + (SLOT_W - BAR_W) / 2
-          const open = s.openOffline + s.openProbe
-          const res = s.resOffline + s.resProbe
+          const open = s.openOffline + s.openProbe + s.openDegraded
+          const res = s.resOffline + s.resProbe + s.resDegraded
           const total = open + res
           const isSelected = selected === s.t
           const backdrop = isSelected && (
@@ -282,18 +296,21 @@ export default function IncidentTimeline({
               </g>
             )
           const h = (MAX_BAR * Math.sqrt(total)) / Math.sqrt(maxTotal)
-          // Stack by kind — probe failures (warn) at the baseline, agent
-          // outages (crit) above — each kind solid (open) under muted
-          // (resolved), so a wide bucket holding both kinds still shows its
-          // mix instead of only the worst. Proportional split, floored so a
-          // small segment stays visible; the 1-unit surface gap separates
-          // the kind blocks only (the solid→muted edge already marks the
-          // state boundary within a kind).
+          // Stack by kind, mildest at the baseline — degraded probes
+          // (warn), probe failures (crit), agent outages (down) — each kind
+          // solid (open) under muted (resolved), so a wide bucket holding
+          // several kinds still shows its mix instead of only the worst.
+          // Proportional split, floored so a small segment stays visible;
+          // the 1-unit surface gap separates the kind blocks only (the
+          // solid→muted edge already marks the state boundary within a
+          // kind).
           const segs = [
-            { n: s.openProbe, kind: 'warn', cls: 'itl-bar-open sev-warn' },
-            { n: s.resProbe, kind: 'warn', cls: 'itl-bar-resolved sev-warn' },
-            { n: s.openOffline, kind: 'crit', cls: 'itl-bar-open sev-crit' },
-            { n: s.resOffline, kind: 'crit', cls: 'itl-bar-resolved sev-crit' },
+            { n: s.openDegraded, kind: 'warn', cls: 'itl-bar-open sev-warn' },
+            { n: s.resDegraded, kind: 'warn', cls: 'itl-bar-resolved sev-warn' },
+            { n: s.openProbe, kind: 'crit', cls: 'itl-bar-open sev-crit' },
+            { n: s.resProbe, kind: 'crit', cls: 'itl-bar-resolved sev-crit' },
+            { n: s.openOffline, kind: 'down', cls: 'itl-bar-open sev-down' },
+            { n: s.resOffline, kind: 'down', cls: 'itl-bar-resolved sev-down' },
           ].filter((seg) => seg.n > 0)
           const selCls = isSelected ? ' itl-bar-selected' : ''
           const rects = []
@@ -344,9 +361,9 @@ export default function IncidentTimeline({
             {/* The category labels are the incident card's own (it applies
                 them to resolved groups too); the open/resolved caption
                 carries the state, so the pill must not imply "ongoing". */}
-            {tip.offline + tip.probe > 0 && (
-              <span className={`map-tip-pill sev-${tip.offline > 0 ? 'crit' : 'warn'}`}>
-                {tip.offline > 0 ? 'Agents offline' : 'Probe failures'}
+            {tip.offline + tip.probe + tip.degraded > 0 && (
+              <span className={`map-tip-pill sev-${tip.offline > 0 ? 'down' : tip.probe > 0 ? 'crit' : 'warn'}`}>
+                {tip.offline > 0 ? 'Agents offline' : tip.probe > 0 ? 'Probe failures' : 'Probes degraded'}
               </span>
             )}
           </div>
@@ -357,7 +374,7 @@ export default function IncidentTimeline({
           <div className="map-tip-caption">
             {tip.open + tip.res === 0
               ? 'no incidents in this slice'
-              : `${tip.open} open · ${tip.res} resolved — ${tip.offline} agent outage${tip.offline === 1 ? '' : 's'} · ${tip.probe} probe failure${tip.probe === 1 ? '' : 's'}`}
+              : `${tip.open} open · ${tip.res} resolved — ${tip.offline} agent outage${tip.offline === 1 ? '' : 's'} · ${tip.probe} probe failure${tip.probe === 1 ? '' : 's'} · ${tip.degraded} degraded`}
           </div>
           {selected === slot.t && <div className="map-tip-caption">Filtering groups below — click again to clear</div>}
         </div>

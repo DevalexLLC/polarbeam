@@ -589,9 +589,15 @@ For example, a TLS handshake that times out is reported as `TIMEOUT`, not
 `TLS_FAILURE`.
 
 The server opens a `probe_failing` outage after three consecutive failures and
-closes it after three consecutive successful results. It also detects agent
-silence separately, so a disconnected agent is not mistaken for every probe
-failing at once.
+closes it after three consecutive successful results. Successful results whose
+latency or loss reaches the critical dashboard thresholds (the site pair's
+effective values, including any per-pair override; external targets use the
+global values) open a `probe_degraded` incident after three consecutive
+breaches and close it after three consecutive clean results — warn-tier values
+color the dashboard but never open incidents. A series has at most one open
+incident: a degraded link that goes fully down escalates to `probe_failing`.
+The server also detects agent silence separately, so a disconnected agent is
+not mistaken for every probe failing at once.
 
 ## Large-infrastructure patterns
 

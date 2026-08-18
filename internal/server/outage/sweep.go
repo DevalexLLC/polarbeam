@@ -19,9 +19,9 @@ type SweepConfig struct {
 	Interval time.Duration
 	// AssignedProbeIDs returns the ID of every probe series agents are
 	// currently expected to run (store.EnabledProbeIDs). When set, each
-	// sweep also closes open probe_failing events whose probe is not in
-	// the set — orphans nothing else can ever close, because their probe
-	// no longer produces the successes the hysteresis close needs. Every
+	// sweep also closes open probe_failing and probe_degraded events whose
+	// probe is not in the set — orphans nothing else can ever close, because
+	// their probe no longer produces the results the hysteresis close needs. Every
 	// config mutation closes its own events (cleanupSeries), so a live
 	// open event always has an enabled probe behind it; orphans arise
 	// from straggler results accepted during the assignment cache's
@@ -55,19 +55,19 @@ func Sweep(ctx context.Context, db DB, cfg SweepConfig) {
 				continue
 			}
 			if err := closeOrphanEvents(ctx, db, cfg.AssignedProbeIDs, time.Now()); err != nil && ctx.Err() == nil {
-				slog.Error("orphan probe_failing sweep failed", "err", err)
+				slog.Error("orphan probe event sweep failed", "err", err)
 			}
 		}
 	}
 }
 
-// closeOrphanEvents closes open probe_failing events whose probe is not in
-// the assigned set, and clears the closed events' series_state pointers and
-// hysteresis counters in the same statement — a dangling open_event_id
-// would suppress every future open for a re-enabled, still-failing probe
-// until three successes cleared it. An empty set is meaningful, not a
-// guard condition: with no probes configured, any open probe_failing event
-// is an orphan.
+// closeOrphanEvents closes open probe_failing and probe_degraded events
+// whose probe is not in the assigned set, and clears the closed events'
+// series_state pointers and hysteresis counters in the same statement — a
+// dangling open_event_id would suppress every future open for a re-enabled,
+// still-failing probe until three successes cleared it. An empty set is
+// meaningful, not a guard condition: with no probes configured, any open
+// probe event is an orphan.
 //
 // The set read and the close are deliberately not one transaction: a probe
 // re-enabled in the milliseconds between them could have a legitimate
@@ -117,9 +117,11 @@ func closeOrphanEvents(ctx context.Context, db DB, assigned func(context.Context
 	//    predicate re-checks its condition under the row lock, so a row
 	//    ingest changed in the meantime is left alone. The damage sets
 	//    are almost always empty.
+	// The kind list matches outage_events_probe_open_kind_idx's predicate
+	// verbatim (a broader predicate could not use the partial index).
 	rows, err := db.Query(ctx, `
 		SELECT id FROM outage_events
-		WHERE kind = 'probe_failing' AND closed_at IS NULL AND probe_id != ALL($1)`, ids)
+		WHERE kind IN ('probe_failing', 'probe_degraded') AND closed_at IS NULL AND probe_id != ALL($1)`, ids)
 	if err != nil {
 		return fmt.Errorf("find orphan events: %w", err)
 	}
@@ -170,7 +172,9 @@ func closeOrphanEvents(ctx context.Context, db DB, assigned func(context.Context
 	for _, k := range damaged {
 		if _, err := db.Exec(ctx, `
 			UPDATE series_state SET open_event_id = NULL, consec_fails = 0,
-			    consec_oks = 0, first_fail_at = NULL, first_ok_at = NULL
+			    consec_oks = 0, consec_degraded = 0, consec_clean = 0,
+			    first_fail_at = NULL, first_ok_at = NULL,
+			    first_degraded_at = NULL, first_clean_at = NULL
 			WHERE agent_id = $1 AND probe_id = $2 AND open_event_id IS NOT NULL
 			  AND EXISTS (SELECT 1 FROM outage_events oe
 			              WHERE oe.id = open_event_id AND oe.closed_at IS NOT NULL)`,
@@ -179,7 +183,7 @@ func closeOrphanEvents(ctx context.Context, db DB, assigned func(context.Context
 		}
 	}
 	if closed > 0 {
-		slog.Warn("closed orphaned probe_failing events for probes no longer assigned",
+		slog.Warn("closed orphaned probe events for probes no longer assigned",
 			"count", closed)
 	}
 	return nil

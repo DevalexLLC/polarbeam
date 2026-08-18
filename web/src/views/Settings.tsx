@@ -143,8 +143,9 @@ export default function Settings({
               </div>
             </div>
             <p className="section-intro">
-              Values at or above the degraded threshold require attention. Critical thresholds remain a stronger visual
-              signal inside detailed connectivity views.
+              Values at or above the degraded threshold require attention. Critical thresholds are a stronger visual
+              signal inside detailed connectivity views, and sustained critical breaches (3 consecutive results) open
+              degraded incidents on the Incidents page.
             </p>
             <ThresholdSettingsPanel
               settings={settings}

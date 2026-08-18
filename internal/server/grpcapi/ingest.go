@@ -2,6 +2,7 @@
 package grpcapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -17,6 +18,7 @@ import (
 	"github.com/devalexllc/polarbeam/internal/server/outage"
 	"github.com/devalexllc/polarbeam/internal/server/pathwatch"
 	"github.com/devalexllc/polarbeam/internal/server/store"
+	"github.com/devalexllc/polarbeam/internal/server/thresholds"
 )
 
 const (
@@ -31,7 +33,7 @@ const (
 	assignmentCacheTTL = 30 * time.Second
 )
 
-// assignmentCache memoizes each agent's expanded probe→target map so a
+// assignmentCache memoizes each agent's expanded probe assignments so a
 // batch costs at most one config load. Both presence and absence within the
 // TTL are trusted — assignment changes converge within 30 s, same as config
 // distribution. Checking the (probe, target) PAIR — not just the target —
@@ -39,18 +41,30 @@ const (
 // disabled probe would otherwise slip through whenever its target is still
 // assigned via another probe config, recreating retired series_state and
 // reopening an incident that nothing will ever close.
+//
+// Each assignment also carries the direction's effective critical
+// thresholds, resolved at rebuild time, so degraded grading costs nothing
+// per result. Threshold edits therefore converge within the same 30 s as
+// assignments, and spool-replayed history is graded at replay-time values —
+// both accepted (see the outage package doc).
 type assignmentCache struct {
 	mu      sync.Mutex
 	entries map[uuid.UUID]assignmentEntry
 }
 
+// probeAssignment is one probe the agent is expected to run: its configured
+// target plus the effective critical thresholds for the direction.
+type probeAssignment struct {
+	TargetID uuid.UUID
+	Crit     thresholds.T
+}
+
 type assignmentEntry struct {
-	// probe ID → the target that probe is configured against.
-	probes  map[uuid.UUID]uuid.UUID
+	probes  map[uuid.UUID]probeAssignment
 	expires time.Time
 }
 
-func (c *assignmentCache) lookup(agentID uuid.UUID, now time.Time) (map[uuid.UUID]uuid.UUID, bool) {
+func (c *assignmentCache) lookup(agentID uuid.UUID, now time.Time) (map[uuid.UUID]probeAssignment, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, found := c.entries[agentID]
@@ -60,7 +74,7 @@ func (c *assignmentCache) lookup(agentID uuid.UUID, now time.Time) (map[uuid.UUI
 	return e.probes, true
 }
 
-func (c *assignmentCache) put(agentID uuid.UUID, probes map[uuid.UUID]uuid.UUID, now time.Time) {
+func (c *assignmentCache) put(agentID uuid.UUID, probes map[uuid.UUID]probeAssignment, now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.entries == nil {
@@ -77,11 +91,13 @@ func (c *assignmentCache) put(agentID uuid.UUID, probes map[uuid.UUID]uuid.UUID,
 	c.entries[agentID] = assignmentEntry{probes: probes, expires: now.Add(assignmentCacheTTL)}
 }
 
-// agentProbeMap returns the agent's current probe→target assignments,
-// derived from the SAME expansion that builds config snapshots
-// (meshexpand.BuildSnapshot), so ingest can never accept a probe ID the
-// agent wasn't told to run.
-func (s *Server) agentProbeMap(ctx context.Context, agentID uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+// agentProbeMap returns the agent's current probe assignments, derived from
+// the SAME expansion that builds config snapshots (meshexpand.BuildSnapshot),
+// so ingest can never accept a probe ID the agent wasn't told to run. Each
+// assignment carries the direction's effective critical thresholds: the
+// global dashboard_settings merged with the (src site, dst site) override;
+// external targets have no dst site and grade on the global values.
+func (s *Server) agentProbeMap(ctx context.Context, agentID uuid.UUID) (map[uuid.UUID]probeAssignment, error) {
 	now := time.Now()
 	if m, hit := s.assignments.lookup(agentID, now); hit {
 		return m, nil
@@ -94,8 +110,41 @@ func (s *Server) agentProbeMap(ctx context.Context, agentID uuid.UUID) (map[uuid
 	if err != nil {
 		return nil, err
 	}
+	settings, err := s.store.GetSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	overrides, err := s.store.PathThresholdPairs(ctx, in.SiteID)
+	if err != nil {
+		return nil, err
+	}
+	global := thresholds.T{
+		LatencyWarnUS: settings.LatencyWarnUS,
+		LatencyCritUS: settings.LatencyCritUS,
+		LossWarnPct:   settings.LossWarnPct,
+		LossCritPct:   settings.LossCritPct,
+	}
+	overrideByPair := make(map[sitePair]thresholds.Override, len(overrides))
+	for _, o := range overrides {
+		// Rows are already stored in canonical (bytewise) order.
+		overrideByPair[sitePair{o.SiteAID, o.SiteBID}] = thresholds.Override{
+			LatencyWarnUS: o.LatencyWarnUS,
+			LatencyCritUS: o.LatencyCritUS,
+			LossWarnPct:   o.LossWarnPct,
+			LossCritPct:   o.LossCritPct,
+		}
+	}
+	targetSite := make(map[uuid.UUID]uuid.UUID, len(in.Peers))
+	for _, p := range in.Peers {
+		targetSite[p.TargetID] = p.SiteID
+	}
+	for _, d := range in.Direct {
+		if d.DstSiteID != nil {
+			targetSite[d.TargetID] = *d.DstSiteID
+		}
+	}
 	specs := snap.GetProbes()
-	m := make(map[uuid.UUID]uuid.UUID, len(specs))
+	m := make(map[uuid.UUID]probeAssignment, len(specs))
 	for _, spec := range specs {
 		probeID, err := uuid.Parse(spec.GetProbeId())
 		if err != nil {
@@ -105,10 +154,27 @@ func (s *Server) agentProbeMap(ctx context.Context, agentID uuid.UUID) (map[uuid
 		if err != nil {
 			continue
 		}
-		m[probeID] = targetID
+		crit := global
+		if dstSite, hasSite := targetSite[targetID]; hasSite {
+			if o, hasOverride := overrideByPair[canonicalPair(in.SiteID, dstSite)]; hasOverride {
+				crit = thresholds.Effective(global, o)
+			}
+		}
+		m[probeID] = probeAssignment{TargetID: targetID, Crit: crit}
 	}
 	s.assignments.put(agentID, m, now)
 	return m, nil
+}
+
+// sitePair is an unordered site pair in the canonical (uuid bytewise) order
+// path_thresholds stores.
+type sitePair struct{ a, b uuid.UUID }
+
+func canonicalPair(a, b uuid.UUID) sitePair {
+	if bytes.Compare(a[:], b[:]) > 0 {
+		a, b = b, a
+	}
+	return sitePair{a, b}
 }
 
 // resultToRow maps one wire ProbeResult to a hypertable row. Pure: all
@@ -302,15 +368,18 @@ func toPathRuns(rows []store.ResultRow) []pathwatch.Run {
 }
 
 // toOutageResults maps genuinely inserted rows to the outage package's
-// input. UNSUPPORTED and every other non-OK status count as failures.
-func toOutageResults(rows []store.ResultRow) []outage.Result {
+// input. UNSUPPORTED and every other non-OK status count as failures. OK
+// rows are graded against their assignment's effective critical thresholds;
+// failures are never graded (their metrics describe the failure, not the
+// link).
+func toOutageResults(rows []store.ResultRow, assigned map[uuid.UUID]probeAssignment) []outage.Result {
 	out := make([]outage.Result, len(rows))
 	for i, r := range rows {
 		var errText string
 		if r.Error != nil {
 			errText = *r.Error
 		}
-		out[i] = outage.Result{
+		res := outage.Result{
 			ProbeID:    r.ProbeID,
 			TargetID:   r.TargetID,
 			ProbeType:  r.ProbeType,
@@ -319,8 +388,33 @@ func toOutageResults(rows []store.ResultRow) []outage.Result {
 			StatusCode: r.Status,
 			Error:      errText,
 		}
+		if res.OK {
+			if a, ok := assigned[r.ProbeID]; ok {
+				var loss *float64
+				if r.LossPct != nil {
+					v := float64(*r.LossPct)
+					loss = &v
+				}
+				res.Degraded, res.DegradedDetail = thresholds.GradeCrit(a.Crit, rowLatencyUS(r), loss)
+			}
+		}
+		out[i] = res
 	}
 	return out
+}
+
+// rowLatencyUS collapses a row's timing families to one headline latency:
+// the first measured value in purity order, mirroring the read side's
+// latencyExpr COALESCE ladder (store/dashboard.go) so grading and display
+// judge the same number.
+func rowLatencyUS(r store.ResultRow) *int64 {
+	for _, v := range []*int32{r.RttAvgUS, r.TCPConnectUS, r.TLSHandshakeUS, r.TTFBUS, r.TotalUS} {
+		if v != nil {
+			us := int64(*v)
+			return &us
+		}
+	}
+	return nil
 }
 
 // usColumn converts a wire microsecond value to a nullable column: negative

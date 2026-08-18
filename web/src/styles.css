@@ -2949,6 +2949,13 @@ td.fleet-uptime {
   fill: var(--status-crit);
   opacity: 0.35;
 }
+.itl-bar-open.sev-down {
+  fill: var(--status-down);
+}
+.itl-bar-resolved.sev-down {
+  fill: var(--status-down);
+  opacity: 0.35;
+}
 .itl-bar-zero {
   fill: var(--border-strong);
 }

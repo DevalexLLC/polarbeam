@@ -155,11 +155,14 @@ type AgentProbeHealthRow struct {
 	DstSite    *string
 	LastStatus int16
 	LastTime   time.Time
-	OpenedAt   *time.Time // open probe_failing outage; nil = not failing
-	OpenError  *string
-	Bucket     *time.Time
-	Samples    *int64
-	OK         *int64
+	// OpenedAt is the open probe_failing outage; nil = not failing. An open
+	// probe_degraded event is deliberately excluded — the drill-down must
+	// agree with ListAgents' failing count, which only counts hard failures.
+	OpenedAt  *time.Time
+	OpenError *string
+	Bucket    *time.Time
+	Samples   *int64
+	OK        *int64
 }
 
 // AgentBucketFailureGroup is one (probe series, status) failure group inside
@@ -493,7 +496,7 @@ func (s *Store) AgentProbeHealth(ctx context.Context, agentID uuid.UUID, window,
 		   LEFT JOIN targets t ON t.id = ss.target_id
 		   LEFT JOIN agents ta ON ta.id = t.agent_id
 		   LEFT JOIN sites dst ON dst.id = ta.site_id
-		   LEFT JOIN outage_events oe ON oe.id = ss.open_event_id
+		   LEFT JOIN outage_events oe ON oe.id = ss.open_event_id AND oe.kind = 'probe_failing'
 		   LEFT JOIN (
 		        SELECT probe_id, time_bucket($2::interval, bucket) AS bucket,
 		               sum(samples)::bigint AS samples, sum(ok_samples)::bigint AS ok

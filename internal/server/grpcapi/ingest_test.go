@@ -10,6 +10,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/devalexllc/polarbeam/internal/pb/polarbeamv1"
+	"github.com/devalexllc/polarbeam/internal/server/store"
+	"github.com/devalexllc/polarbeam/internal/server/thresholds"
 )
 
 func validResult(now time.Time) *pb.ProbeResult {
@@ -233,5 +235,79 @@ func TestResultToRowTracerouteRejectsBadHash(t *testing.T) {
 	r.Traceroute = &pb.TracerouteResult{DestReached: true, PathHash: []byte{1, 2, 3}}
 	if _, err := resultToRow(r, now); err == nil {
 		t.Error("complete traceroute with short path_hash must be rejected")
+	}
+}
+
+func TestToOutageResultsGrading(t *testing.T) {
+	probeID := uuid.MustParse("33333333-3333-3333-3333-333333333333")
+	crit := thresholds.T{LatencyWarnUS: 10_000, LatencyCritUS: 40_000, LossWarnPct: 1, LossCritPct: 5}
+	assigned := map[uuid.UUID]probeAssignment{probeID: {TargetID: uuid.NameSpaceURL, Crit: crit}}
+	i32 := func(v int32) *int32 { return &v }
+	f32 := func(v float32) *float32 { return &v }
+	okStatus := int16(pb.ProbeStatus_PROBE_STATUS_OK)
+	base := store.ResultRow{ProbeID: probeID, TargetID: uuid.NameSpaceURL, Time: time.Unix(100, 0)}
+
+	cases := []struct {
+		name     string
+		row      store.ResultRow
+		degraded bool
+	}{
+		{"clean ok", func() store.ResultRow {
+			r := base
+			r.Status = okStatus
+			r.RttAvgUS = i32(5_000)
+			return r
+		}(), false},
+		{"latency breach", func() store.ResultRow {
+			r := base
+			r.Status = okStatus
+			r.RttAvgUS = i32(40_000)
+			return r
+		}(), true},
+		// The latency ladder mirrors the read side: rtt_avg beats total.
+		{"rtt beats total", func() store.ResultRow {
+			r := base
+			r.Status = okStatus
+			r.RttAvgUS = i32(5_000)
+			r.TotalUS = i32(90_000)
+			return r
+		}(), false},
+		{"total when no rtt", func() store.ResultRow {
+			r := base
+			r.Status = okStatus
+			r.TotalUS = i32(90_000)
+			return r
+		}(), true},
+		{"loss breach", func() store.ResultRow {
+			r := base
+			r.Status = okStatus
+			r.LossPct = f32(5)
+			return r
+		}(), true},
+		// Failures are never graded, whatever their metrics say.
+		{"failure ungraded", func() store.ResultRow {
+			r := base
+			r.Status = int16(pb.ProbeStatus_PROBE_STATUS_TIMEOUT)
+			r.RttAvgUS = i32(999_999)
+			return r
+		}(), false},
+	}
+	for _, tc := range cases {
+		out := toOutageResults([]store.ResultRow{tc.row}, assigned)
+		if len(out) != 1 || out[0].Degraded != tc.degraded {
+			t.Errorf("%s: degraded = %v, want %v", tc.name, out[0].Degraded, tc.degraded)
+		}
+		if out[0].Degraded && out[0].DegradedDetail == "" {
+			t.Errorf("%s: breaching result must carry a detail", tc.name)
+		}
+	}
+	// A row without an assignment entry (cannot happen post-filter, but the
+	// map is authoritative) grades as not degraded rather than panicking.
+	orphan := base
+	orphan.Status = okStatus
+	orphan.ProbeID = uuid.NameSpaceOID
+	orphan.RttAvgUS = i32(999_999)
+	if out := toOutageResults([]store.ResultRow{orphan}, assigned); out[0].Degraded {
+		t.Error("unassigned row must not grade degraded")
 	}
 }
