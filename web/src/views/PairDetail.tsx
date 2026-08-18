@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import uPlot from 'uplot'
 import { apiGet } from '../api'
 import Chart from '../components/Chart'
+import PathGraph from '../components/PathGraph'
 import { useTheme } from '../theme'
 import { useTimezone } from '../timezone'
 import {
@@ -133,40 +134,56 @@ function DirectionCard({ title, s, dir }: { title: string; s: DirectionSummary; 
   )
 }
 
-// PathList renders one direction's current traceroute paths as monospace
-// hop chains (a site can field several agents, so this is a list).
-function PathList({ title, dir, paths }: { title: string; dir: 'a' | 'b'; paths: CurrentPath[] }) {
+// PathList renders one direction's current traceroute paths as one merged
+// path graph (a site can field several agents, so edges thicken where their
+// paths agree) with per-agent monospace hop chains as the text fallback.
+function PathList({ src, dst, dir, paths }: { src: string; dst: string; dir: 'a' | 'b'; paths: CurrentPath[] }) {
   return (
     <div className="path-current">
       <h4>
-        <span className={'swatch series-' + dir} /> {title}
+        <span className={'swatch series-' + dir} /> {src} → {dst}
       </h4>
       {paths.length === 0 ? (
         <p className="muted">No traceroute yet. Traces run on a slower cadence.</p>
       ) : (
-        paths.map((p) => (
-          <div key={p.agent_id + ':' + p.probe_id} className="path-chain">
-            <div className="path-meta">
-              <span className="mono">{p.agent}</span>
-              <span className="hint" title={fmtTime(p.updated_at)}>
-                {fmtAgo(p.updated_at)}
-                {p.dest_reached ? '' : ' · incomplete'}
-              </span>
+        <>
+          <PathGraph
+            mode="current"
+            source={src}
+            dest={dst}
+            paths={paths.map((p) => ({
+              key: p.agent_id + ':' + p.probe_id,
+              hops: p.hops,
+              destReached: p.dest_reached,
+            }))}
+          />
+          {paths.map((p) => (
+            <div key={p.agent_id + ':' + p.probe_id} className="path-chain">
+              <div className="path-meta">
+                <span className="mono">{p.agent}</span>
+                <span className="hint" title={fmtTime(p.updated_at)}>
+                  {fmtAgo(p.updated_at)}
+                  {p.dest_reached ? '' : ' · incomplete'}
+                </span>
+              </div>
+              <details className="path-id">
+                <summary>Technical path ID</summary>
+                <code>{p.path_hash}</code>
+              </details>
+              <details className="path-id">
+                <summary>Hop list</summary>
+                <ol className="hops mono">
+                  {p.hops.map((h) => (
+                    <li key={h.ttl}>
+                      {h.addrs.length === 0 ? '*' : h.addrs.join(', ')}
+                      {h.rtt_us.length > 0 && <span className="hint"> {fmtLatency(Math.min(...h.rtt_us))}</span>}
+                    </li>
+                  ))}
+                </ol>
+              </details>
             </div>
-            <details className="path-id">
-              <summary>Technical path ID</summary>
-              <code>{p.path_hash}</code>
-            </details>
-            <ol className="hops mono">
-              {p.hops.map((h) => (
-                <li key={h.ttl}>
-                  {h.addrs.length === 0 ? '*' : h.addrs.join(', ')}
-                  {h.rtt_us.length > 0 && <span className="hint"> {fmtLatency(Math.min(...h.rtt_us))}</span>}
-                </li>
-              ))}
-            </ol>
-          </div>
-        ))
+          ))}
+        </>
       )}
     </div>
   )
@@ -451,8 +468,8 @@ export default function PairDetail({
           <span className="hint">latest complete traceroute per direction</span>
         </div>
         <div className="path-pair">
-          <PathList title={`${a} → ${b}`} dir="a" paths={paths?.a_to_b.paths ?? []} />
-          <PathList title={`${b} → ${a}`} dir="b" paths={paths?.b_to_a.paths ?? []} />
+          <PathList src={a} dst={b} dir="a" paths={paths?.a_to_b.paths ?? []} />
+          <PathList src={b} dst={a} dir="b" paths={paths?.b_to_a.paths ?? []} />
         </div>
       </div>
 

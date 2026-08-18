@@ -194,6 +194,36 @@ func (a *api) handleTargetStages(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleTargetPaths serves the latest complete traceroute per source site —
+// handleTraceroute with sites on the source axis instead of a pair's two
+// directions. Sites whose agents run no traceroute probe against the target
+// yield an empty paths list, so the SPA can hide the card when nothing
+// traces the target.
+func (a *api) handleTargetPaths(w http.ResponseWriter, r *http.Request) {
+	ep, ok := a.targetEndpoints(w, r)
+	if !ok {
+		return
+	}
+	type sourcePathsJSON struct {
+		Site  string            `json:"site"`
+		Paths []currentPathJSON `json:"paths"`
+	}
+	dstTargets := []uuid.UUID{ep.ID}
+	sources := []sourcePathsJSON{}
+	for _, src := range ep.Sources {
+		paths, err := a.db.CurrentPaths(r.Context(), src.AgentIDs, dstTargets)
+		if err != nil {
+			internalError(w, "target paths "+src.Site, err)
+			return
+		}
+		sources = append(sources, sourcePathsJSON{Site: src.Site, Paths: toCurrentPathJSON(paths)})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"target":  toTargetInfoJSON(ep),
+		"sources": sources,
+	})
+}
+
 // targetProbeHealthJSON is agentProbeHealthJSON from the target's side:
 // source agent/site labels replace the target labels, and agent_id is what
 // lets the SPA reuse the per-agent bucket drill-down endpoint.

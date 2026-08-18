@@ -3,6 +3,7 @@ import uPlot from 'uplot'
 import { apiGet } from '../api'
 import Chart from '../components/Chart'
 import HealthStrip, { stripStats, UptimeValue } from '../components/HealthStrip'
+import PathGraph from '../components/PathGraph'
 import { useTheme } from '../theme'
 import { useTimezone } from '../timezone'
 import {
@@ -33,6 +34,7 @@ import type {
   StagePoint,
   TargetHealthProbe,
   TargetHealthResponse,
+  TargetPathsResponse,
   TargetSeriesResponse,
   TargetSourceSummary,
   TargetStagesResponse,
@@ -258,6 +260,7 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
   const [series, setSeries] = useState<TargetSeriesResponse | null>(null)
   const [stages, setStages] = useState<TargetStagesResponse | null>(null)
   const [health, setHealth] = useState<TargetHealthResponse | null>(null)
+  const [paths, setPaths] = useState<TargetPathsResponse | null>(null)
   const [settings, setSettings] = useState<SettingsResponse | null>(null)
   const [error, setError] = useState('')
 
@@ -273,14 +276,16 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
       apiGet<TargetSeriesResponse>(`${base}/series?metric=${metric}&window=${win}`),
       apiGet<TargetStagesResponse>(`${base}/stages?window=${win}`),
       apiGet<TargetHealthResponse>(`${base}/health`),
+      apiGet<TargetPathsResponse>(`${base}/paths`),
       apiGet<SettingsResponse>('/api/v1/settings'),
     ])
-      .then(([su, se, st, he, cfg]) => {
+      .then(([su, se, st, he, pa, cfg]) => {
         if (gen !== loadGen.current) return
         setSummary(su)
         setSeries(se)
         setStages(st)
         setHealth(he)
+        setPaths(pa)
         setSettings(cfg)
         setError('')
       })
@@ -532,6 +537,60 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
               </div>
             )}
           </div>
+
+          {(paths?.sources.some((s) => s.paths.length > 0) ?? false) && (
+            <div className="card">
+              <div className="card-head">
+                <span className="eyebrow">Current path</span>
+                <span className="hint">latest complete traceroute per probing site</span>
+              </div>
+              <div className="path-pair">
+                {paths?.sources
+                  .filter((s) => s.paths.length > 0)
+                  .map((s) => (
+                    <div key={s.site} className="path-current">
+                      <h4>
+                        <span className="swatch series-a" /> {s.site} → {title}
+                      </h4>
+                      <PathGraph
+                        mode="current"
+                        source={s.site}
+                        dest={title}
+                        paths={s.paths.map((p) => ({
+                          key: p.agent_id + ':' + p.probe_id,
+                          hops: p.hops,
+                          destReached: p.dest_reached,
+                        }))}
+                      />
+                      {s.paths.map((p) => (
+                        <div key={p.agent_id + ':' + p.probe_id} className="path-chain">
+                          <div className="path-meta">
+                            <span className="mono">{p.agent}</span>
+                            <span className="hint" title={fmtTime(p.updated_at)}>
+                              {fmtAgo(p.updated_at)}
+                              {p.dest_reached ? '' : ' · incomplete'}
+                            </span>
+                          </div>
+                          <details className="path-id">
+                            <summary>Hop list</summary>
+                            <ol className="hops mono">
+                              {p.hops.map((h) => (
+                                <li key={h.ttl}>
+                                  {h.addrs.length === 0 ? '*' : h.addrs.join(', ')}
+                                  {h.rtt_us.length > 0 && (
+                                    <span className="hint"> {fmtLatency(Math.min(...h.rtt_us))}</span>
+                                  )}
+                                </li>
+                              ))}
+                            </ol>
+                          </details>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
 
           {series.sources.map((src) => {
             const points = densify(src.points, series.resolution_s)

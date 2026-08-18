@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { apiGet } from '../api'
+import PathGraph from '../components/PathGraph'
 import { fmtAgo, fmtTime } from '../format'
 import { useTimezone } from '../timezone'
 import type { Hop, PathEvent, PathEventsResponse, Window } from '../types'
@@ -100,7 +101,19 @@ function EventRow({ e }: { e: PathEvent }) {
               {e.new_path_hash}
             </span>
           </div>
-          <HopDiff oldHops={e.old_hops} newHops={e.new_hops} />
+          <PathGraph
+            mode="diff"
+            source={e.src_site}
+            dest={e.dst_site ?? e.target ?? '?'}
+            paths={[
+              { key: 'old', hops: e.old_hops, destReached: true },
+              { key: 'new', hops: e.new_hops, destReached: true },
+            ]}
+          />
+          <details className="path-id">
+            <summary>Table view</summary>
+            <HopDiff oldHops={e.old_hops} newHops={e.new_hops} />
+          </details>
         </div>
       )}
     </div>

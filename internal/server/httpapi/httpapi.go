@@ -236,6 +236,7 @@ func newHandler(sdb DB, static fs.FS, providers OIDCProviders) http.Handler {
 	mux.Handle("GET /api/v1/targets/{id}/series", a.withSession(a.handleTargetSeries))
 	mux.Handle("GET /api/v1/targets/{id}/stages", a.withSession(a.handleTargetStages))
 	mux.Handle("GET /api/v1/targets/{id}/health", a.withSession(a.handleTargetHealth))
+	mux.Handle("GET /api/v1/targets/{id}/paths", a.withSession(a.handleTargetPaths))
 	mux.Handle("GET /api/v1/outages", a.withSession(a.handleOutages))
 	mux.Handle("GET /api/v1/path-events", a.withSession(a.handlePathEvents))
 	mux.Handle("GET /api/v1/traceroute/{a}/{b}", a.withSession(a.handleTraceroute))
