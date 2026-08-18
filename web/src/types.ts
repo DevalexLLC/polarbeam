@@ -257,6 +257,10 @@ export interface OutageEvent {
 
 export interface OutagesResponse {
   window: string
+  // Server clock at response time; the incident timeline anchors its
+  // bucket grid here so a skewed browser clock cannot shift the chart
+  // away from the server-evaluated window.
+  now: string
   outages: OutageEvent[]
 }
 

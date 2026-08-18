@@ -1351,8 +1351,10 @@ func TestEventsEndpoints(t *testing.T) {
 		t.Fatalf("outages = %d %s", w.Code, w.Body)
 	}
 	body := w.Body.String()
-	// probe_failing rows carry the mapped type name; agent_offline rows null it.
-	if !strings.Contains(body, `"probe_type":"icmp"`) || !strings.Contains(body, `"kind":"agent_offline"`) {
+	// probe_failing rows carry the mapped type name; agent_offline rows null
+	// it. The server clock ships as "now" — the timeline's grid anchor.
+	if !strings.Contains(body, `"probe_type":"icmp"`) || !strings.Contains(body, `"kind":"agent_offline"`) ||
+		!strings.Contains(body, `"now":`) {
 		t.Errorf("outages body missing expected fields: %s", body)
 	}
 

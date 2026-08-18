@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { apiGet } from '../api'
+import IncidentTimeline, {
+  bucketRangeLabel,
+  gridWithYear,
+  gridWithZone,
+  overlapsBucket,
+  timelineGrid,
+} from '../components/IncidentTimeline'
 import { fmtAgo, fmtTime } from '../format'
 import { useTimezone } from '../timezone'
 import type { OutageEvent, OutagesResponse, Window } from '../types'
@@ -152,12 +159,16 @@ function IncidentGroupRow({ group }: { group: IncidentGroup }) {
 }
 
 export default function Outages({ onAuthError }: { onAuthError: (err: unknown) => void }) {
-  useTimezone() // re-render fmtTime tooltips on UTC/local toggle
+  const { mode } = useTimezone() // re-render fmtTime tooltips on UTC/local toggle
   const [win, setWin] = useState<Window>('24h')
   const [filter, setFilter] = useState<IncidentFilter>('active')
   const [query, setQuery] = useState('')
   const [data, setData] = useState<OutagesResponse | null>(null)
   const [error, setError] = useState('')
+  // The timeline's "now" is fetch time, so its bucket grid only shifts on
+  // the 30s poll, never on a re-render (hover, expand, timezone toggle).
+  const [fetchedAt, setFetchedAt] = useState(0)
+  const [selectedBucket, setSelectedBucket] = useState<number | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -166,6 +177,11 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
         .then((res) => {
           if (!cancelled) {
             setData(res)
+            // Anchor the timeline at the server clock the window was
+            // evaluated against — a skewed browser clock would shift the
+            // grid and hide returned incidents off either edge.
+            const serverNow = Date.parse(res.now)
+            setFetchedAt(Number.isFinite(serverNow) ? serverNow : Date.now())
             setError('')
           }
         })
@@ -187,19 +203,42 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
   // The API emits one event per failing series (probe × direction), so a
   // target failing on two probes is two events but one affected target.
   const activeTargetCount = new Set(activeEvents.map(target)).size
+  // Selection is time-addressed (bucket start ms) so a poll that shifts the
+  // grid keeps filtering the same slice; it only clears once the bucket
+  // leaves the window entirely — the HealthStrip pinned-slot reasoning.
+  // The chart's window comes from the SNAPSHOT, not the selector: on a
+  // window switch the stale response keeps its own range and label until
+  // the new one arrives (or the fetch fails), instead of 24h of data being
+  // spread across a chart claiming a year with everything else zero.
+  const timeline = useMemo(() => {
+    if (!fetchedAt || !data) return null
+    const dataWin = (WINDOWS as readonly string[]).includes(data.window) ? (data.window as Window) : win
+    const grid = timelineGrid(dataWin, fetchedAt)
+    const bucket =
+      selectedBucket != null && selectedBucket >= grid.startMs && selectedBucket < grid.endMs ? selectedBucket : null
+    return { grid, bucket, win: dataWin }
+  }, [data, win, fetchedAt, selectedBucket])
+  const bucket = timeline?.bucket ?? null
   const groups = useMemo(() => {
     const needle = query.trim().toLowerCase()
     const filtered = (data?.outages ?? []).filter((event) => {
       const active = event.closed_at == null
       if (filter === 'active' && !active) return false
       if (filter === 'resolved' && active) return false
+      if (timeline?.bucket != null && !overlapsBucket(event, timeline.bucket, timeline.grid.bucketMs, fetchedAt))
+        return false
       if (!needle) return true
       return [target(event), event.kind, event.probe_type, event.error]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(needle))
     })
     return groupIncidents(filtered)
-  }, [data, filter, query])
+  }, [data, filter, query, timeline, fetchedAt])
+  const sliceHasHiddenIncidents =
+    groups.length === 0 &&
+    bucket != null &&
+    timeline != null &&
+    (data?.outages ?? []).some((event) => overlapsBucket(event, bucket, timeline.grid.bucketMs, fetchedAt))
 
   if (error && !data)
     return (
@@ -276,12 +315,42 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
         </label>
         <div className="control-group" role="group" aria-label="Time window">
           {WINDOWS.map((w) => (
-            <button key={w} className={win === w ? 'active' : ''} aria-pressed={win === w} onClick={() => setWin(w)}>
+            <button
+              key={w}
+              className={win === w ? 'active' : ''}
+              aria-pressed={win === w}
+              onClick={() => {
+                setWin(w)
+                setSelectedBucket(null)
+              }}
+            >
               {w}
             </button>
           ))}
         </div>
       </div>
+
+      {timeline && (
+        <section className="card chart-card incident-timeline-card">
+          <div className="card-head">
+            <div>
+              <span className="eyebrow">Last {timeline.win}</span>
+              <h2>Incident timeline</h2>
+            </div>
+            <span className="hint">
+              Height: incidents per slice · color: kind · muted: resolved · click a bar to filter
+              {resolvedCount >= 500 ? ' · oldest resolved past 500 omitted' : ''}
+            </span>
+          </div>
+          <IncidentTimeline
+            events={data.outages}
+            win={timeline.win}
+            nowMs={fetchedAt}
+            selected={bucket}
+            onSelect={setSelectedBucket}
+          />
+        </section>
+      )}
 
       <section className="card incident-card">
         <div className="card-head">
@@ -295,14 +364,49 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
                   : 'Incident groups'}
             </h2>
           </div>
-          <span className="hint">Opens after 3 failures · resolves after 3 successes</span>
+          {bucket != null && timeline ? (
+            <button className="chip bucket-filter-chip" onClick={() => setSelectedBucket(null)}>
+              {bucketRangeLabel(
+                bucket,
+                timeline.grid.bucketMs,
+                timeline.win,
+                mode === 'utc',
+                gridWithZone(timeline.grid, timeline.win, mode === 'utc'),
+                gridWithYear(timeline.grid),
+              )}{' '}
+              <span aria-hidden="true">×</span>
+              <span className="sr-only">Clear time filter</span>
+            </button>
+          ) : (
+            <span className="hint">Opens after 3 failures · resolves after 3 successes</span>
+          )}
         </div>
         {groups.length === 0 ? (
           <div className="empty-state">
+            {/* The timeline deliberately charts the whole window, so a
+                selected slice can hold only incidents the status filter or
+                search hides — name the real culprit instead of blaming the
+                time filter. */}
             <strong>
-              {query ? 'No matching incidents' : filter === 'active' ? 'All clear' : 'No incident history'}
+              {bucket != null
+                ? sliceHasHiddenIncidents
+                  ? 'Incidents in this slice are filtered out'
+                  : 'No incidents in this slice'
+                : query
+                  ? 'No matching incidents'
+                  : filter === 'active'
+                    ? 'All clear'
+                    : 'No incident history'}
             </strong>
-            <span>{query ? 'Try a different target, probe, or error.' : 'The network watch continues.'}</span>
+            <span>
+              {bucket != null
+                ? sliceHasHiddenIncidents
+                  ? 'The status filter or search hides them — switch to All or clear the search.'
+                  : 'Clear the time filter or pick another bar.'
+                : query
+                  ? 'Try a different target, probe, or error.'
+                  : 'The network watch continues.'}
+            </span>
           </div>
         ) : (
           groups.map((group) => <IncidentGroupRow key={group.key} group={group} />)

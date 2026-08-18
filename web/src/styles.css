@@ -2916,6 +2916,72 @@ td.fleet-uptime {
   background: var(--chart-oidc);
 }
 
+/* Incidents: bucketed timeline (48 slices of the selected window, hover
+   card via .strip-tip like the fleet strips, click filters the groups
+   card below). Colors ride the status vars, so both themes are covered. */
+.incident-timeline {
+  display: block;
+  width: 100%;
+  height: 80px;
+  margin-top: 0.5rem;
+  cursor: pointer;
+}
+
+.incident-timeline-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.35rem;
+  color: var(--ink-3);
+  font-size: 0.72rem;
+}
+
+.itl-bar-open.sev-warn {
+  fill: var(--status-warn);
+}
+.itl-bar-open.sev-crit {
+  fill: var(--status-crit);
+}
+.itl-bar-resolved.sev-warn {
+  fill: var(--status-warn);
+  opacity: 0.35;
+}
+.itl-bar-resolved.sev-crit {
+  fill: var(--status-crit);
+  opacity: 0.35;
+}
+.itl-bar-zero {
+  fill: var(--border-strong);
+}
+/* The timeline tip's range labels run long (date+time ranges, sometimes
+   with years); let the pill wrap under the range instead of squeezing it
+   into one-word-per-line. Scoped: other .map-tip heads hold short text. */
+.incident-tip .map-tip-head {
+  flex-wrap: wrap;
+}
+.itl-slot-selected {
+  fill: color-mix(in srgb, var(--ink) 8%, transparent);
+}
+.itl-bar-selected {
+  stroke: var(--ink);
+  stroke-width: 1.25;
+  /* Keeps the outline uniform: preserveAspectRatio="none" would otherwise
+     stretch the stroke with the bars. */
+  vector-effect: non-scaling-stroke;
+}
+
+/* The clear-filter chip is a real button (keyboard-recoverable filter);
+   font: inherit undoes the UA button face, then the chip size is restated
+   because the shorthand also reset it. */
+.bucket-filter-chip {
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8rem;
+}
+.bucket-filter-chip:hover {
+  border-color: var(--border-strong);
+  color: var(--ink);
+}
+
 /* Accounts table controls: search + segmented filters above, pager below. */
 .users-toolbar {
   display: flex;
