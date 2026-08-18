@@ -184,10 +184,13 @@ type AgentBucketFailureGroup struct {
 }
 
 // MatrixRow is the latest result of one (agent, agent-target, probe type)
-// series, mapped to its ordered site pair.
+// series, mapped to its ordered site pair. TargetID is set only by
+// DirectionLatest — the pair page's check chips link to the target detail
+// page — and stays nil from MatrixLatest, which folds to site pairs.
 type MatrixRow struct {
 	SrcSite       string
 	DstSite       string
+	TargetID      *uuid.UUID
 	ProbeType     int16
 	Status        int16
 	Time          time.Time
@@ -847,7 +850,7 @@ func (s *Store) PairLatencySource(ctx context.Context, srcAgents, dstTargets []u
 func (s *Store) DirectionLatest(ctx context.Context, srcAgents, dstTargets []uuid.UUID, horizon time.Duration) ([]MatrixRow, error) {
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(
 		`SELECT DISTINCT ON (agent_id, target_id, probe_type)
-		        probe_type, status, time, %s AS latency_us, %s AS latency_source, loss_pct
+		        target_id, probe_type, status, time, %s AS latency_us, %s AS latency_source, loss_pct
 		   FROM probe_results
 		  WHERE agent_id = ANY($1) AND target_id = ANY($2)
 		    AND time > now() - $3::interval
@@ -861,9 +864,11 @@ func (s *Store) DirectionLatest(ctx context.Context, srcAgents, dstTargets []uui
 	var out []MatrixRow
 	for rows.Next() {
 		var mr MatrixRow
-		if err := rows.Scan(&mr.ProbeType, &mr.Status, &mr.Time, &mr.LatencyUS, &mr.LatencySource, &mr.LossPct); err != nil {
+		var targetID uuid.UUID
+		if err := rows.Scan(&targetID, &mr.ProbeType, &mr.Status, &mr.Time, &mr.LatencyUS, &mr.LatencySource, &mr.LossPct); err != nil {
 			return nil, fmt.Errorf("direction latest: %w", err)
 		}
+		mr.TargetID = &targetID
 		out = append(out, mr)
 	}
 	return out, rows.Err()

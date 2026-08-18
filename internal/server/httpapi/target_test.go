@@ -108,6 +108,11 @@ func TestTargetSummary(t *testing.T) {
 	if len(checks) != 1 || checks[0].(map[string]any)["type"] != "http" {
 		t.Errorf("checks = %#v, want the latest http check", checks)
 	}
+	// omitempty: a row without a target id (this fixture) must drop the key
+	// rather than render null — the matrix response relies on the same rule.
+	if _, present := checks[0].(map[string]any)["target_id"]; present {
+		t.Error("check without TargetID carries target_id; want key absent")
+	}
 	if sources[1].(map[string]any)["site"] != "nyc" {
 		t.Errorf("second source = %#v, want nyc", sources[1])
 	}

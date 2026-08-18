@@ -10,8 +10,12 @@ import (
 )
 
 type probeJSON struct {
-	Type          string    `json:"type"`
-	Status        string    `json:"status"`
+	Type   string `json:"type"`
+	Status string `json:"status"`
+	// TargetID links a pair-detail check chip to its target's detail page.
+	// omitempty: matrix cells fold to site pairs and never carry it, so
+	// the matrix response shape is unchanged.
+	TargetID      *string   `json:"target_id,omitempty"`
 	LatencyUS     *int64    `json:"latency_us"`
 	LatencySource string    `json:"latency_source"`
 	LossPct       *float32  `json:"loss_pct"`
@@ -97,7 +101,7 @@ func foldMatrix(rows []store.MatrixRow, expected []store.SitePair) []cellJSON {
 }
 
 func toProbeJSON(r store.MatrixRow) probeJSON {
-	return probeJSON{
+	p := probeJSON{
 		Type:          probeTypeName(r.ProbeType),
 		Status:        probeStatusName(r.Status),
 		LatencyUS:     r.LatencyUS,
@@ -105,6 +109,11 @@ func toProbeJSON(r store.MatrixRow) probeJSON {
 		LossPct:       r.LossPct,
 		AsOf:          r.Time,
 	}
+	if r.TargetID != nil {
+		tid := r.TargetID.String()
+		p.TargetID = &tid
+	}
+	return p
 }
 
 // directionStatus is the same status rule applied to one direction's
