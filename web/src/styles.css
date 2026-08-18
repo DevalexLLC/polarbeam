@@ -1446,6 +1446,127 @@ tr.hop-changed td {
   overflow-wrap: anywhere;
 }
 
+/* Traceroute path graph (PathGraph.tsx): layered SVG DAG. Node/edge colors
+   ride the status tokens so light/dark stay in lockstep with the tables. */
+.path-graph {
+  padding: 0.2rem 0 0.5rem;
+}
+
+.path-graph svg {
+  display: block;
+}
+
+.path-graph text {
+  font-family: var(--mono);
+  text-anchor: middle;
+  dominant-baseline: middle;
+}
+
+.path-graph .pg-label {
+  font-size: 11px;
+  fill: var(--ink);
+}
+
+.path-graph .pg-sub {
+  font-size: 10px;
+  fill: var(--ink-3);
+}
+
+.path-graph .pg-node rect {
+  fill: var(--surface);
+  stroke: var(--border-strong);
+}
+
+.path-graph .pg-silent rect {
+  fill: var(--surface-2);
+  stroke: var(--border);
+  stroke-dasharray: 3 3;
+}
+
+.path-graph .pg-silent .pg-label {
+  fill: var(--ink-3);
+}
+
+.path-graph .pg-edge {
+  fill: none;
+  stroke: var(--border-strong);
+}
+
+.path-graph .pg-unreached {
+  stroke: var(--status-stale);
+  stroke-dasharray: 4 4;
+}
+
+.path-graph .pg-term rect {
+  fill: var(--surface-2);
+  stroke: var(--border-strong);
+}
+
+.path-graph .pg-dest-ok rect {
+  stroke: var(--status-ok);
+  fill: var(--status-ok-bg);
+}
+
+.path-graph .pg-dest-ok .pg-sub {
+  fill: var(--status-ok);
+}
+
+.path-graph .pg-dest-warn rect {
+  stroke: var(--status-degraded);
+  fill: var(--status-degraded-bg);
+}
+
+.path-graph .pg-dest-warn .pg-sub {
+  fill: var(--status-degraded);
+}
+
+/* Diff mode: elements only in the old path are removed (red, dashed),
+   only in the new are added (green) — the hop-diff badge palette. */
+.path-graph .pg-removed rect,
+.path-graph .pg-edge.pg-removed {
+  stroke: var(--status-down);
+}
+
+.path-graph .pg-edge.pg-removed,
+.path-graph .pg-removed rect {
+  stroke-dasharray: 4 3;
+}
+
+.path-graph .pg-removed .pg-label {
+  fill: var(--status-down);
+}
+
+.path-graph .pg-added rect,
+.path-graph .pg-edge.pg-added {
+  stroke: var(--status-ok);
+}
+
+.path-graph .pg-added .pg-label {
+  fill: var(--status-ok);
+}
+
+.pg-legend {
+  display: flex;
+  gap: 0.6rem;
+  margin-bottom: 0.35rem;
+}
+
+.pg-key {
+  font-size: 0.7rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  padding: 0.08rem 0.4rem;
+  border-radius: 999px;
+  border: 1px dashed var(--status-down);
+  color: var(--status-down);
+}
+
+.pg-key-added {
+  border-style: solid;
+  border-color: var(--status-ok);
+  color: var(--status-ok);
+}
+
 ol.hops {
   margin: 0;
   padding-left: 1.6rem;

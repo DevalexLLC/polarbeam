@@ -59,6 +59,7 @@ func TestTargetEndpointsValidation(t *testing.T) {
 		"/api/v1/targets/" + ep.ID.String() + "/series",
 		"/api/v1/targets/" + ep.ID.String() + "/stages",
 		"/api/v1/targets/" + ep.ID.String() + "/health",
+		"/api/v1/targets/" + ep.ID.String() + "/paths",
 	} {
 		getBody(t, h, nil, url, http.StatusUnauthorized)
 	}
@@ -251,6 +252,51 @@ func TestTargetHealthFold(t *testing.T) {
 }
 
 // TestAgentProbeHealthCarriesTargetID pins the Agents-page link column.
+func TestTargetPathsPerSource(t *testing.T) {
+	f, ep := targetFake()
+	lonAgent := ep.Sources[0].AgentIDs[0]
+	f.paths = []store.CurrentPath{
+		{AgentID: lonAgent, ProbeID: uuid.New(), AgentHostname: "lon-1", UpdatedAt: time.Now(),
+			DestReached: true, PathHash: []byte{0xab, 0xcd},
+			Hops: []byte(`[{"ttl":1,"addrs":["10.0.0.1"],"rtt_us":[500]}]`)},
+	}
+	h := newTestAPI(t, f)
+	cookie, _ := loginAndCookie(t, h, f)
+
+	body := getBody(t, h, cookie, "/api/v1/targets/"+ep.ID.String()+"/paths", http.StatusOK)
+	if got := body["target"].(map[string]any)["name"]; got != "svc" {
+		t.Errorf("target name = %v, want svc", got)
+	}
+	sources := body["sources"].([]any)
+	if len(sources) != 2 {
+		t.Fatalf("sources = %d, want 2", len(sources))
+	}
+	lon := sources[0].(map[string]any)
+	if lon["site"] != "lon" {
+		t.Errorf("first source = %#v, want lon", lon)
+	}
+	paths := lon["paths"].([]any)
+	if len(paths) != 1 {
+		t.Fatalf("lon paths = %d, want 1", len(paths))
+	}
+	p := paths[0].(map[string]any)
+	if p["agent"] != "lon-1" || p["dest_reached"] != true || p["path_hash"] != "abcd" {
+		t.Errorf("lon path = %#v", p)
+	}
+	if hops := p["hops"].([]any); len(hops) != 1 {
+		t.Errorf("hops = %#v, want the seeded hop", p["hops"])
+	}
+	// A site with no traceroute against the target reports an empty list,
+	// never null — the SPA hides the card on all-empty sources.
+	nyc := sources[1].(map[string]any)
+	if nyc["site"] != "nyc" {
+		t.Errorf("second source = %#v, want nyc", nyc)
+	}
+	if paths, ok := nyc["paths"].([]any); !ok || len(paths) != 0 {
+		t.Errorf("nyc paths = %#v, want []", nyc["paths"])
+	}
+}
+
 func TestAgentProbeHealthCarriesTargetID(t *testing.T) {
 	f := newFakeDB()
 	agent := uuid.New()

@@ -390,6 +390,14 @@ export interface TracerouteResponse {
   b_to_a: { paths: CurrentPath[] }
 }
 
+// GET /api/v1/targets/{id}/paths — latest complete traceroute per source
+// site. Sites whose agents run no traceroute against the target carry an
+// empty paths list; the SPA hides the card when every source is empty.
+export interface TargetPathsResponse {
+  target: TargetInfo
+  sources: { site: string; paths: CurrentPath[] }[]
+}
+
 // GET /api/v1/path-mtu/{a}/{b} — latest usable path MTU measurement per
 // direction. Sizes are IP-packet bytes including the IP header.
 export interface CurrentPathMtu {
