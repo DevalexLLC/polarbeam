@@ -48,7 +48,11 @@ func (a *api) handleOutages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"window":  windowName(r),
+		"window": windowName(r),
+		// The dashboard's incident timeline anchors its bucket grid here:
+		// the window is evaluated against this clock, so a skewed browser
+		// clock must not decide where "now" sits on the chart.
+		"now":     time.Now().UTC(),
 		"outages": out,
 	})
 }
