@@ -14,13 +14,23 @@ import {
   latencySourceName,
 } from '../format'
 import { buildThresholdResolver } from '../severity'
+import {
+  CHART_COLORS as COLORS,
+  densify,
+  hasAnyValue,
+  latestLegendPlugin,
+  lossScaleCeiling,
+  statusLabel,
+  thresholdLinesPlugin,
+  toChartData,
+} from '../chartkit'
+import type { Metric, ThresholdLevels } from '../chartkit'
 import type {
   CurrentPath,
   CurrentPathMtu,
   DirectionSummary,
   PairResponse,
   PathMtuResponse,
-  SeriesPoint,
   SeriesResponse,
   SettingsResponse,
   TracerouteResponse,
@@ -29,158 +39,6 @@ import type {
 import { WINDOWS } from '../types'
 
 const POLL_MS = 60_000
-type Metric = 'latency' | 'loss'
-
-// Direction colors are categorical slots 1 (blue, outbound) and 5 (magenta,
-// return) — never slot 2's orange, which reads as the crit/down alarm ramp.
-// Must stay in lockstep with --series-a/--series-b in styles.css; the magenta
-// validates CVD + contrast against blue on both surfaces, so it is unstepped.
-// warn/crit ARE the alarm ramp on purpose: they draw the effective threshold
-// reference lines and mirror --status-warn/--status-crit in styles.css.
-const COLORS = {
-  light: { aToB: '#2a78d6', bToA: '#d55181', grid: '#e0dfd9', axis: '#55544d', warn: '#8a6100', crit: '#cf4a10' },
-  dark: { aToB: '#3987e5', bToA: '#d55181', grid: '#30312d', axis: '#b9b8ae', warn: '#ffc247', crit: '#f0692e' },
-}
-
-// Threshold levels in the CURRENT metric's y units (ms or loss %), read by
-// the chart plugin at draw time. A ref, never options state: mkOptions
-// caches options objects, and baking levels into them would either destroy
-// the plots on every settings poll or draw stale lines.
-interface ThresholdLevels {
-  warn: number | null
-  crit: number | null
-  warnColor: string
-  critColor: string
-}
-
-// Draws one dashed horizontal reference line, skipped when outside the
-// current y-range rather than forcing scale expansion — a 250 ms crit line
-// must not flatten a 2 ms-baseline chart.
-function drawThresholdLine(u: uPlot, v: number | null, color: string) {
-  const yMin = u.scales.y.min
-  const yMax = u.scales.y.max
-  if (v == null || yMin == null || yMax == null || v < yMin || v > yMax) return
-  const y = u.valToPos(v, 'y', true)
-  const ctx = u.ctx
-  ctx.save()
-  ctx.strokeStyle = color
-  ctx.lineWidth = window.devicePixelRatio || 1
-  ctx.setLineDash([6, 6])
-  ctx.beginPath()
-  ctx.moveTo(u.bbox.left, y)
-  ctx.lineTo(u.bbox.left + u.bbox.width, y)
-  ctx.stroke()
-  ctx.restore()
-}
-
-function thresholdLinesPlugin(levels: { current: ThresholdLevels }): uPlot.Plugin {
-  return {
-    hooks: {
-      draw: [
-        (u) => {
-          const { warn, crit, warnColor, critColor } = levels.current
-          drawThresholdLine(u, warn, warnColor)
-          drawThresholdLine(u, crit, critColor)
-        },
-      ],
-    },
-  }
-}
-
-// Wire timings are microseconds; charts plot milliseconds.
-const ms = (v: number | null | undefined) => (v == null ? null : v / 1000)
-
-// withPctl must match the series list mkOptions builds for the same render:
-// uPlot requires data columns and series definitions to agree in count.
-function toChartData(points: SeriesPoint[], metric: Metric, withPctl: boolean): uPlot.AlignedData {
-  const ts = points.map((p) => p.t)
-  if (metric === 'loss') {
-    return [ts, points.map((p) => p.loss_pct)]
-  }
-  const cols: uPlot.AlignedData = [
-    ts,
-    points.map((p) => ms(p.avg_us)),
-    points.map((p) => ms(p.min_us)),
-    points.map((p) => ms(p.max_us)),
-  ]
-  if (withPctl) {
-    cols.push(
-      points.map((p) => ms(p.p50_us)),
-      points.map((p) => ms(p.p95_us)),
-      points.map((p) => ms(p.p99_us)),
-    )
-  }
-  return cols
-}
-
-function hasAnyValue(points: SeriesPoint[], metric: Metric): boolean {
-  return metric === 'loss' ? points.some((p) => p.loss_pct != null) : points.some((p) => p.avg_us != null)
-}
-
-function statusLabel(status: string): string {
-  if (status === 'ok') return 'Healthy'
-  return status.replaceAll('_', ' ').replace(/^\w/, (c) => c.toUpperCase())
-}
-
-function densify(points: SeriesPoint[], resolution: number): SeriesPoint[] {
-  if (points.length < 2) return points
-  const out: SeriesPoint[] = []
-  for (const point of points) {
-    const previous = out.at(-1)
-    if (previous) {
-      for (let t = previous.t + resolution; t < point.t; t += resolution) {
-        out.push({
-          t,
-          min_us: null,
-          avg_us: null,
-          max_us: null,
-          loss_pct: null,
-          samples: 0,
-          failures: 0,
-          p50_us: null,
-          p95_us: null,
-          p99_us: null,
-        })
-      }
-    }
-    out.push(point)
-  }
-  return out
-}
-
-function lossScaleCeiling(series: SeriesResponse): number {
-  const values = [...series.a_to_b.points, ...series.b_to_a.points]
-    .map((p) => p.loss_pct)
-    .filter((v): v is number => v != null)
-  const target = Math.max(0, ...values) * 1.1
-  return [5, 10, 25, 50, 100].find((ceiling) => ceiling >= target) ?? 100
-}
-
-function latestValueIndex(data: uPlot.AlignedData): number {
-  for (let i = data[0].length - 1; i >= 0; i--) {
-    if (data.slice(1).some((column) => column[i] != null)) return i
-  }
-  return 0
-}
-
-// Pins the live legend to the newest measured point whenever the cursor is
-// away. The index is read from the plot's own data at call time, never
-// captured: baking it into the plugin would make the options identity change
-// on every poll, and Chart recreates uPlot whenever options change.
-function latestLegendPlugin(): uPlot.Plugin {
-  const restore = (u: uPlot) => u.setLegend({ idx: latestValueIndex(u.data) })
-  // Never while the operator is hovering: their cursor owns the readout.
-  const restoreIfAway = (u: uPlot) => {
-    if ((u.cursor.left ?? -1) < 0) restore(u)
-  }
-  return {
-    hooks: {
-      ready: [restore],
-      setData: [restoreIfAway],
-      setCursor: [restoreIfAway],
-    },
-  }
-}
 
 function DirectionCard({ title, s, dir }: { title: string; s: DirectionSummary; dir: 'a' | 'b' }) {
   const checks = s.checks ?? []
@@ -478,7 +336,7 @@ export default function PairDetail({
         cursor: { drag: { x: true, y: false } },
         legend: { live: true },
         // thresholdLevels is a stable ref — safe inside the cached options.
-        plugins: [latestLegendPlugin(), thresholdLinesPlugin(thresholdLevels)],
+        plugins: [latestLegendPlugin(), thresholdLinesPlugin(() => thresholdLevels.current)],
         // UTC mode pins axis ticks and the live-legend x readout to UTC
         // wall clock; local mode keeps uPlot's default (browser zone).
         ...(mode === 'utc' ? { tzDate: (ts: number) => uPlot.tzDate(new Date(ts * 1e3), 'Etc/UTC') } : {}),
@@ -509,7 +367,7 @@ export default function PairDetail({
     )
 
   const withPctl = metric === 'latency' && series.source !== 'raw'
-  const lossCeiling = lossScaleCeiling(series)
+  const lossCeiling = lossScaleCeiling([series.a_to_b.points, series.b_to_a.points])
   const sourceLabel = series.source === 'raw' ? 'raw' : `${series.source} aggregate`
   const bucketLabel =
     (series.resolution_s >= 3600

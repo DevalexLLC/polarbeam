@@ -91,16 +91,21 @@ function probeSortKey(p: AgentProbeHealth): string {
 }
 
 function ProbeLabel({ p }: { p: AgentProbeHealth }) {
+  // Target names link to the target detail page; a deleted target has no
+  // id and stays plain text. The row's click guard already ignores clicks
+  // that land on links, so linking here doesn't fight the row toggle.
+  const link = (label: string) =>
+    p.target_id ? <a href={'#/target/' + encodeURIComponent(p.target_id)}>{label}</a> : <span>{label}</span>
   return (
     <div className="probe-strip-label">
       <span className="mono">{p.type}</span>
       {p.target_kind === 'external' ? (
         <>
-          <span>{p.target ?? 'deleted target'}</span>
+          {p.target ? link(p.target) : <span>deleted target</span>}
           <span className="chip">external</span>
         </>
       ) : p.target_kind === 'agent' ? (
-        <span>→ {p.dst_site ?? 'deleted site'}</span>
+        <span>→ {p.dst_site ? link(p.dst_site) : 'deleted site'}</span>
       ) : (
         <span className="hint">deleted target</span>
       )}
