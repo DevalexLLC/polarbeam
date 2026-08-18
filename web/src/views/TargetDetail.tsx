@@ -96,14 +96,22 @@ function hasAnyStage(points: StagePoint[]): boolean {
 
 // SourceCard is DirectionCard from the pair page with a site on the title
 // line instead of a direction; every source shares the outbound swatch —
-// sites are named, not color-coded, and the charts below match.
-function SourceCard({ s }: { s: TargetSourceSummary }) {
+// sites are named, not color-coded, and the charts below match. pairHref
+// links an agent-kind target's source site back to the site-pair page
+// (null for external targets, which have no pair view).
+function SourceCard({ s, pairHref }: { s: TargetSourceSummary; pairHref: string | null }) {
   const checks = s.checks ?? []
   return (
     <div className="pair-card dir-a">
       <h3>
         <span className="swatch series-a" />
-        {s.site}
+        {pairHref ? (
+          <a href={pairHref} title={`Open the ${s.site} pair view`}>
+            {s.site}
+          </a>
+        ) : (
+          s.site
+        )}
         <span style={{ marginLeft: 'auto' }} className={'status-text-' + s.status}>
           {statusLabel(s.status)}
         </span>
@@ -498,7 +506,15 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
         <>
           <div className="pair-cards">
             {summary.sources.map((s) => (
-              <SourceCard key={s.site} s={s} />
+              <SourceCard
+                key={s.site}
+                s={s}
+                pairHref={
+                  target.kind === 'agent' && target.dst_site && target.dst_site !== s.site
+                    ? `#/pair/${encodeURIComponent(s.site)}/${encodeURIComponent(target.dst_site)}`
+                    : null
+                }
+              />
             ))}
           </div>
 

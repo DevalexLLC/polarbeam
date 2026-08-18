@@ -94,23 +94,39 @@ function DirectionCard({ title, s, dir }: { title: string; s: DirectionSummary; 
       </dl>
       {checks.length > 0 && (
         <div className="check-list" aria-label="Latest probe checks">
-          {checks.map((check, index) => (
-            <span
-              key={`${check.type}-${index}`}
-              className={'check-chip ' + (check.status === 'ok' ? 'check-ok' : 'check-failed')}
-              title={[
-                statusLabel(check.status),
-                check.latency_us != null ? fmtLatency(check.latency_us) : '',
-                check.loss_pct != null ? `${check.loss_pct.toFixed(0)}% loss` : '',
-                fmtTime(check.as_of),
-              ]
-                .filter(Boolean)
-                .join(' · ')}
-            >
-              <span className="check-indicator" aria-hidden="true" />
-              {check.type} <strong>{statusLabel(check.status)}</strong>
-            </span>
-          ))}
+          {checks.map((check, index) => {
+            const cls = 'check-chip ' + (check.status === 'ok' ? 'check-ok' : 'check-failed')
+            const chipTitle = [
+              statusLabel(check.status),
+              check.latency_us != null ? fmtLatency(check.latency_us) : '',
+              check.loss_pct != null ? `${check.loss_pct.toFixed(0)}% loss` : '',
+              fmtTime(check.as_of),
+            ]
+              .filter(Boolean)
+              .join(' · ')
+            const body = (
+              <>
+                <span className="check-indicator" aria-hidden="true" />
+                {check.type} <strong>{statusLabel(check.status)}</strong>
+              </>
+            )
+            // Each check row is one (agent, target, probe type) series, so
+            // the chip links to exactly one target detail page.
+            return check.target_id ? (
+              <a
+                key={`${check.type}-${index}`}
+                className={cls}
+                title={chipTitle + ' · open target detail'}
+                href={'#/target/' + encodeURIComponent(check.target_id)}
+              >
+                {body}
+              </a>
+            ) : (
+              <span key={`${check.type}-${index}`} className={cls} title={chipTitle}>
+                {body}
+              </span>
+            )
+          })}
         </div>
       )}
     </div>

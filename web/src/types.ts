@@ -130,6 +130,9 @@ export type CellStatus = 'ok' | 'degraded' | 'down' | 'stale'
 export interface MatrixProbe {
   type: string
   status: string
+  // Present on pair-detail checks (links the chip to its target's detail
+  // page); absent on matrix cell probes, which fold to site pairs.
+  target_id?: string
   latency_us: number | null
   latency_source: string
   loss_pct: number | null
