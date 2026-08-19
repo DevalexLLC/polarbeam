@@ -30,6 +30,7 @@ type fakeDB struct {
 	outages     []store.OutageInfo
 	pathEvents  []store.PathEventInfo
 	agents      []store.AgentListInfo
+	networks    []store.NetworkAdminInfo
 	agentHealth []store.AgentHealthBucket
 	// probe type the last AgentHealthSeries call was told to exclude
 	lastHealthExclude int16
@@ -100,6 +101,11 @@ func newFakeDB() *fakeDB {
 		users:     map[string]*store.UserInfo{},
 		sessions:  map[string]*store.SessionInfo{},
 		oidcUsers: map[string]*store.UserInfo{},
+		// Mirror migration 0017's seed: the default network always exists,
+		// and token/probe handlers unconditionally resolve a network.
+		networks: []store.NetworkAdminInfo{
+			{ID: uuid.New(), Name: "default", DisplayName: "Default", CreatedAt: time.Now()},
+		},
 	}
 }
 

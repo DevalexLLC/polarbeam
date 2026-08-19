@@ -23,12 +23,6 @@ import (
 // unauthenticated.
 var ErrTokenInvalid = errors.New("join token invalid, expired, or already used")
 
-// defaultNetworkSQL resolves the seeded compatibility network inline, so
-// writers that predate an explicit network choice need no new parameters.
-// The row is seeded by migration 0017, so a missing row is a real error
-// (NOT NULL violation), not a default case.
-const defaultNetworkSQL = `(SELECT id FROM networks WHERE name = 'default')`
-
 // EnsureSite returns the site's ID, creating it if it does not exist.
 func (s *Store) EnsureSite(ctx context.Context, name string) (uuid.UUID, error) {
 	var id uuid.UUID
@@ -42,10 +36,12 @@ func (s *Store) EnsureSite(ctx context.Context, name string) (uuid.UUID, error) 
 	return id, nil
 }
 
-// CreateJoinToken mints a single-use enrollment token for a site and returns
-// its cleartext "<id>.<secret>" form — shown exactly once, only the secret's
-// sha256 is stored.
-func (s *Store) CreateJoinToken(ctx context.Context, siteID uuid.UUID, createdBy string, ttl time.Duration) (string, error) {
+// CreateJoinToken mints a single-use enrollment token for a site, bound to
+// the network the enrolling agent will join, and returns its cleartext
+// "<id>.<secret>" form — shown exactly once, only the secret's sha256 is
+// stored. Callers resolve the network name (empty input means 'default')
+// via NetworkIDByName — networks are never auto-created.
+func (s *Store) CreateJoinToken(ctx context.Context, siteID, networkID uuid.UUID, createdBy string, ttl time.Duration) (string, error) {
 	id := uuid.New()
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
@@ -56,12 +52,12 @@ func (s *Store) CreateJoinToken(ctx context.Context, siteID uuid.UUID, createdBy
 
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO join_tokens (id, secret_hash, site_id, network_id, created_by, expires_at)
-		VALUES ($1, $2, $3, `+defaultNetworkSQL+`, $4, now() + $5)`,
-		id, hash[:], siteID, createdBy, ttl)
+		VALUES ($1, $2, $3, $4, $5, now() + $6)`,
+		id, hash[:], siteID, networkID, createdBy, ttl)
 	if isFKViolation(err) {
-		// The site was deleted between the caller's resolve/EnsureSite and
+		// The site or network was deleted between the caller's resolve and
 		// this insert — a 404, not a 500.
-		return "", notFoundf("site %s no longer exists", siteID)
+		return "", notFoundf("site %s or network %s no longer exists", siteID, networkID)
 	}
 	if err != nil {
 		return "", fmt.Errorf("create join token: %w", err)

@@ -198,7 +198,11 @@ func cmdToken(args []string) error {
 	if err != nil {
 		return err
 	}
-	token, err := st.CreateJoinToken(ctx, siteID, os.Getenv("USER"), *ttl)
+	networkID, err := st.NetworkIDByName(ctx, "default")
+	if err != nil {
+		return err
+	}
+	token, err := st.CreateJoinToken(ctx, siteID, networkID, os.Getenv("USER"), *ttl)
 	if err != nil {
 		return err
 	}

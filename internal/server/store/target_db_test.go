@@ -194,16 +194,17 @@ func TestTargetProbeHealth(t *testing.T) {
 		t.Fatalf("UpsertExternalTarget: %v", err)
 	}
 	settings := store.ProbeSettings{ProbeType: 2, Interval: time.Minute, Timeout: 5 * time.Second, Params: map[string]string{}}
-	enabledProbe, err := s.AddDirectProbe(ctx, "site-a", "svc", settings, true, "test")
+	defaultNet := networkIDByName(t, ctx, s, "default")
+	enabledProbe, err := s.AddDirectProbe(ctx, "site-a", "svc", defaultNet, settings, true, "test")
 	if err != nil {
 		t.Fatalf("AddDirectProbe enabled: %v", err)
 	}
-	disabledProbe, err := s.AddDirectProbe(ctx, "site-b", "svc", settings, false, "test")
+	disabledProbe, err := s.AddDirectProbe(ctx, "site-b", "svc", defaultNet, settings, false, "test")
 	if err != nil {
 		t.Fatalf("AddDirectProbe disabled: %v", err)
 	}
 	// site-b direct probe for the silent-series case, enabled but no results.
-	silentProbe, err := s.AddDirectProbe(ctx, "site-b", "svc", settings, true, "test")
+	silentProbe, err := s.AddDirectProbe(ctx, "site-b", "svc", defaultNet, settings, true, "test")
 	if err != nil {
 		t.Fatalf("AddDirectProbe silent: %v", err)
 	}
@@ -311,7 +312,7 @@ func TestAgentProbeHealthTargetID(t *testing.T) {
 		t.Fatalf("UpsertExternalTarget: %v", err)
 	}
 	settings := store.ProbeSettings{ProbeType: 2, Interval: time.Minute, Timeout: 5 * time.Second, Params: map[string]string{}}
-	probeLive, err := s.AddDirectProbe(ctx, "site-a", "svc", settings, true, "test")
+	probeLive, err := s.AddDirectProbe(ctx, "site-a", "svc", networkIDByName(t, ctx, s, "default"), settings, true, "test")
 	if err != nil {
 		t.Fatalf("AddDirectProbe: %v", err)
 	}

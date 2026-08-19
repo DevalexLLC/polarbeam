@@ -196,7 +196,7 @@ func (a *api) handleMeshPost(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	id, err := a.db.UpsertMeshGroup(r.Context(), in.Name)
+	id, err := a.db.UpsertMeshGroup(r.Context(), in.Name, nil)
 	if err != nil {
 		writeStoreError(w, "upsert mesh", err)
 		return
@@ -352,7 +352,12 @@ func (a *api) handleProbePost(w http.ResponseWriter, r *http.Request) {
 	if meshMode {
 		id, err = a.db.AddMeshProbe(r.Context(), in.Mesh, in.settings(probeType), enabled, updatedBy)
 	} else {
-		id, err = a.db.AddDirectProbe(r.Context(), in.Site, in.Target, in.settings(probeType), enabled, updatedBy)
+		networkID, nerr := a.db.NetworkIDByName(r.Context(), "default")
+		if nerr != nil {
+			writeStoreError(w, "resolve network", nerr)
+			return
+		}
+		id, err = a.db.AddDirectProbe(r.Context(), in.Site, in.Target, networkID, in.settings(probeType), enabled, updatedBy)
 	}
 	if err != nil {
 		writeStoreError(w, "add probe", err)

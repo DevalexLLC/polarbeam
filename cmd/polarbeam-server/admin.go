@@ -307,7 +307,11 @@ func cmdProbe(args []string) error {
 		if meshMode {
 			id, err = st.AddMeshProbe(ctx, *mesh, ps, *enabled, cliUpdatedBy)
 		} else {
-			id, err = st.AddDirectProbe(ctx, *site, *target, ps, *enabled, cliUpdatedBy)
+			var networkID uuid.UUID
+			if networkID, err = st.NetworkIDByName(ctx, "default"); err != nil {
+				return err
+			}
+			id, err = st.AddDirectProbe(ctx, *site, *target, networkID, ps, *enabled, cliUpdatedBy)
 		}
 		if err != nil {
 			return err
@@ -425,7 +429,7 @@ func cmdMesh(args []string) error {
 		}
 		defer cancel()
 		defer st.Close()
-		id, err := st.UpsertMeshGroup(ctx, *name)
+		id, err := st.UpsertMeshGroup(ctx, *name, nil)
 		if err != nil {
 			return err
 		}

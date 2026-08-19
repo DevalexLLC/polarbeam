@@ -53,13 +53,27 @@ func (f *fakeDB) ListMeshGroups(_ context.Context) ([]store.MeshGroupInfo, error
 	return f.meshes, nil
 }
 
-func (f *fakeDB) UpsertMeshGroup(_ context.Context, name string) (uuid.UUID, error) {
+func (f *fakeDB) UpsertMeshGroup(_ context.Context, name string, networkID *uuid.UUID) (uuid.UUID, error) {
+	// Mirror the store: nil = no opinion (create on default, keep existing);
+	// explicit mismatch with an existing mesh is a conflict.
+	network := "default"
+	if networkID != nil {
+		network = ""
+		for _, n := range f.networks {
+			if n.ID == *networkID {
+				network = n.Name
+			}
+		}
+	}
 	for _, m := range f.meshes {
 		if m.Name == name {
+			if networkID != nil && m.Network != network {
+				return uuid.Nil, fmt.Errorf("mesh %q already exists on another network (a mesh's network cannot be changed; delete and re-create it)%w", name, store.ErrConflict)
+			}
 			return m.ID, nil
 		}
 	}
-	m := store.MeshGroupInfo{ID: uuid.New(), Name: name}
+	m := store.MeshGroupInfo{ID: uuid.New(), Name: name, Network: network}
 	f.meshes = append(f.meshes, m)
 	return m.ID, nil
 }
@@ -114,15 +128,21 @@ func (f *fakeDB) GetProbeConfig(_ context.Context, id uuid.UUID) (*store.ProbeCo
 	return nil, fmt.Errorf("probe config %s does not exist%w", id, store.ErrNotFound)
 }
 
-func (f *fakeDB) AddDirectProbe(_ context.Context, siteName, targetName string, ps store.ProbeSettings, enabled bool, updatedBy string) (uuid.UUID, error) {
+func (f *fakeDB) AddDirectProbe(_ context.Context, siteName, targetName string, networkID uuid.UUID, ps store.ProbeSettings, enabled bool, updatedBy string) (uuid.UUID, error) {
 	// Mirror the store's rule: agent-kind targets cannot take direct probes.
 	for _, t := range f.targets {
 		if t.Name == targetName && t.Kind == "agent" {
 			return uuid.Nil, fmt.Errorf("target %q is an enrollment-managed agent target: direct probes need an external target (mesh probes cover agent peers)%w", targetName, store.ErrInvalid)
 		}
 	}
+	network := ""
+	for _, n := range f.networks {
+		if n.ID == networkID {
+			network = n.Name
+		}
+	}
 	p := store.ProbeConfigInfo{
-		ID: uuid.New(), Site: siteName, Target: targetName, ProbeType: ps.ProbeType,
+		ID: uuid.New(), Site: siteName, Target: targetName, Network: network, ProbeType: ps.ProbeType,
 		Interval: ps.Interval, Timeout: ps.Timeout, TrainCount: ps.TrainCount,
 		TrainSpacing: ps.TrainSpacing, Params: ps.Params, Enabled: enabled, UpdatedBy: updatedBy,
 	}

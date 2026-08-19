@@ -108,15 +108,21 @@ func (f *fakeDB) ListJoinTokens(_ context.Context) ([]store.JoinTokenInfo, error
 	return f.joinTokens, nil
 }
 
-func (f *fakeDB) CreateJoinToken(_ context.Context, siteID uuid.UUID, createdBy string, ttl time.Duration) (string, error) {
+func (f *fakeDB) CreateJoinToken(_ context.Context, siteID, networkID uuid.UUID, createdBy string, ttl time.Duration) (string, error) {
 	site := ""
 	for _, s := range f.siteConfigs {
 		if s.ID == siteID {
 			site = s.Name
 		}
 	}
+	network := ""
+	for _, n := range f.networks {
+		if n.ID == networkID {
+			network = n.Name
+		}
+	}
 	t := store.JoinTokenInfo{
-		ID: uuid.New(), Site: site, CreatedBy: createdBy,
+		ID: uuid.New(), Site: site, Network: network, CreatedBy: createdBy,
 		CreatedAt: time.Now(), ExpiresAt: time.Now().Add(ttl),
 	}
 	f.joinTokens = append(f.joinTokens, t)

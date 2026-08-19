@@ -95,6 +95,7 @@ type TargetInfo struct {
 type MeshGroupInfo struct {
 	ID         uuid.UUID
 	Name       string
+	Network    string
 	Sites      []string
 	ProbeCount int64
 }
@@ -106,6 +107,7 @@ type ProbeConfigInfo struct {
 	Site         string
 	Target       string
 	Mesh         string
+	Network      string // direct rows: own network; mesh rows: the mesh's
 	ProbeType    int16
 	Interval     time.Duration
 	Timeout      time.Duration
@@ -206,16 +208,38 @@ func (s *Store) DeleteTarget(ctx context.Context, name string) error {
 }
 
 // UpsertMeshGroup creates a mesh group if it does not exist and returns its
-// ID. New meshes land on the default network; the conflict arm deliberately
-// leaves network_id alone so re-upserting an existing mesh never moves it.
-func (s *Store) UpsertMeshGroup(ctx context.Context, name string) (uuid.UUID, error) {
-	var id uuid.UUID
+// ID. A nil networkID expresses no opinion: new meshes land on the default
+// network and re-upserting an existing mesh keeps its network — plain
+// `mesh create` stays idempotent for scripts. A non-nil networkID is an
+// explicit claim: it binds a new mesh, is an idempotent no-op when it
+// matches the existing row, and conflicts when it differs — a mesh's
+// network is immutable (moving it would silently retarget every expanded
+// series), so the mesh must be deleted and re-created to change planes.
+func (s *Store) UpsertMeshGroup(ctx context.Context, name string, networkID *uuid.UUID) (uuid.UUID, error) {
+	netID := networkID
+	if netID == nil {
+		id, err := s.NetworkIDByName(ctx, "default")
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("upsert mesh group %q: %w", name, err)
+		}
+		netID = &id
+	}
+	var (
+		id     uuid.UUID
+		gotNet uuid.UUID
+	)
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO mesh_groups (name, network_id) VALUES ($1, `+defaultNetworkSQL+`)
+		INSERT INTO mesh_groups (name, network_id) VALUES ($1, $2)
 		ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
-		RETURNING id`, name).Scan(&id)
+		RETURNING id, network_id`, name, *netID).Scan(&id, &gotNet)
+	if isFKViolation(err) {
+		return uuid.Nil, notFoundf("network %s no longer exists", *netID)
+	}
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("upsert mesh group %q: %w", name, err)
+	}
+	if networkID != nil && gotNet != *networkID {
+		return uuid.Nil, conflictf("mesh %q already exists on another network (a mesh's network cannot be changed; delete and re-create it)", name)
 	}
 	return id, nil
 }
@@ -387,12 +411,13 @@ func (s *Store) RemoveMeshMember(ctx context.Context, meshName, siteName string)
 // radius).
 func (s *Store) ListMeshGroups(ctx context.Context) ([]MeshGroupInfo, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT g.id, g.name, COALESCE(array_agg(s.name ORDER BY s.name) FILTER (WHERE s.name IS NOT NULL), '{}'),
+		SELECT g.id, g.name, n.name, COALESCE(array_agg(s.name ORDER BY s.name) FILTER (WHERE s.name IS NOT NULL), '{}'),
 		       (SELECT count(*) FROM probe_configs pc WHERE pc.mesh_id = g.id)
 		FROM mesh_groups g
+		JOIN networks n ON n.id = g.network_id
 		LEFT JOIN mesh_members m ON m.mesh_id = g.id
 		LEFT JOIN sites s ON s.id = m.site_id
-		GROUP BY g.id, g.name ORDER BY g.name`)
+		GROUP BY g.id, g.name, n.name ORDER BY g.name`)
 	if err != nil {
 		return nil, fmt.Errorf("list mesh groups: %w", err)
 	}
@@ -400,7 +425,7 @@ func (s *Store) ListMeshGroups(ctx context.Context) ([]MeshGroupInfo, error) {
 	var out []MeshGroupInfo
 	for rows.Next() {
 		var g MeshGroupInfo
-		if err := rows.Scan(&g.ID, &g.Name, &g.Sites, &g.ProbeCount); err != nil {
+		if err := rows.Scan(&g.ID, &g.Name, &g.Network, &g.Sites, &g.ProbeCount); err != nil {
 			return nil, fmt.Errorf("list mesh groups: %w", err)
 		}
 		out = append(out, g)
@@ -454,11 +479,12 @@ func (s *Store) DeleteMeshGroup(ctx context.Context, name string) (int64, error)
 }
 
 // AddDirectProbe assigns a probe of target to every agent at site on the
-// probe's network (the default network until a surface for choosing one
-// exists). Only external targets are accepted: an agent-kind target row carries no
-// address/port/URL (mesh expansion resolves peers via probe_address), so a
-// direct probe against one would fail on an empty destination every run.
-func (s *Store) AddDirectProbe(ctx context.Context, siteName, targetName string, ps ProbeSettings, enabled bool, updatedBy string) (uuid.UUID, error) {
+// given network. Callers resolve the network name (empty input means
+// 'default') via NetworkIDByName. Only external targets are accepted: an
+// agent-kind target row carries no address/port/URL (mesh expansion
+// resolves peers via probe_address), so a direct probe against one would
+// fail on an empty destination every run.
+func (s *Store) AddDirectProbe(ctx context.Context, siteName, targetName string, networkID uuid.UUID, ps ProbeSettings, enabled bool, updatedBy string) (uuid.UUID, error) {
 	siteID, err := s.SiteIDByName(ctx, siteName)
 	if err != nil {
 		return uuid.Nil, err
@@ -480,13 +506,13 @@ func (s *Store) AddDirectProbe(ctx context.Context, siteName, targetName string,
 	var id uuid.UUID
 	err = s.pool.QueryRow(ctx, `
 		INSERT INTO probe_configs (site_id, target_id, network_id, probe_type, interval_ms, timeout_ms, train_count, train_spacing_ms, params, enabled, updated_by)
-		VALUES ($1, $2, `+defaultNetworkSQL+`, $3, $4, $5, $6, $7, $8, $9, $10)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING id`,
-		siteID, targetID, ps.ProbeType, ps.Interval.Milliseconds(), ps.Timeout.Milliseconds(),
+		siteID, targetID, networkID, ps.ProbeType, ps.Interval.Milliseconds(), ps.Timeout.Milliseconds(),
 		ps.TrainCount, ps.TrainSpacing.Milliseconds(), ps.Params, enabled, updatedBy).Scan(&id)
 	if isFKViolation(err) {
-		// Site or target deleted between resolution and insert — 404.
-		return uuid.Nil, notFoundf("site %q or target %q no longer exists", siteName, targetName)
+		// Site, target, or network deleted between resolution and insert — 404.
+		return uuid.Nil, notFoundf("site %q, target %q, or network %s no longer exists", siteName, targetName, networkID)
 	}
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("add probe: %w", err)
@@ -542,14 +568,21 @@ func (s *Store) AddMeshProbe(ctx context.Context, meshName string, ps ProbeSetti
 	return id, nil
 }
 
+// probeConfigSelect resolves names for both assignment shapes. The network
+// comes from the row itself for direct probes and from the mesh group for
+// templates; the probe_configs CHECK guarantees exactly one side is set, so
+// the COALESCE never falls through to ” for a real row.
 const probeConfigSelect = `
 	SELECT pc.id, COALESCE(s.name, ''), COALESCE(t.name, ''), COALESCE(g.name, ''),
 	       pc.probe_type, pc.interval_ms, pc.timeout_ms, pc.train_count, pc.train_spacing_ms,
-	       pc.params, pc.enabled, pc.created_at, pc.updated_at, pc.updated_by
+	       pc.params, pc.enabled, pc.created_at, pc.updated_at, pc.updated_by,
+	       COALESCE(nd.name, ng.name, '')
 	FROM probe_configs pc
 	LEFT JOIN sites s ON s.id = pc.site_id
 	LEFT JOIN targets t ON t.id = pc.target_id
-	LEFT JOIN mesh_groups g ON g.id = pc.mesh_id`
+	LEFT JOIN mesh_groups g ON g.id = pc.mesh_id
+	LEFT JOIN networks nd ON nd.id = pc.network_id
+	LEFT JOIN networks ng ON ng.id = g.network_id`
 
 func scanProbeConfig(row pgx.Row) (ProbeConfigInfo, error) {
 	var (
@@ -558,7 +591,7 @@ func scanProbeConfig(row pgx.Row) (ProbeConfigInfo, error) {
 	)
 	err := row.Scan(&p.ID, &p.Site, &p.Target, &p.Mesh, &p.ProbeType,
 		&intervalMS, &timeoutMS, &p.TrainCount, &trainSpacingMS, &p.Params, &p.Enabled,
-		&p.CreatedAt, &p.UpdatedAt, &p.UpdatedBy)
+		&p.CreatedAt, &p.UpdatedAt, &p.UpdatedBy, &p.Network)
 	if err != nil {
 		return p, err
 	}

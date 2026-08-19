@@ -149,6 +149,7 @@ func (a *api) handleSiteConfigDelete(w http.ResponseWriter, r *http.Request) {
 type joinTokenJSON struct {
 	ID             string     `json:"id"`
 	Site           string     `json:"site"`
+	Network        string     `json:"network"`
 	CreatedBy      string     `json:"created_by"`
 	CreatedAt      time.Time  `json:"created_at"`
 	ExpiresAt      time.Time  `json:"expires_at"`
@@ -166,7 +167,7 @@ func (a *api) handleTokensGet(w http.ResponseWriter, r *http.Request) {
 	out := make([]joinTokenJSON, 0, len(tokens))
 	for _, t := range tokens {
 		j := joinTokenJSON{
-			ID: t.ID.String(), Site: t.Site, CreatedBy: t.CreatedBy,
+			ID: t.ID.String(), Site: t.Site, Network: t.Network, CreatedBy: t.CreatedBy,
 			CreatedAt: t.CreatedAt, ExpiresAt: t.ExpiresAt, UsedAt: t.UsedAt,
 			UsedByHostname: t.UsedByHostname,
 		}
@@ -181,8 +182,9 @@ func (a *api) handleTokensGet(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) handleTokenPost(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Site  string `json:"site"`
-		TTLMS int64  `json:"ttl_ms"`
+		Site    string `json:"site"`
+		Network string `json:"network"`
+		TTLMS   int64  `json:"ttl_ms"`
 	}
 	if !decodeStrict(w, r, &in) {
 		return
@@ -207,10 +209,23 @@ func (a *api) handleTokenPost(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, "resolve site", err)
 		return
 	}
-	ttl := time.Duration(in.TTLMS) * time.Millisecond
-	token, err := a.db.CreateJoinToken(r.Context(), siteID, sessionFrom(r.Context()).Username, ttl)
+	// Empty means the default network; anything else must already exist —
+	// a typo'd network is a 404, never silently defaulted (the enrolling
+	// agent's plane is a trust decision).
+	netName := in.Network
+	if netName == "" {
+		netName = "default"
+	}
+	networkID, err := a.db.NetworkIDByName(r.Context(), netName)
 	if err != nil {
-		// Typed 404 when the site was deleted between resolve and insert.
+		writeStoreError(w, "resolve network", err)
+		return
+	}
+	ttl := time.Duration(in.TTLMS) * time.Millisecond
+	token, err := a.db.CreateJoinToken(r.Context(), siteID, networkID, sessionFrom(r.Context()).Username, ttl)
+	if err != nil {
+		// Typed 404 when the site or network was deleted between resolve
+		// and insert.
 		writeStoreError(w, "create join token", err)
 		return
 	}
@@ -220,6 +235,7 @@ func (a *api) handleTokenPost(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"token":      token,
 		"site":       in.Site,
+		"network":    netName,
 		"expires_at": time.Now().Add(ttl),
 	})
 }

@@ -48,8 +48,9 @@ type DB interface {
 	DeleteSite(ctx context.Context, name string) (int64, error)
 	SiteIDByName(ctx context.Context, name string) (uuid.UUID, error)
 	ListJoinTokens(ctx context.Context) ([]store.JoinTokenInfo, error)
-	CreateJoinToken(ctx context.Context, siteID uuid.UUID, createdBy string, ttl time.Duration) (string, error)
+	CreateJoinToken(ctx context.Context, siteID, networkID uuid.UUID, createdBy string, ttl time.Duration) (string, error)
 	DeleteJoinToken(ctx context.Context, id uuid.UUID) error
+	NetworkIDByName(ctx context.Context, name string) (uuid.UUID, error)
 	ListAgents(ctx context.Context) ([]store.AgentListInfo, error)
 	AgentHealthSeries(ctx context.Context, window, bucket time.Duration, excludeProbeType int16) ([]store.AgentHealthBucket, error)
 	AgentProbeHealth(ctx context.Context, agentID uuid.UUID, window, bucket time.Duration) ([]store.AgentProbeHealthRow, error)
@@ -75,13 +76,13 @@ type DB interface {
 	UpsertExternalTarget(ctx context.Context, name, address string, port int32, url string) (uuid.UUID, error)
 	DeleteTarget(ctx context.Context, name string) error
 	ListMeshGroups(ctx context.Context) ([]store.MeshGroupInfo, error)
-	UpsertMeshGroup(ctx context.Context, name string) (uuid.UUID, error)
+	UpsertMeshGroup(ctx context.Context, name string, networkID *uuid.UUID) (uuid.UUID, error)
 	DeleteMeshGroup(ctx context.Context, name string) (int64, error)
 	AddMeshMember(ctx context.Context, meshName, siteName string) error
 	RemoveMeshMember(ctx context.Context, meshName, siteName string) error
 	ListProbeConfigs(ctx context.Context) ([]store.ProbeConfigInfo, error)
 	GetProbeConfig(ctx context.Context, id uuid.UUID) (*store.ProbeConfigInfo, error)
-	AddDirectProbe(ctx context.Context, siteName, targetName string, ps store.ProbeSettings, enabled bool, updatedBy string) (uuid.UUID, error)
+	AddDirectProbe(ctx context.Context, siteName, targetName string, networkID uuid.UUID, ps store.ProbeSettings, enabled bool, updatedBy string) (uuid.UUID, error)
 	AddMeshProbe(ctx context.Context, meshName string, ps store.ProbeSettings, enabled bool, updatedBy string) (uuid.UUID, error)
 	UpdateProbeConfig(ctx context.Context, id uuid.UUID, ps store.ProbeSettings, enabled bool, updatedBy string) error
 	DeleteProbeConfig(ctx context.Context, id uuid.UUID) error

@@ -16,6 +16,7 @@ import (
 type JoinTokenInfo struct {
 	ID             uuid.UUID
 	Site           string
+	Network        string
 	CreatedBy      string
 	CreatedAt      time.Time
 	ExpiresAt      time.Time
@@ -29,10 +30,11 @@ type JoinTokenInfo struct {
 // and stale unused rows are the operator's to delete.
 func (s *Store) ListJoinTokens(ctx context.Context) ([]JoinTokenInfo, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT t.id, s.name, t.created_by, t.created_at, t.expires_at,
+		SELECT t.id, s.name, n.name, t.created_by, t.created_at, t.expires_at,
 		       t.used_at, t.used_by_agent, a.hostname
 		  FROM join_tokens t
 		  JOIN sites s ON s.id = t.site_id
+		  JOIN networks n ON n.id = t.network_id
 		  LEFT JOIN agents a ON a.id = t.used_by_agent
 		 ORDER BY t.created_at DESC`)
 	if err != nil {
@@ -43,7 +45,7 @@ func (s *Store) ListJoinTokens(ctx context.Context) ([]JoinTokenInfo, error) {
 	var tokens []JoinTokenInfo
 	for rows.Next() {
 		var t JoinTokenInfo
-		if err := rows.Scan(&t.ID, &t.Site, &t.CreatedBy, &t.CreatedAt, &t.ExpiresAt,
+		if err := rows.Scan(&t.ID, &t.Site, &t.Network, &t.CreatedBy, &t.CreatedAt, &t.ExpiresAt,
 			&t.UsedAt, &t.UsedByAgent, &t.UsedByHostname); err != nil {
 			return nil, fmt.Errorf("list join tokens: %w", err)
 		}
