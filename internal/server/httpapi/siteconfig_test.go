@@ -381,6 +381,7 @@ func TestTokenLifecycle(t *testing.T) {
 	var created struct {
 		Token     string    `json:"token"`
 		Site      string    `json:"site"`
+		Network   string    `json:"network"`
 		ExpiresAt time.Time `json:"expires_at"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
@@ -389,9 +390,31 @@ func TestTokenLifecycle(t *testing.T) {
 	if !strings.Contains(created.Token, ".") || created.Site != "nyc" || created.ExpiresAt.IsZero() {
 		t.Errorf("create response = %+v", created)
 	}
+	// An omitted network resolves to the default plane.
+	if created.Network != "default" || f.joinTokens[0].Network != "default" {
+		t.Errorf("network defaulting: response %q, stored %q, want default", created.Network, f.joinTokens[0].Network)
+	}
 	// created_by is the session username, like probe updated_by.
 	if got := f.joinTokens[0].CreatedBy; got != "user-admin" {
 		t.Errorf("created_by = %q, want session username", got)
+	}
+
+	// An explicit network binds the token to it; a typo'd one is a 404,
+	// never silently defaulted.
+	f.networks = append(f.networks, store.NetworkAdminInfo{ID: uuid.New(), Name: "mgmt"})
+	w = doConfig(t, h, "POST", "/api/v1/config/tokens", `{"site":"nyc","network":"mgmt","ttl_ms":3600000}`, cookie, csrf)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST mgmt token = %d: %s", w.Code, w.Body)
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil || created.Network != "mgmt" {
+		t.Errorf("mgmt create response %q (err %v), want network mgmt", w.Body, err)
+	}
+	if got := f.joinTokens[len(f.joinTokens)-1].Network; got != "mgmt" {
+		t.Errorf("stored token network = %q, want mgmt", got)
+	}
+	f.joinTokens = f.joinTokens[:1]
+	if w := doConfig(t, h, "POST", "/api/v1/config/tokens", `{"site":"nyc","network":"typo","ttl_ms":1000}`, cookie, csrf); w.Code != http.StatusNotFound {
+		t.Errorf("POST unknown network = %d, want 404 (never auto-created)", w.Code)
 	}
 
 	if w := doConfig(t, h, "POST", "/api/v1/config/tokens", `{"site":"nope","ttl_ms":1000}`, cookie, csrf); w.Code != http.StatusNotFound {

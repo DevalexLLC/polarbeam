@@ -50,6 +50,7 @@ func (a *api) handleAgents(w http.ResponseWriter, r *http.Request) {
 	type agentJSON struct {
 		ID             string     `json:"id"`
 		Site           string     `json:"site"`
+		Network        string     `json:"network"`
 		Hostname       string     `json:"hostname"`
 		ProbeAddress   string     `json:"probe_address"`
 		Version        string     `json:"version"`
@@ -67,7 +68,7 @@ func (a *api) handleAgents(w http.ResponseWriter, r *http.Request) {
 	out := make([]agentJSON, len(agents))
 	for i, ag := range agents {
 		out[i] = agentJSON{
-			ID: ag.ID.String(), Site: ag.Site, Hostname: ag.Hostname,
+			ID: ag.ID.String(), Site: ag.Site, Network: ag.Network, Hostname: ag.Hostname,
 			ProbeAddress: ag.ProbeAddress, Version: ag.Version, LastSeenAt: ag.LastSeenAt,
 			EnrolledAt: ag.CreatedAt, ConfigHash: ag.ConfigHash,
 			CertNotAfter: ag.CertNotAfter, CertRevokedAt: ag.CertRevokedAt,
