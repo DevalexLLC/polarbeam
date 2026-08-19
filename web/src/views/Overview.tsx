@@ -9,6 +9,7 @@ import type {
   AgentInfo,
   AgentsResponse,
   MatrixResponse,
+  NetworksConfigResponse,
   OutageEvent,
   OutagesResponse,
   SettingsResponse,
@@ -79,7 +80,11 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
   const [outages, setOutages] = useState<OutagesResponse | null>(null)
   const [settings, setSettings] = useState<SettingsResponse | null>(null)
   const [health, setHealth] = useState<AgentHealthResponse | null>(null)
+  const [networks, setNetworks] = useState<string[]>([])
   const [connMode, setConnMode] = useState<ConnectivityMode>('map')
+  // '' = all planes folded together — the pre-networks view. The filter
+  // scopes the Connectivity card only; the stat tiles stay fleet-wide.
+  const [netFilter, setNetFilter] = useState('')
   const [error, setError] = useState('')
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
   const [refreshing, setRefreshing] = useState(false)
@@ -92,13 +97,15 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
       apiGet<OutagesResponse>('/api/v1/outages?window=24h'),
       apiGet<SettingsResponse>('/api/v1/settings'),
       apiGet<AgentHealthResponse>('/api/v1/agents/health?window=24h'),
+      apiGet<NetworksConfigResponse>('/api/v1/config/networks'),
     ])
-      .then(([m, a, o, s, h]) => {
+      .then(([m, a, o, s, h, n]) => {
         setMatrix(m)
         setAgents(a)
         setOutages(o)
         setSettings(s)
         setHealth(h)
+        setNetworks(n.networks.map((net) => net.name))
         setUpdatedAt(new Date())
         setError('')
       })
@@ -123,6 +130,17 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
   }, [load])
 
   const resolveThresholds = useMemo(() => buildThresholdResolver(settings), [settings])
+  // With a plane selected, each cell narrows to its sub-cell (same fields,
+  // folded server-side at (src, dst, network)). A pair with no sub-cell on
+  // the plane drops out and renders "not probed"; an expected-but-silent
+  // plane keeps a stale sub-cell — both honest under the filter.
+  const shownCells = useMemo(() => {
+    if (!matrix || netFilter === '') return matrix?.cells ?? []
+    return matrix.cells.flatMap((cell) => {
+      const sub = cell.networks.find((n) => n.network === netFilter)
+      return sub ? [{ ...cell, ...sub, src: cell.src, dst: cell.dst, networks: [sub] }] : []
+    })
+  }, [matrix, netFilter])
   const active = useMemo(() => outages?.outages.filter((o) => o.closed_at == null) ?? [], [outages])
   const activeGroups = useMemo(() => {
     const groups = new Map<string, { key: string; cause: string; probe: string; events: OutageEvent[] }>()
@@ -255,7 +273,16 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
       </section>
 
       <div className="overview-main-row">
-        <ConnectivityCard matrix={matrix} thresholds={resolveThresholds} mode={connMode} onModeChange={setConnMode} />
+        <ConnectivityCard
+          matrix={matrix}
+          cells={shownCells}
+          networks={networks}
+          network={netFilter}
+          onNetworkChange={setNetFilter}
+          thresholds={resolveThresholds}
+          mode={connMode}
+          onModeChange={setConnMode}
+        />
         <FleetAgentsCard agents={agents.agents} health={health} />
       </div>
     </>

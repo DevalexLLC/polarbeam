@@ -3912,6 +3912,28 @@ button.path-toggle:hover {
   border-radius: var(--radius);
 }
 
+/* Network plane selectors: the Overview connectivity header and the pair
+   detail controls row. Both render only when more than one network exists,
+   so single-network installs never see them. */
+.connectivity-network select,
+.pair-network select {
+  min-height: 32px;
+  padding: 0.3rem 0.55rem;
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.connectivity-network select:focus-visible,
+.pair-network select:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
 .config-mode {
   align-self: start;
 }

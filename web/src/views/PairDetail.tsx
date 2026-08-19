@@ -236,6 +236,9 @@ export default function PairDetail({
 }) {
   const [win, setWin] = useState<Window>('24h')
   const [metric, setMetric] = useState<Metric>('latency')
+  // '' = all planes (the pre-networks fold). The selector renders only when
+  // the pair actually spans more than one network.
+  const [net, setNet] = useState('')
   const { resolved } = useTheme()
   // Also covers the fmtTime tooltips below; mode reaches the charts through
   // mkOptions so axis ticks and the live-legend readout follow the toggle.
@@ -254,13 +257,17 @@ export default function PairDetail({
   const loadGen = useRef(0)
   const load = useCallback(() => {
     const gen = ++loadGen.current
+    // The network filter rides every pair endpoint so summaries, series,
+    // paths, and MTUs all describe the same plane.
+    const netQ = net === '' ? '' : `&network=${encodeURIComponent(net)}`
+    const netQOnly = net === '' ? '' : `?network=${encodeURIComponent(net)}`
     return Promise.all([
-      apiGet<PairResponse>(`/api/v1/pairs/${encodeURIComponent(a)}/${encodeURIComponent(b)}?window=${win}`),
+      apiGet<PairResponse>(`/api/v1/pairs/${encodeURIComponent(a)}/${encodeURIComponent(b)}?window=${win}${netQ}`),
       apiGet<SeriesResponse>(
-        `/api/v1/pairs/${encodeURIComponent(a)}/${encodeURIComponent(b)}/series?metric=${metric}&window=${win}`,
+        `/api/v1/pairs/${encodeURIComponent(a)}/${encodeURIComponent(b)}/series?metric=${metric}&window=${win}${netQ}`,
       ),
-      apiGet<TracerouteResponse>(`/api/v1/traceroute/${encodeURIComponent(a)}/${encodeURIComponent(b)}`),
-      apiGet<PathMtuResponse>(`/api/v1/path-mtu/${encodeURIComponent(a)}/${encodeURIComponent(b)}`),
+      apiGet<TracerouteResponse>(`/api/v1/traceroute/${encodeURIComponent(a)}/${encodeURIComponent(b)}${netQOnly}`),
+      apiGet<PathMtuResponse>(`/api/v1/path-mtu/${encodeURIComponent(a)}/${encodeURIComponent(b)}${netQOnly}`),
       apiGet<SettingsResponse>('/api/v1/settings'),
     ])
       .then(([p, s, tr, pm, st]) => {
@@ -277,7 +284,7 @@ export default function PairDetail({
         if (gen !== loadGen.current) return
         setError(err instanceof Error ? err.message : String(err))
       })
-  }, [a, b, win, metric, onAuthError])
+  }, [a, b, win, metric, net, onAuthError])
 
   useEffect(() => {
     void load()
@@ -329,7 +336,9 @@ export default function PairDetail({
       // charts — whenever loss crossed a ceiling band.
       // The pair and window are keyed too, so a different dataset always gets
       // a fresh plot rather than inheriting one built for the old series.
-      const key = [a, b, win, direction, axisLabel, withPctl, metric === 'loss' ? lossCeiling : '', mode].join('|')
+      // net is keyed so switching planes never reuses a chart built for a
+      // different dataset (same rationale as the pair and window keys).
+      const key = [a, b, win, net, direction, axisLabel, withPctl, metric === 'loss' ? lossCeiling : '', mode].join('|')
       const cached = cache.get(key)
       if (cached) return cached
       const c = COLORS[resolved]
@@ -382,7 +391,7 @@ export default function PairDetail({
     // identity new, so Chart recreates uPlot with the right palette and
     // axis zone and charts update live on toggle. Nothing in the key
     // changes on a poll, so charts survive refreshes.
-  }, [metric, resolved, mode, win, a, b])
+  }, [metric, resolved, mode, win, net, a, b])
 
   if (error && !series)
     return (
@@ -431,11 +440,26 @@ export default function PairDetail({
         </div>
         <span className="sub">
           {bucketLabel}
+          {pair.networks.length > 1 && net === '' ? ` · spans networks: ${pair.networks.join(', ')}` : ''}
+          {net !== '' ? ` · network: ${net}` : ''}
           {error ? ' · refresh failed, showing last data' : ''}
         </span>
       </div>
 
       <div className="controls">
+        {pair.networks.length > 1 && (
+          <label className="pair-network" aria-label="Network">
+            <span className="sr-only">Network</span>
+            <select value={net} onChange={(e) => setNet(e.target.value)}>
+              <option value="">All networks</option>
+              {pair.networks.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <div className="control-group" role="group" aria-label="Metric">
           {(['latency', 'loss'] as const).map((m) => (
             <button

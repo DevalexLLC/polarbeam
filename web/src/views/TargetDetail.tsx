@@ -96,12 +96,20 @@ function hasAnyStage(points: StagePoint[]): boolean {
   return points.some((p) => STAGES.some((s) => p[s.key] != null))
 }
 
+// Sources are (site, network) rows — a site probing the target from two
+// planes appears twice. NUL separator because site names are unrestricted
+// text and NUL cannot appear in Postgres text (WorldMap's pairKey rule).
+function srcKey(site: string, network: string): string {
+  return site + '\u0000' + network
+}
+
 // SourceCard is DirectionCard from the pair page with a site on the title
 // line instead of a direction; every source shares the outbound swatch —
 // sites are named, not color-coded, and the charts below match. pairHref
 // links an agent-kind target's source site back to the site-pair page
-// (null for external targets, which have no pair view).
-function SourceCard({ s, pairHref }: { s: TargetSourceSummary; pairHref: string | null }) {
+// (null for external targets, which have no pair view). label carries the
+// "site · network" form when the target is probed from more than one plane.
+function SourceCard({ s, label, pairHref }: { s: TargetSourceSummary; label: string; pairHref: string | null }) {
   const checks = s.checks ?? []
   return (
     <div className="pair-card dir-a">
@@ -109,10 +117,10 @@ function SourceCard({ s, pairHref }: { s: TargetSourceSummary; pairHref: string 
         <span className="swatch series-a" />
         {pairHref ? (
           <a href={pairHref} title={`Open the ${s.site} pair view`}>
-            {s.site}
+            {label}
           </a>
         ) : (
-          s.site
+          label
         )}
         <span style={{ marginLeft: 'auto' }} className={'status-text-' + s.status}>
           {statusLabel(s.status)}
@@ -190,7 +198,15 @@ function probeSortKey(p: TargetHealthProbe): string {
   return `${p.failing ? 0 : 1} ${p.site} ${p.hostname} ${p.type}`
 }
 
-function StripRows({ probes, bucketS }: { probes: TargetHealthProbe[]; bucketS: number }) {
+function StripRows({
+  probes,
+  bucketS,
+  multiNetwork,
+}: {
+  probes: TargetHealthProbe[]
+  bucketS: number
+  multiNetwork: boolean
+}) {
   const nowS = Date.now() / 1000
   // Sorting a freshly-spread copy, same as Agents' probe sort (toSorted
   // needs a newer TS lib target than the build uses).
@@ -205,7 +221,7 @@ function StripRows({ probes, bucketS }: { probes: TargetHealthProbe[]; bucketS: 
             <div className="probe-strip-label">
               <span className="mono">{p.type}</span>
               <span>
-                {p.site} · {p.hostname}
+                {multiNetwork ? `${p.site} · ${p.network}` : p.site} · {p.hostname}
               </span>
               {p.type === 'traceroute' && (
                 <span
@@ -315,8 +331,10 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
     const dstSite = summary?.target.dst_site ?? null
     const levels: Record<string, ThresholdLevels> = {}
     for (const src of summary?.sources ?? []) {
+      // Keyed by (site, network) — a site probing from two planes has two
+      // source rows; thresholds themselves stay per site pair.
       const effective = dstSite ? resolveThresholds(src.site, dstSite) : (settings?.thresholds ?? null)
-      levels[src.site] =
+      levels[srcKey(src.site, src.network)] =
         metric === 'loss'
           ? {
               warn: effective && effective.loss_warn_pct > 0 ? effective.loss_warn_pct : null,
@@ -339,8 +357,13 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
     // poll that changes only data hands Chart the SAME object so the plot
     // survives; every keyed input change gets a fresh plot.
     const cache = new Map<string, Omit<uPlot.Options, 'width'>>()
-    return (site: string, axisLabel: string, withPctl: boolean, lossCeiling: number): Omit<uPlot.Options, 'width'> => {
-      const key = [id, win, site, axisLabel, withPctl, metric === 'loss' ? lossCeiling : '', mode].join('|')
+    return (
+      source: string, // srcKey(site, network) — one plot identity per source row
+      axisLabel: string,
+      withPctl: boolean,
+      lossCeiling: number,
+    ): Omit<uPlot.Options, 'width'> => {
+      const key = [id, win, source, axisLabel, withPctl, metric === 'loss' ? lossCeiling : '', mode].join('|')
       const cached = cache.get(key)
       if (cached) return cached
       const c = COLORS[resolved]
@@ -378,12 +401,12 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
         axes: [{ ...axisStyle }, { ...axisStyle, label: axisLabel, size: 64 }],
         cursor: { drag: { x: true, y: false } },
         legend: { live: true },
-        // The ref is stable; the closure resolves this chart's site at
-        // draw time, so cached options never draw another site's lines.
+        // The ref is stable; the closure resolves this chart's source at
+        // draw time, so cached options never draw another source's lines.
         plugins: [
           latestLegendPlugin(),
           thresholdLinesPlugin(
-            () => thresholdLevels.current[site] ?? { warn: null, crit: null, warnColor: '', critColor: '' },
+            () => thresholdLevels.current[source] ?? { warn: null, crit: null, warnColor: '', critColor: '' },
           ),
         ],
         ...(mode === 'utc' ? { tzDate: (ts: number) => uPlot.tzDate(new Date(ts * 1e3), 'Etc/UTC') } : {}),
@@ -446,6 +469,10 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
   // Agent-kind targets are titled by site: their targets.name is the
   // synthesized agent:<uuid> handle, never shown (Agents-page convention).
   const title = target.kind === 'agent' ? (target.dst_site ?? 'deleted site') : target.name
+  // Network qualifiers appear only when the sources actually span planes,
+  // so single-network installs render the exact pre-networks labels.
+  const multiNetwork = new Set(summary.sources.map((s) => s.network)).size > 1
+  const srcLabel = (site: string, network: string) => (multiNetwork ? `${site} · ${network}` : site)
   const addressLabel = target.url ? target.url : target.port ? `${target.address}:${target.port}` : target.address
   const withPctl = metric === 'latency' && series.source !== 'raw'
   const lossCeiling = lossScaleCeiling(series.sources.map((s) => s.points))
@@ -512,8 +539,9 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
           <div className="pair-cards">
             {summary.sources.map((s) => (
               <SourceCard
-                key={s.site}
+                key={srcKey(s.site, s.network)}
                 s={s}
+                label={srcLabel(s.site, s.network)}
                 pairHref={
                   target.kind === 'agent' && target.dst_site && target.dst_site !== s.site
                     ? `#/pair/${encodeURIComponent(s.site)}/${encodeURIComponent(target.dst_site)}`
@@ -529,7 +557,7 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
               <span className="hint">per probe series, last 24 h — click a slot for its failures</span>
             </div>
             {health && health.probes.length > 0 ? (
-              <StripRows probes={health.probes} bucketS={health.bucket_s || 1800} />
+              <StripRows probes={health.probes} bucketS={health.bucket_s || 1800} multiNetwork={multiNetwork} />
             ) : (
               <div className="empty-state">
                 <strong>No probe series yet</strong>
@@ -548,13 +576,16 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
                 {paths?.sources
                   .filter((s) => s.paths.length > 0)
                   .map((s) => (
-                    <div key={s.site} className={'path-current' + (isWidePath(s.paths) ? ' path-current-wide' : '')}>
+                    <div
+                      key={srcKey(s.site, s.network)}
+                      className={'path-current' + (isWidePath(s.paths) ? ' path-current-wide' : '')}
+                    >
                       <h4>
-                        <span className="swatch series-a" /> {s.site} → {title}
+                        <span className="swatch series-a" /> {srcLabel(s.site, s.network)} → {title}
                       </h4>
                       <PathGraph
                         mode="current"
-                        source={s.site}
+                        source={srcLabel(s.site, s.network)}
                         dest={title}
                         paths={s.paths.map((p) => ({
                           key: p.agent_id + ':' + p.probe_id,
@@ -596,9 +627,9 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
             const points = densify(src.points, series.resolution_s)
             const axisLabel = metric === 'loss' ? 'Loss (%)' : latencyAxisLabel(src.latency_source)
             return (
-              <div key={src.site} className="card chart-card">
+              <div key={srcKey(src.site, src.network)} className="card chart-card">
                 <h3>
-                  <span className="swatch series-a" /> {src.site} → {title}
+                  <span className="swatch series-a" /> {srcLabel(src.site, src.network)} → {title}
                   {metric === 'latency' && (
                     <span className="metric-source">{latencySourceName(src.latency_source)}</span>
                   )}
@@ -619,7 +650,7 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
                   </div>
                 ) : (
                   <Chart
-                    options={mkOptions(src.site, axisLabel, withPctl, lossCeiling)}
+                    options={mkOptions(srcKey(src.site, src.network), axisLabel, withPctl, lossCeiling)}
                     data={toChartData(points, metric, withPctl)}
                   />
                 )}
