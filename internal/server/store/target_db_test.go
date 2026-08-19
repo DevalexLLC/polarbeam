@@ -26,7 +26,8 @@ func seedAgent(t *testing.T, ctx context.Context, s *store.Store, siteName, host
 	}
 	id := uuid.New()
 	if _, err := s.Pool().Exec(ctx,
-		`INSERT INTO agents (id, site_id, hostname) VALUES ($1, $2, $3)`,
+		`INSERT INTO agents (id, site_id, network_id, hostname)
+		 VALUES ($1, $2, (SELECT id FROM networks WHERE name = 'default'), $3)`,
 		id, siteID, hostname); err != nil {
 		t.Fatalf("insert agent %q: %v", hostname, err)
 	}
@@ -321,8 +322,8 @@ func TestAgentProbeHealthTargetID(t *testing.T) {
 	// at the vanished row.
 	gone, goneProbe := uuid.New(), uuid.New()
 	if _, err := s.Pool().Exec(ctx,
-		`INSERT INTO probe_configs (id, site_id, target_id, probe_type, interval_ms, timeout_ms, enabled, updated_by)
-		 SELECT $1, site_id, $3, 2, 60000, 5000, true, 'test' FROM agents WHERE id = $2`,
+		`INSERT INTO probe_configs (id, site_id, target_id, network_id, probe_type, interval_ms, timeout_ms, enabled, updated_by)
+		 SELECT $1, site_id, $3, network_id, 2, 60000, 5000, true, 'test' FROM agents WHERE id = $2`,
 		goneProbe, a1, target); err != nil {
 		t.Fatalf("insert probe config for gone-target series: %v", err)
 	}

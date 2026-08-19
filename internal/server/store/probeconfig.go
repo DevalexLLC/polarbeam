@@ -205,11 +205,13 @@ func (s *Store) DeleteTarget(ctx context.Context, name string) error {
 	return tx.Commit(ctx)
 }
 
-// UpsertMeshGroup creates a mesh group if it does not exist and returns its ID.
+// UpsertMeshGroup creates a mesh group if it does not exist and returns its
+// ID. New meshes land on the default network; the conflict arm deliberately
+// leaves network_id alone so re-upserting an existing mesh never moves it.
 func (s *Store) UpsertMeshGroup(ctx context.Context, name string) (uuid.UUID, error) {
 	var id uuid.UUID
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO mesh_groups (name) VALUES ($1)
+		INSERT INTO mesh_groups (name, network_id) VALUES ($1, `+defaultNetworkSQL+`)
 		ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
 		RETURNING id`, name).Scan(&id)
 	if err != nil {
@@ -451,8 +453,9 @@ func (s *Store) DeleteMeshGroup(ctx context.Context, name string) (int64, error)
 	return int64(len(templates)), nil
 }
 
-// AddDirectProbe assigns a probe of target to every agent at site. Only
-// external targets are accepted: an agent-kind target row carries no
+// AddDirectProbe assigns a probe of target to every agent at site on the
+// probe's network (the default network until a surface for choosing one
+// exists). Only external targets are accepted: an agent-kind target row carries no
 // address/port/URL (mesh expansion resolves peers via probe_address), so a
 // direct probe against one would fail on an empty destination every run.
 func (s *Store) AddDirectProbe(ctx context.Context, siteName, targetName string, ps ProbeSettings, enabled bool, updatedBy string) (uuid.UUID, error) {
@@ -476,8 +479,8 @@ func (s *Store) AddDirectProbe(ctx context.Context, siteName, targetName string,
 	}
 	var id uuid.UUID
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO probe_configs (site_id, target_id, probe_type, interval_ms, timeout_ms, train_count, train_spacing_ms, params, enabled, updated_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		INSERT INTO probe_configs (site_id, target_id, network_id, probe_type, interval_ms, timeout_ms, train_count, train_spacing_ms, params, enabled, updated_by)
+		VALUES ($1, $2, `+defaultNetworkSQL+`, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING id`,
 		siteID, targetID, ps.ProbeType, ps.Interval.Milliseconds(), ps.Timeout.Milliseconds(),
 		ps.TrainCount, ps.TrainSpacing.Milliseconds(), ps.Params, enabled, updatedBy).Scan(&id)

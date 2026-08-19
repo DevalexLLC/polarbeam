@@ -23,6 +23,12 @@ import (
 // unauthenticated.
 var ErrTokenInvalid = errors.New("join token invalid, expired, or already used")
 
+// defaultNetworkSQL resolves the seeded compatibility network inline, so
+// writers that predate an explicit network choice need no new parameters.
+// The row is seeded by migration 0017, so a missing row is a real error
+// (NOT NULL violation), not a default case.
+const defaultNetworkSQL = `(SELECT id FROM networks WHERE name = 'default')`
+
 // EnsureSite returns the site's ID, creating it if it does not exist.
 func (s *Store) EnsureSite(ctx context.Context, name string) (uuid.UUID, error) {
 	var id uuid.UUID
@@ -49,8 +55,8 @@ func (s *Store) CreateJoinToken(ctx context.Context, siteID uuid.UUID, createdBy
 	hash := sha256.Sum256([]byte(secret))
 
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO join_tokens (id, secret_hash, site_id, created_by, expires_at)
-		VALUES ($1, $2, $3, $4, now() + $5)`,
+		INSERT INTO join_tokens (id, secret_hash, site_id, network_id, created_by, expires_at)
+		VALUES ($1, $2, $3, `+defaultNetworkSQL+`, $4, now() + $5)`,
 		id, hash[:], siteID, createdBy, ttl)
 	if isFKViolation(err) {
 		// The site was deleted between the caller's resolve/EnsureSite and
@@ -99,11 +105,12 @@ func (s *Store) EnrollAgent(ctx context.Context, token, hostname, probeAddress, 
 		usedAt      *time.Time
 		usedByAgent *uuid.UUID
 		usedCSRHash []byte
+		networkID   uuid.UUID
 	)
 	err = tx.QueryRow(ctx, `
-		SELECT secret_hash, expires_at, used_at, used_by_agent, used_csr_hash, site_id
+		SELECT secret_hash, expires_at, used_at, used_by_agent, used_csr_hash, site_id, network_id
 		FROM join_tokens WHERE id = $1 FOR UPDATE`,
-		tokenID).Scan(&storedHash, &expiresAt, &usedAt, &usedByAgent, &usedCSRHash, &siteID)
+		tokenID).Scan(&storedHash, &expiresAt, &usedAt, &usedByAgent, &usedCSRHash, &siteID, &networkID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, uuid.Nil, ErrTokenInvalid
 	}
@@ -123,10 +130,15 @@ func (s *Store) EnrollAgent(ctx context.Context, token, hostname, probeAddress, 
 		agentID = *usedByAgent
 	} else {
 		agentID = uuid.New()
+		// The agent inherits its token's network — assigned server-side when
+		// the token was minted, never claimed by the agent, so a tenant token
+		// cannot enroll into another plane. No agent update path exists, so
+		// the network is immutable for the agent's lifetime (move a box by
+		// re-enrolling), like probe_address.
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO agents (id, site_id, hostname, probe_address, version)
-			VALUES ($1, $2, $3, $4, $5)`,
-			agentID, siteID, hostname, probeAddress, version); err != nil {
+			INSERT INTO agents (id, site_id, network_id, hostname, probe_address, version)
+			VALUES ($1, $2, $3, $4, $5, $6)`,
+			agentID, siteID, networkID, hostname, probeAddress, version); err != nil {
 			return uuid.Nil, uuid.Nil, fmt.Errorf("enroll: create agent: %w", err)
 		}
 		// Every agent is a probeable mesh target from the moment it exists.
