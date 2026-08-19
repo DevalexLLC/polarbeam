@@ -33,10 +33,12 @@ Usage:
                                                      apply database migrations
   polarbeam-server ca init --config <file> [--if-missing]
                                                      create the built-in CA
-  polarbeam-server token create --config <file> --site <name> [--ttl 24h] [--quiet]
+  polarbeam-server token create --config <file> --site <name> [--network <name>] [--ttl 24h] [--quiet]
                                                      issue an agent join token
   polarbeam-server site list|set --config <file> ...
                                                      manage site metadata (map coordinates)
+  polarbeam-server network list|create|set|delete --config <file> ...
+                                                     manage networks (connectivity planes)
   polarbeam-server target add|list|rm --config <file> ...
                                                      manage external probe targets
   polarbeam-server probe add|list|rm --config <file> ...
@@ -69,6 +71,8 @@ func main() {
 		err = cmdToken(os.Args[2:])
 	case "site":
 		err = cmdSite(os.Args[2:])
+	case "network":
+		err = cmdNetwork(os.Args[2:])
 	case "target":
 		err = cmdTarget(os.Args[2:])
 	case "probe":
@@ -168,10 +172,11 @@ func cmdCA(args []string) error {
 
 func cmdToken(args []string) error {
 	if len(args) < 1 || args[0] != "create" {
-		return fmt.Errorf("usage: polarbeam-server token create --config <file> --site <name> [--ttl 24h] [--quiet]")
+		return fmt.Errorf("usage: polarbeam-server token create --config <file> --site <name> [--network <name>] [--ttl 24h] [--quiet]")
 	}
 	fs := flag.NewFlagSet("token create", flag.ExitOnError)
 	site := fs.String("site", "", "site the enrolling agent belongs to (created if missing)")
+	network := fs.String("network", "", "network the enrolling agent joins (default: the 'default' network; must already exist)")
 	ttl := fs.Duration("ttl", 24*time.Hour, "token validity window")
 	quiet := fs.Bool("quiet", false, "print only the token (for scripting)")
 	cfg, err := loadConfig(fs, args[1:])
@@ -194,11 +199,19 @@ func cmdToken(args []string) error {
 		return err
 	}
 
-	siteID, err := st.EnsureSite(ctx, *site)
+	// Sites auto-create on token mint (EnsureSite); networks never do —
+	// the plane an agent enrolls into is a trust decision, so a typo'd
+	// --network must fail loudly. The network resolves FIRST so that
+	// failure leaves no auto-created site behind.
+	netName := *network
+	if netName == "" {
+		netName = "default"
+	}
+	networkID, err := st.NetworkIDByName(ctx, netName)
 	if err != nil {
 		return err
 	}
-	networkID, err := st.NetworkIDByName(ctx, "default")
+	siteID, err := st.EnsureSite(ctx, *site)
 	if err != nil {
 		return err
 	}
@@ -210,7 +223,7 @@ func cmdToken(args []string) error {
 		fmt.Println(token)
 		return nil
 	}
-	fmt.Printf(`join token for site %q (valid %s, single use):
+	fmt.Printf(`join token for site %q, network %q (valid %s, single use):
 
   %s
 
@@ -219,7 +232,7 @@ on the agent host:
   polarbeam-agent enroll --config /etc/polarbeam/agent.yaml \
       --token '%s' \
       --fingerprint sha256:%s
-`, *site, *ttl, token, token, authority.Fingerprint())
+`, *site, netName, *ttl, token, token, authority.Fingerprint())
 	return nil
 }
 

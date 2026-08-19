@@ -258,6 +258,7 @@ func cmdProbe(args []string) error {
 		site := fs.String("site", "", "site whose agents run the probe (with --target)")
 		target := fs.String("target", "", "target name to probe (with --site)")
 		mesh := fs.String("mesh", "", "mesh group to expand over every member agent, both directions (instead of --site/--target)")
+		network := fs.String("network", "", "network whose agents run a direct probe (must already exist; default: 'default'; mesh probes inherit the mesh's network)")
 		typeName := fs.String("type", "", "probe type: icmp, tcp, tls, http, dns, traceroute, ntp, path_mtu")
 		interval := fs.Duration("interval", 30*time.Second, "run interval")
 		timeout := fs.Duration("timeout", 5*time.Second, "per-run timeout")
@@ -283,6 +284,9 @@ func cmdProbe(args []string) error {
 		if directMode && (*site == "" || *target == "") {
 			return fmt.Errorf("--site and --target are both required for a direct probe")
 		}
+		if meshMode && *network != "" {
+			return fmt.Errorf("--network only applies to --site/--target probes (mesh probes inherit the mesh's network)")
+		}
 		problems := probeadmin.ValidateSettings(probeType, *interval, *timeout, *trainCount, *trainSpacing, cliProbeFields)
 		problems = append(problems, probeadmin.ValidateParams(probeType, meshMode, params)...)
 		if len(problems) > 0 {
@@ -307,8 +311,12 @@ func cmdProbe(args []string) error {
 		if meshMode {
 			id, err = st.AddMeshProbe(ctx, *mesh, ps, *enabled, cliUpdatedBy)
 		} else {
+			netName := *network
+			if netName == "" {
+				netName = "default"
+			}
 			var networkID uuid.UUID
-			if networkID, err = st.NetworkIDByName(ctx, "default"); err != nil {
+			if networkID, err = st.NetworkIDByName(ctx, netName); err != nil {
 				return err
 			}
 			id, err = st.AddDirectProbe(ctx, *site, *target, networkID, ps, *enabled, cliUpdatedBy)
@@ -347,14 +355,14 @@ func cmdProbe(args []string) error {
 			fmt.Println("no probes")
 			return nil
 		}
-		fmt.Printf("%-36s  %-5s  %-28s  %-9s  %-8s  %s\n", "ID", "TYPE", "ASSIGNMENT", "INTERVAL", "TIMEOUT", "ENABLED")
+		fmt.Printf("%-36s  %-5s  %-28s  %-12s  %-9s  %-8s  %s\n", "ID", "TYPE", "ASSIGNMENT", "NETWORK", "INTERVAL", "TIMEOUT", "ENABLED")
 		for _, p := range probes {
 			assignment := fmt.Sprintf("mesh:%s", p.Mesh)
 			if p.Mesh == "" {
 				assignment = fmt.Sprintf("%s -> %s", p.Site, p.Target)
 			}
-			fmt.Printf("%-36s  %-5s  %-28s  %-9s  %-8s  %v\n",
-				p.ID, probeadmin.TypeName(p.ProbeType), assignment, p.Interval, p.Timeout, p.Enabled)
+			fmt.Printf("%-36s  %-5s  %-28s  %-12s  %-9s  %-8s  %v\n",
+				p.ID, probeadmin.TypeName(p.ProbeType), assignment, p.Network, p.Interval, p.Timeout, p.Enabled)
 		}
 		return nil
 
@@ -416,6 +424,7 @@ func cmdMesh(args []string) error {
 	case "create":
 		fs := flag.NewFlagSet("mesh create", flag.ExitOnError)
 		name := fs.String("name", "", "mesh group name")
+		network := fs.String("network", "", "network the mesh probes over (must already exist; omit to create on 'default' or keep an existing mesh's binding)")
 		cfg, err := loadConfig(fs, args[1:])
 		if err != nil {
 			return err
@@ -429,7 +438,18 @@ func cmdMesh(args []string) error {
 		}
 		defer cancel()
 		defer st.Close()
-		id, err := st.UpsertMeshGroup(ctx, *name, nil)
+		// nil = no opinion; an explicit --network must resolve and must
+		// match an existing mesh's binding (the store refuses a mismatch —
+		// a mesh's network is immutable).
+		var networkID *uuid.UUID
+		if *network != "" {
+			nid, err := st.NetworkIDByName(ctx, *network)
+			if err != nil {
+				return err
+			}
+			networkID = &nid
+		}
+		id, err := st.UpsertMeshGroup(ctx, *name, networkID)
 		if err != nil {
 			return err
 		}
@@ -487,7 +507,7 @@ func cmdMesh(args []string) error {
 			return nil
 		}
 		for _, m := range meshes {
-			fmt.Printf("%-16s  sites: %s\n", m.Name, strings.Join(m.Sites, ", "))
+			fmt.Printf("%-16s  network: %-16s  sites: %s\n", m.Name, m.Network, strings.Join(m.Sites, ", "))
 		}
 		return nil
 	}
