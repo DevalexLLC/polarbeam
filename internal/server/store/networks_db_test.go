@@ -8,6 +8,7 @@ package store_test
 
 import (
 	"context"
+	"errors"
 	"math/big"
 	"strings"
 	"sync/atomic"
@@ -448,5 +449,164 @@ func TestUpsertMeshGroupKeepsExistingNetwork(t *testing.T) {
 	}
 	if net != mgmt {
 		t.Errorf("re-upsert moved mesh to %s, want it kept on mgmt %s", net, mgmt)
+	}
+}
+
+func TestNetworkCRUD(t *testing.T) {
+	ctx, s := newStore(t)
+
+	id, err := s.CreateNetwork(ctx, "mgmt", "Management")
+	if err != nil {
+		t.Fatalf("CreateNetwork: %v", err)
+	}
+	if got, err := s.NetworkIDByName(ctx, "mgmt"); err != nil || got != id {
+		t.Errorf("NetworkIDByName(mgmt) = %s, %v, want %s", got, err, id)
+	}
+	if _, err := s.CreateNetwork(ctx, "mgmt", ""); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("duplicate create: err = %v, want ErrConflict", err)
+	}
+	if _, err := s.CreateNetwork(ctx, "default", ""); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("re-create 'default': err = %v, want ErrConflict", err)
+	}
+	if _, err := s.NetworkIDByName(ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("NetworkIDByName(nope): err = %v, want ErrNotFound", err)
+	}
+
+	if err := s.UpdateNetwork(ctx, "mgmt", "Management plane"); err != nil {
+		t.Fatalf("UpdateNetwork: %v", err)
+	}
+	if err := s.UpdateNetwork(ctx, "nope", "x"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("UpdateNetwork(nope): err = %v, want ErrNotFound", err)
+	}
+
+	nets, err := s.ListNetworksConfig(ctx)
+	if err != nil {
+		t.Fatalf("ListNetworksConfig: %v", err)
+	}
+	// Sorted by name: default, mgmt.
+	if len(nets) != 2 || nets[0].Name != "default" || nets[1].Name != "mgmt" ||
+		nets[1].DisplayName != "Management plane" || nets[1].ID != id {
+		t.Errorf("ListNetworksConfig = %+v, want default + updated mgmt", nets)
+	}
+}
+
+func TestListNetworksConfigCounts(t *testing.T) {
+	ctx, s := newStore(t)
+	buildNetFixture(t, ctx, s)
+
+	nets, err := s.ListNetworksConfig(ctx)
+	if err != nil {
+		t.Fatalf("ListNetworksConfig: %v", err)
+	}
+	byName := map[string]store.NetworkAdminInfo{}
+	for _, n := range nets {
+		byName[n.Name] = n
+	}
+	// Fixture: 2 default agents + 2 mgmt agents, all via consumed tokens;
+	// mesh m1 and the direct probe live on default.
+	def, mgmt := byName["default"], byName["mgmt"]
+	if def.AgentCount != 2 || def.TokenCount != 2 || def.MeshCount != 1 || def.ProbeCount != 1 {
+		t.Errorf("default counts = %+v, want 2 agents, 2 tokens, 1 mesh, 1 probe", def)
+	}
+	if mgmt.AgentCount != 2 || mgmt.TokenCount != 2 || mgmt.MeshCount != 0 || mgmt.ProbeCount != 0 {
+		t.Errorf("mgmt counts = %+v, want 2 agents, 2 tokens, 0 meshes, 0 probes", mgmt)
+	}
+}
+
+func TestDeleteNetwork(t *testing.T) {
+	ctx, s := newStore(t)
+
+	// Unreferenced network deletes cleanly.
+	if _, err := s.CreateNetwork(ctx, "empty", ""); err != nil {
+		t.Fatalf("CreateNetwork: %v", err)
+	}
+	if n, err := s.DeleteNetwork(ctx, "empty"); err != nil || n != 0 {
+		t.Errorf("delete empty network = %d, %v, want 0, nil", n, err)
+	}
+
+	// Unused tokens are swept with the network.
+	tok := createNetwork(t, ctx, s, "tok")
+	siteID, err := s.EnsureSite(ctx, "site-a")
+	if err != nil {
+		t.Fatalf("EnsureSite: %v", err)
+	}
+	token, err := s.CreateJoinToken(ctx, siteID, "test", time.Hour)
+	if err != nil {
+		t.Fatalf("CreateJoinToken: %v", err)
+	}
+	tokenID, _, _ := strings.Cut(token, ".")
+	if _, err := s.Pool().Exec(ctx,
+		`UPDATE join_tokens SET network_id = $2 WHERE id = $1`, tokenID, tok); err != nil {
+		t.Fatalf("move token: %v", err)
+	}
+	if n, err := s.DeleteNetwork(ctx, "tok"); err != nil || n != 1 {
+		t.Errorf("delete network with unused token = %d, %v, want 1, nil", n, err)
+	}
+	var tokensLeft int
+	if err := s.Pool().QueryRow(ctx,
+		`SELECT count(*) FROM join_tokens WHERE id = $1`, tokenID).Scan(&tokensLeft); err != nil {
+		t.Fatalf("count tokens: %v", err)
+	}
+	if tokensLeft != 0 {
+		t.Errorf("swept token still present after delete")
+	}
+
+	// The seeded fallback is never deletable.
+	if _, err := s.DeleteNetwork(ctx, "default"); !errors.Is(err, store.ErrInvalid) {
+		t.Errorf("delete 'default': err = %v, want ErrInvalid", err)
+	}
+	if _, err := s.DeleteNetwork(ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("delete unknown: err = %v, want ErrNotFound", err)
+	}
+
+	// An enrolled agent blocks the delete, and the refusal rolls back the
+	// unused-token sweep.
+	used := createNetwork(t, ctx, s, "used")
+	enrollNetAgent(t, ctx, s, "site-a", "u1", &used)
+	spare, err := s.CreateJoinToken(ctx, siteID, "test", time.Hour)
+	if err != nil {
+		t.Fatalf("CreateJoinToken: %v", err)
+	}
+	spareID, _, _ := strings.Cut(spare, ".")
+	if _, err := s.Pool().Exec(ctx,
+		`UPDATE join_tokens SET network_id = $2 WHERE id = $1`, spareID, used); err != nil {
+		t.Fatalf("move token: %v", err)
+	}
+	if _, err := s.DeleteNetwork(ctx, "used"); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("delete network with agent: err = %v, want ErrConflict", err)
+	}
+	if err := s.Pool().QueryRow(ctx,
+		`SELECT count(*) FROM join_tokens WHERE id = $1`, spareID).Scan(&tokensLeft); err != nil {
+		t.Fatalf("count tokens: %v", err)
+	}
+	if tokensLeft != 1 {
+		t.Errorf("refused delete did not roll back the unused-token sweep")
+	}
+
+	// A mesh group blocks the delete.
+	meshNet := createNetwork(t, ctx, s, "meshnet")
+	if _, err := s.UpsertMeshGroup(ctx, "m-del"); err != nil {
+		t.Fatalf("UpsertMeshGroup: %v", err)
+	}
+	moveMeshToNetwork(t, ctx, s, "m-del", meshNet)
+	if _, err := s.DeleteNetwork(ctx, "meshnet"); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("delete network with mesh: err = %v, want ErrConflict", err)
+	}
+
+	// A direct probe config blocks the delete.
+	probeNet := createNetwork(t, ctx, s, "probenet")
+	if _, err := s.UpsertExternalTarget(ctx, "svc-del", "203.0.113.9", 443, ""); err != nil {
+		t.Fatalf("UpsertExternalTarget: %v", err)
+	}
+	probeID, err := s.AddDirectProbe(ctx, "site-a", "svc-del", netProbeSettings, true, "test")
+	if err != nil {
+		t.Fatalf("AddDirectProbe: %v", err)
+	}
+	if _, err := s.Pool().Exec(ctx,
+		`UPDATE probe_configs SET network_id = $2 WHERE id = $1`, probeID, probeNet); err != nil {
+		t.Fatalf("move probe: %v", err)
+	}
+	if _, err := s.DeleteNetwork(ctx, "probenet"); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("delete network with probe config: err = %v, want ErrConflict", err)
 	}
 }
