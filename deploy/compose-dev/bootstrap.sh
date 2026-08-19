@@ -104,6 +104,33 @@ if ! printf '%s\n' "$probes" | grep -qE "dns +nyc -> resolver "; then
         --param dns.qname=proxy --param dns.qtype=A
 fi
 
+# Real external targets so dev traceroutes have multi-hop paths (the mesh
+# runs on one bridge network, so site-to-site paths are a single hop).
+# Needs internet egress from the dev box; on an offline box these probes
+# report failures but the stack still works. Traceroute cadence matches the
+# 2m dev mesh cadence; NTP stays at the polite 60s public-pool minimum.
+polarbeam-server target add --config "$CONFIG" \
+    --name ntp-pool --address pool.ntp.org --port 123
+# Address AND url: http probes use the URL, traceroute uses the address.
+polarbeam-server target add --config "$CONFIG" \
+    --name devalex-us --address devalex.us --url https://devalex.us
+if ! printf '%s\n' "$probes" | grep -qE "ntp +syd -> ntp-pool "; then
+    polarbeam-server probe add --config "$CONFIG" \
+        --site syd --target ntp-pool --type ntp --interval 60s --timeout 5s
+fi
+if ! printf '%s\n' "$probes" | grep -qE "http +tx -> devalex-us "; then
+    polarbeam-server probe add --config "$CONFIG" \
+        --site tx --target devalex-us --type http --interval 60s --timeout 10s \
+        --param http.expect_status=200
+fi
+for tr in "syd ntp-pool" "co ntp-pool" "tx devalex-us" "lon devalex-us"; do
+    set -- $tr
+    if ! printf '%s\n' "$probes" | grep -qE "traceroute +$1 -> $2 "; then
+        polarbeam-server probe add --config "$CONFIG" \
+            --site "$1" --target "$2" --type traceroute --interval 2m --timeout 30s
+    fi
+done
+
 # Map coordinates + display names so the Sightlines map is populated out of
 # the box. site set is a plain update — reruns converge.
 echo "bootstrap: seeding site coordinates"

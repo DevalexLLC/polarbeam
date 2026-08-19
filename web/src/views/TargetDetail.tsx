@@ -3,7 +3,7 @@ import uPlot from 'uplot'
 import { apiGet } from '../api'
 import Chart from '../components/Chart'
 import HealthStrip, { stripStats, UptimeValue } from '../components/HealthStrip'
-import PathGraph from '../components/PathGraph'
+import PathGraph, { isWidePath } from '../components/PathGraph'
 import { useTheme } from '../theme'
 import { useTimezone } from '../timezone'
 import {
@@ -548,7 +548,7 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
                 {paths?.sources
                   .filter((s) => s.paths.length > 0)
                   .map((s) => (
-                    <div key={s.site} className="path-current">
+                    <div key={s.site} className={'path-current' + (isWidePath(s.paths) ? ' path-current-wide' : '')}>
                       <h4>
                         <span className="swatch series-a" /> {s.site} → {title}
                       </h4>

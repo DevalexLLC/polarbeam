@@ -15,6 +15,7 @@ import PairDetail from './views/PairDetail'
 import Paths from './views/Paths'
 import Settings from './views/Settings'
 import TargetDetail from './views/TargetDetail'
+import Targets from './views/Targets'
 
 // Hash routing stays dependency-free and preserves the original route names
 // as aliases, so bookmarks survive the information-architecture cleanup.
@@ -45,6 +46,7 @@ type Route =
   | { view: 'overview' }
   | { view: 'pair'; a: string; b: string }
   | { view: 'target'; id: string }
+  | { view: 'targets' }
   | { view: 'incidents' }
   | { view: 'routes' }
   | { view: 'agents'; agent: string | null }
@@ -66,6 +68,7 @@ function parseHash(hash: string): Route {
   if (parts[0] === 'pair' && parts[1] && parts[2]) {
     return { view: 'pair', a: decodeSegment(parts[1]), b: decodeSegment(parts[2]) }
   }
+  if (parts[0] === 'targets') return { view: 'targets' }
   // #/target/<id> is the per-target drill-down; a bad id shows the view's
   // own loud not-found rather than silently landing on the overview.
   if (parts[0] === 'target' && parts[1]) {
@@ -89,11 +92,12 @@ function parseHash(hash: string): Route {
 }
 
 const NAV: Array<{ href: string; label: string; isActive: (r: Route) => boolean }> = [
-  // Pair and target detail are drill-downs reached from other views, so
-  // they keep Overview lit rather than adding nav entries.
-  { href: '#/', label: 'Overview', isActive: (r) => r.view === 'overview' || r.view === 'pair' || r.view === 'target' },
+  // Pair detail is a drill-down reached from other views, so it keeps
+  // Overview lit; target detail lights Targets, its browseable index.
+  { href: '#/', label: 'Overview', isActive: (r) => r.view === 'overview' || r.view === 'pair' },
   { href: '#/incidents', label: 'Incidents', isActive: (r) => r.view === 'incidents' },
   { href: '#/routes', label: 'Routes', isActive: (r) => r.view === 'routes' },
+  { href: '#/targets', label: 'Targets', isActive: (r) => r.view === 'targets' || r.view === 'target' },
   { href: '#/agents', label: 'Agents', isActive: (r) => r.view === 'agents' },
 ]
 
@@ -289,6 +293,8 @@ export default function App() {
           ) : route.view === 'target' ? (
             // Keyed on the id for the same remount-on-switch reason.
             <TargetDetail key={route.id} id={route.id} onAuthError={onAuthError} />
+          ) : route.view === 'targets' ? (
+            <Targets onAuthError={onAuthError} />
           ) : route.view === 'incidents' ? (
             <Outages onAuthError={onAuthError} />
           ) : route.view === 'agents' ? (

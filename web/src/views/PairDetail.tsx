@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import uPlot from 'uplot'
 import { apiGet } from '../api'
 import Chart from '../components/Chart'
-import PathGraph from '../components/PathGraph'
+import PathGraph, { isWidePath } from '../components/PathGraph'
 import { useTheme } from '../theme'
 import { useTimezone } from '../timezone'
 import {
@@ -139,7 +139,7 @@ function DirectionCard({ title, s, dir }: { title: string; s: DirectionSummary; 
 // paths agree) with per-agent monospace hop chains as the text fallback.
 function PathList({ src, dst, dir, paths }: { src: string; dst: string; dir: 'a' | 'b'; paths: CurrentPath[] }) {
   return (
-    <div className="path-current">
+    <div className={'path-current' + (isWidePath(paths) ? ' path-current-wide' : '')}>
       <h4>
         <span className={'swatch series-' + dir} /> {src} → {dst}
       </h4>

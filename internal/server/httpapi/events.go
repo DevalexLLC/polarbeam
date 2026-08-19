@@ -64,6 +64,7 @@ type pathEventJSON struct {
 	SrcSite     string          `json:"src_site"`
 	DstSite     *string         `json:"dst_site"`
 	Target      *string         `json:"target"`
+	TargetID    *string         `json:"target_id"` // null once the target row is deleted
 	OldPathHash string          `json:"old_path_hash"`
 	NewPathHash string          `json:"new_path_hash"`
 	OldHops     json.RawMessage `json:"old_hops"`
@@ -83,9 +84,14 @@ func (a *api) handlePathEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]pathEventJSON, len(events))
 	for i, e := range events {
+		var targetID *string
+		if e.TargetID != nil {
+			s := e.TargetID.String()
+			targetID = &s
+		}
 		out[i] = pathEventJSON{
 			ID: e.ID.String(), Time: e.Time, Agent: e.AgentHostname, SrcSite: e.SrcSite,
-			DstSite: e.DstSite, Target: e.TargetName,
+			DstSite: e.DstSite, Target: e.TargetName, TargetID: targetID,
 			OldPathHash: hex.EncodeToString(e.OldPathHash),
 			NewPathHash: hex.EncodeToString(e.NewPathHash),
 			OldHops:     json.RawMessage(e.OldHops),

@@ -28,6 +28,7 @@ type fakeDB struct {
 	users       map[string]*store.UserInfo
 	sessions    map[string]*store.SessionInfo // key: string(token_hash)
 	outages     []store.OutageInfo
+	pathEvents  []store.PathEventInfo
 	agents      []store.AgentListInfo
 	agentHealth []store.AgentHealthBucket
 	// probe type the last AgentHealthSeries call was told to exclude
@@ -401,7 +402,7 @@ func (f *fakeDB) ListOutages(_ context.Context, _ time.Duration) ([]store.Outage
 	return f.outages, nil
 }
 func (f *fakeDB) ListPathEvents(_ context.Context, _ time.Duration) ([]store.PathEventInfo, error) {
-	return nil, nil
+	return f.pathEvents, nil
 }
 func (f *fakeDB) CurrentPaths(_ context.Context, srcAgents, _ []uuid.UUID) ([]store.CurrentPath, error) {
 	var out []store.CurrentPath
@@ -1424,6 +1425,41 @@ func TestEventsEndpoints(t *testing.T) {
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "nowhere") {
 		t.Errorf("traceroute unknown site = %d %s, want 404 naming it", w.Code, w.Body)
+	}
+}
+
+func TestPathEventsTargetID(t *testing.T) {
+	f := newFakeDB()
+	name := "ntp-pool"
+	tid := uuid.New()
+	when := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
+	f.pathEvents = []store.PathEventInfo{
+		// External target still present: the row links by id.
+		{ID: uuid.New(), Time: when, AgentHostname: "syd-1", SrcSite: "syd",
+			TargetName: &name, TargetID: &tid,
+			OldPathHash: []byte{1}, NewPathHash: []byte{2},
+			OldHops: []byte("[]"), NewHops: []byte("[]")},
+		// Deleted target: name and id both null, the SPA renders plain text.
+		{ID: uuid.New(), Time: when.Add(-time.Hour), AgentHostname: "lon-1", SrcSite: "lon",
+			OldPathHash: []byte{3}, NewPathHash: []byte{4},
+			OldHops: []byte("[]"), NewHops: []byte("[]")},
+	}
+	h := newTestAPI(t, f)
+	cookie, _ := loginAndCookie(t, h, f)
+
+	req := httptest.NewRequest("GET", "/api/v1/path-events", nil)
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("path-events = %d %s", w.Code, w.Body)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"target_id":"`+tid.String()+`"`) {
+		t.Errorf("path-events body missing target_id for live target: %s", body)
+	}
+	if !strings.Contains(body, `"target_id":null`) {
+		t.Errorf("path-events body missing null target_id for deleted target: %s", body)
 	}
 }
 

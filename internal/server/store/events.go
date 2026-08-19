@@ -81,6 +81,7 @@ type PathEventInfo struct {
 	SrcSite       string
 	DstSite       *string
 	TargetName    *string
+	TargetID      *uuid.UUID // nil once the target row is deleted
 	OldPathHash   []byte
 	NewPathHash   []byte
 	OldHops       []byte
@@ -91,7 +92,7 @@ type PathEventInfo struct {
 func (s *Store) ListPathEvents(ctx context.Context, window time.Duration) ([]PathEventInfo, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT pe.id, pe.time, COALESCE(a.hostname, ''), COALESCE(src.name, ''),
-			dst.name, t.name, pe.old_path_hash, pe.new_path_hash, pe.old_hops, pe.new_hops
+			dst.name, t.name, t.id, pe.old_path_hash, pe.new_path_hash, pe.old_hops, pe.new_hops
 		FROM path_events pe
 		LEFT JOIN agents a ON a.id = pe.agent_id
 		LEFT JOIN sites src ON src.id = a.site_id
@@ -110,7 +111,7 @@ func (s *Store) ListPathEvents(ctx context.Context, window time.Duration) ([]Pat
 	for rows.Next() {
 		var e PathEventInfo
 		if err := rows.Scan(&e.ID, &e.Time, &e.AgentHostname, &e.SrcSite,
-			&e.DstSite, &e.TargetName, &e.OldPathHash, &e.NewPathHash, &e.OldHops, &e.NewHops); err != nil {
+			&e.DstSite, &e.TargetName, &e.TargetID, &e.OldPathHash, &e.NewPathHash, &e.OldHops, &e.NewHops); err != nil {
 			return nil, fmt.Errorf("scan path event: %w", err)
 		}
 		out = append(out, e)
