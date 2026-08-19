@@ -12,7 +12,7 @@ real-time visibility into connectivity, latency, packet loss, and service
 reachability between geographically dispersed sites.
 
 PolarBEAM is a central control plane plus a lightweight agent that runs at
-each site. Agents probe each other (full mesh) and designated endpoints over
+each site. Agents probe each other (full mesh within each network plane) and designated endpoints over
 ICMP, TCP, TLS, HTTP(S), DNS, and NTP, run periodic traceroutes, and push results
 to the control plane over mTLS on port 443. The dashboard shows current and
 historical latency (min/avg/max/percentiles), packet loss, jitter, TCP connect

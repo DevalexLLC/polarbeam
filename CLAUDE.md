@@ -138,13 +138,17 @@ Full design + milestone plan: `docs/architecture.md`.
   pulls and offline bundles, DNS/dashboard TLS/SNI proxy setup, explicit
   production migration and CA initialization, container agents,
   mandatory proxied-enrollment `--probe-address`, a baseline two-site mesh,
-  direct-target examples, end-to-end verification, firewall rules,
+  direct-target examples, an optional two-network worked example (§10.4 —
+  tokens carry the network; agents never choose it), end-to-end verification,
+  firewall rules,
   troubleshooting, lifecycle, upgrades, and backup scope. It uses the actual
   dashboard-user CLI (`user add --admin`) and makes clear that probe workloads
   are configured centrally rather than in agent YAML. `README.md` links it as
   the production installation entry point.
 - `docs/probes.md` is the authoritative operator reference for supported probe
-  transports, ports, parameters, assignment models, limitations, firewall
-  requirements, scaling considerations, and large-infrastructure usage
-  patterns. Keep its behavior descriptions in sync with `probeadmin`,
-  `meshexpand`, and the agent prober implementations.
+  transports, ports, parameters, assignment models (both network-scoped:
+  meshes pair only same-network agents, direct probes run only on the
+  probe's network's agents), limitations, firewall requirements, scaling
+  considerations, and large-infrastructure usage patterns. Keep its behavior
+  descriptions in sync with `probeadmin`, `meshexpand`, and the agent prober
+  implementations.

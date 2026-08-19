@@ -22,6 +22,7 @@ for your environment.
 | `<dashboard-name>` | Browser-facing DNS name | `polarbeam.example.com` |
 | `<grpc-name>` | Agent-facing DNS name and TLS SNI | `grpc.polarbeam.example.com` |
 | `<site-name>` | Stable, short site identifier | `nyc`, `lon` |
+| `<network-name>` | Connectivity plane an agent lives on (optional; `default` unless you run separate planes) | `default`, `mgmt` |
 | `<probe-address>` | Address other agents can probe | `10.20.0.15` |
 
 Both DNS names must resolve to the control-plane host. They intentionally use
@@ -31,13 +32,18 @@ dashboard. TLS is not terminated at the proxy.
 
 Use stable site names because they identify sites in mesh and probe
 assignments. Each agent also needs a stable probe address reachable from the
-other agent sites. This may be a private WAN address, VPN address, or resolvable
-hostname. Do not use `localhost`, a container-only address, or a NAT address
-that peers cannot reach.
+other agents on its network. This may be a private WAN address, VPN address,
+or resolvable hostname. Do not use `localhost`, a container-only address, or a
+NAT address that peers cannot reach.
+
+Networks matter only when one deployment monitors mutually unreachable planes
+— for example a management network plus a customer-facing one at the same
+sites. Every example in this guide uses the built-in `default` network, which
+requires no setup; section 10.4 shows the two-network extension.
 
 For a useful first deployment, prepare at least two agent systems in different
 sites. A single agent can monitor external targets, but directional site-to-site
-measurements require two sites.
+measurements require two sites (with agents on the same network).
 
 ### Host prerequisites
 
@@ -550,9 +556,9 @@ hostname errors that browsers will also encounter.
 ## 6. Understand agent configuration
 
 Agent YAML configures only the local agent and its control-plane connection.
-Probe targets, mesh membership, intervals, and timeouts are configured
-centrally after enrollment and streamed to agents. Do not put probe definitions
-in `agent.yaml`.
+Probe targets, mesh membership, network membership, intervals, and timeouts
+are configured centrally after enrollment and streamed to agents. Do not put
+probe definitions in `agent.yaml`.
 
 Use this configuration on every agent, changing only values that differ for
 that host:
@@ -587,11 +593,12 @@ The fields mean:
 
 The enrollment command also takes `--probe-address`. This is not the control
 plane address. It is the IP address or DNS name other agents should probe when
-this agent participates in a mesh. Always supply it: without it the control
-plane falls back to the observed connection source — with the bundled proxy's
-PROXY protocol that is the agent's real egress address rather than the proxy,
-but an egress address is still usually a NAT boundary, not the address other
-sites can probe.
+this agent participates in a mesh — reachable on the agent's own network,
+since meshes pair only same-network agents. Always supply it: without it the
+control plane falls back to the observed connection source — with the bundled
+proxy's PROXY protocol that is the agent's real egress address rather than the
+proxy, but an egress address is still usually a NAT boundary, not the address
+other sites can probe.
 
 ## 7. Create an enrollment token
 
@@ -603,6 +610,16 @@ docker compose exec server polarbeam-server token create \
   --config /etc/polarbeam/server.yaml \
   --site <site-name> --ttl 24h
 ```
+
+The token also fixes which network the agent joins. Omitted, that is the
+built-in `default` network — right for every single-plane deployment. To
+enroll onto another plane, pass `--network <network-name>`; unlike sites,
+networks are never auto-created — create one first with
+`polarbeam-server network create --name <network-name>` or on the dashboard's
+**Networks** tab (a token naming an unknown network is refused). The network
+is fixed at token creation, the enrolling agent cannot choose or change it,
+and moving an agent between networks later means re-enrolling it with a token
+for the other network.
 
 An administrator can also issue tokens from the dashboard under
 **user menu -> Settings -> Enrollment**, after creating the site on the
@@ -618,7 +635,8 @@ Save both values printed by the command:
 - the `sha256:<hex>` built-in CA fingerprint
 
 Transfer them to the intended agent securely. If a site has multiple agents,
-create a separate token for each agent using the same site name.
+create a separate token for each agent using the same site name — and, when
+the agents live on different planes, each token carries its agent's network.
 
 Enrollment deliberately has no trust-on-first-use mode. The examples below pin
 the printed fingerprint. As an alternative, export the public CA certificate,
@@ -668,6 +686,9 @@ docker run --rm \
   --fingerprint 'sha256:<hex>' \
   --probe-address '<probe-address>'
 ```
+
+There is no network flag here: the site and network both come from the token,
+and the agent never chooses either.
 
 `--cap-add NET_RAW` is required even though enrollment sends no ICMP. The
 image's binary carries the `cap_net_raw+ep` file capability, and the kernel
@@ -766,9 +787,13 @@ docker compose exec server polarbeam-server mesh list \
   --config /etc/polarbeam/server.yaml
 ```
 
-A mesh expands into ordered directions. With two sites, PolarBEAM creates
-both `nyc -> lon` and `lon -> nyc` assignments using the probe addresses
-recorded during enrollment.
+A mesh expands into ordered directions between agents on its network. With
+two sites whose agents are all on the same network (as in this guide's
+`default`-only baseline), PolarBEAM creates both `nyc -> lon` and
+`lon -> nyc` assignments using the probe addresses recorded during
+enrollment. `mesh create` takes an optional `--network <network-name>` (fixed
+at creation); the mesh then pairs only that plane's agents at its member
+sites — see section 10.4.
 
 ### 10.2 Add baseline ICMP and traceroute probes
 
@@ -818,7 +843,10 @@ docker compose exec server polarbeam-server target add \
   --name status-page --url https://status.example.com/health
 ```
 
-Assign direct probes to the site whose agents should execute them:
+Assign direct probes to the site — and, on multi-plane deployments, the
+network — whose agents should execute them. Every agent on the probe's
+network at that site runs the probe (`--network` defaults to `default`;
+mesh probes instead inherit their mesh's network):
 
 ```sh
 docker compose exec server polarbeam-server probe add \
@@ -850,6 +878,71 @@ Probe-specific rules include:
 Avoid `*.insecure_skip_verify=true` except for intentionally self-signed test
 services. Unknown parameters are rejected rather than silently ignored.
 
+### 10.4 Optional: scope monitoring to a second network
+
+Skip this section unless some of your agents live on a separate connectivity
+plane that the baseline agents cannot reach — for example a management network
+alongside the customer-facing one at the same sites. Networks keep those
+planes apart: a mesh pairs only agents on its own network, and a direct probe
+runs only on its network's agents, so agents that cannot reach each other are
+never asked to probe each other.
+
+Create the network first — networks are never auto-created:
+
+```sh
+docker compose exec server polarbeam-server network create \
+  --config /etc/polarbeam/server.yaml \
+  --name mgmt --display-name 'Management'
+```
+
+Mint tokens bound to it and enroll the plane's agents exactly as in sections
+7–9. Each agent's `--probe-address` must be reachable on that plane:
+
+```sh
+docker compose exec server polarbeam-server token create \
+  --config /etc/polarbeam/server.yaml \
+  --site nyc --network mgmt --ttl 24h
+```
+
+Give the plane its own mesh over the same sites, and scope any direct probes
+that should run from its agents:
+
+```sh
+docker compose exec server polarbeam-server mesh create \
+  --config /etc/polarbeam/server.yaml --name mgmt-wan --network mgmt
+
+docker compose exec server polarbeam-server mesh add \
+  --config /etc/polarbeam/server.yaml --name mgmt-wan --site nyc
+
+docker compose exec server polarbeam-server mesh add \
+  --config /etc/polarbeam/server.yaml --name mgmt-wan --site lon
+
+docker compose exec server polarbeam-server probe add \
+  --config /etc/polarbeam/server.yaml \
+  --mesh mgmt-wan --type icmp --interval 30s --timeout 5s
+
+docker compose exec server polarbeam-server probe add \
+  --config /etc/polarbeam/server.yaml \
+  --site nyc --network mgmt --target public-dns --type dns \
+  --interval 30s --timeout 5s --param dns.qname=example.com
+```
+
+The site list does not change — `nyc` is still one site, one map dot — but
+the two meshes now measure disjoint agent pairs over the same sites. On the
+dashboard, the Overview connectivity card gains a network selector (it is
+hidden while only one network exists): **All networks** folds both planes into
+one cell per site pair exactly as before, and selecting `mgmt` or `default`
+shows that plane alone, with pairs the plane does not probe marked
+"not probed". The map keeps one dot per site and breaks the site's health out
+per network in its detail card, and the pair pages grow the same selector.
+The **Agents** page shows each agent's network. The dashboard
+equivalent of everything above lives on **user menu -> Settings -> Networks**
+plus network pickers on the Enrollment, Meshes, and Probes tabs.
+
+A network with no remaining agents, meshes, or probes can be deleted from the
+Networks tab or with `polarbeam-server network delete`; unused join tokens are
+revoked with it. The `default` network cannot be deleted.
+
 ## 11. Verify the complete system
 
 Wait at least one probe interval plus the roughly 30-second configuration
@@ -863,7 +956,11 @@ distribution interval, then verify each layer:
 5. `probe list` shows the enabled mesh and direct probes you created.
 6. The dashboard **Overview** map or matrix shows both directions between
    mesh sites.
-7. The **Routes** page begins to populate after traceroute runs.
+7. Multi-network deployments only: the connectivity card's network selector
+   lists every plane, and each plane's view shows only its own agent pairs —
+   a pair appearing under the wrong network means an agent was enrolled with
+   the wrong token.
+8. The **Routes** page begins to populate after traceroute runs.
 
 Useful logs while verifying are:
 
@@ -1123,8 +1220,13 @@ rejected by design — debug through the proxy.
 
 ### Agents connect but mesh results are absent or target the proxy
 
-The agent was probably enrolled without the correct `--probe-address`.
-Re-enroll with a fresh token and a peer-reachable address. Enrollment refuses
+First check the network dimension: a mesh pairs only agents on its own
+network, so an agent enrolled with a token for the wrong network is silently
+outside every mesh on the right one. Compare the agent's network (the
+**Agents** page's network column) with the mesh's (`mesh list`). Both an
+agent's network and its `--probe-address` are fixed at
+enrollment, so the fix is the same for either mistake: re-enroll with a fresh
+token for the correct network and a peer-reachable address. Enrollment refuses
 to overwrite identity state; stop the agent and deliberately remove only that
 agent's `<state_dir>/pki` directory or replace its dedicated state volume
 before re-enrolling. Treat this as identity replacement, not routine repair.

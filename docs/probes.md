@@ -83,9 +83,11 @@ the target address — a policy that drops them makes every path look like a
 PMTU black hole. The IPv6 equivalents are required for IPv6 targets. A blanket
 ICMP or ICMPv6 deny policy breaks these probes.
 
-Mesh members are destinations as well as sources. When sites filter traffic
-independently, each member's probe address must also accept the corresponding
-inbound traffic from its peers:
+Mesh members are destinations as well as sources, and probe traffic never
+crosses networks: a mesh pairs only agents on its own network, so each plane's
+firewall envelope covers only that plane's probe addresses. When sites filter
+traffic independently, each member's probe address must also accept the
+corresponding inbound traffic from its same-network peers:
 
 | Protocol/port | Purpose |
 |---|---|
@@ -103,19 +105,30 @@ service already listens on the configured port at each peer's probe address.
 
 ## Assignment models
 
-Every probe is either a mesh template or a direct assignment.
+Every probe is either a mesh template or a direct assignment, and every probe
+runs on exactly one network. A network is a named connectivity plane: each
+agent joins one permanently through its enrollment token, and probes only ever
+run between or on agents of their own network. Deployments with one flat
+network can ignore the dimension — everything lives on the seeded `default`
+network and behaves exactly as described below.
 
 ### Mesh probes
 
-A mesh groups sites that should probe one another. A probe template expands
-over ordered directions, so a two-site mesh produces both `site-a -> site-b`
-and `site-b -> site-a` measurements. A mesh must contain at least two sites
-before a probe can be added.
+A mesh groups sites that should probe one another over one network. A probe
+template expands over ordered directions, so a two-site mesh produces both
+`site-a -> site-b` and `site-b -> site-a` measurements. A mesh must contain at
+least two sites before a probe can be added.
 
-Expansion is per agent, not merely per site. If site A has two agents and site
-B has three, one mesh template produces six A-to-B and six B-to-A agent-pair
-series. Each destination uses the peer agent's `probe_address`, recorded at
-enrollment.
+Expansion is per agent, not merely per site, and pairs only agents on the
+mesh's network. If site A has two agents and site B has three, all on the
+mesh's network, one mesh template produces six A-to-B and six B-to-A
+agent-pair series; if one of site B's agents belongs to a different network,
+the template produces four and four instead — that agent is never paired,
+because the mesh asserts reachability only within its own plane. Each
+destination uses the peer agent's `probe_address`, recorded at enrollment.
+A mesh's network binding is fixed at creation (`mesh create --network <name>`,
+default `default`) and cannot span planes: two meshes on different networks
+can cover the same member sites without ever probing across the boundary.
 
 Mesh templates support ICMP, TCP, TLS, DNS, traceroute, and Path MTU. HTTP and
 NTP are direct only: HTTP requires a complete target URL, and an expanded NTP template
@@ -127,9 +140,13 @@ port. The PolarBEAM agent does not provide that service.
 
 ### Direct probes
 
-A direct probe assigns every agent at one source site to one named external
-target. Enrollment-managed agent targets cannot be selected directly; use a
-mesh for peer agents.
+A direct probe assigns every agent on the probe's network at one source site
+to one named external target (`probe add --site <site> --target <name>
+[--network <name>]`, default `default`). Agents at the site on other networks
+never run it — without that scoping, an operator's external checks would
+silently start running from another plane's hardware the day its first agent
+enrolls at a shared site. Enrollment-managed agent targets cannot be selected
+directly; use a mesh for peer agents.
 
 External targets contain a unique name and one or both of these endpoint
 forms:
@@ -154,6 +171,7 @@ Every probe has the following settings:
 | Setting | Meaning |
 |---|---|
 | Assignment | A mesh, or a source site plus external target |
+| Network | The plane the probe measures: a direct probe's own setting; mesh probes inherit the mesh's |
 | Type | One of the eight supported types |
 | Interval | Time between scheduled runs |
 | Timeout | Maximum duration of one run |
@@ -186,9 +204,10 @@ Configuration validation requires:
 Train count and spacing affect ICMP. The other current prober implementations
 do not use those fields.
 
-Probe type and assignment are immutable because changing them would combine
-unrelated measurements under one historical identity. To point a probe at a
-different target or change its type, delete the probe and create another.
+Probe type, assignment, and network are immutable because changing them would
+combine unrelated measurements under one historical identity. To point a probe
+at a different target, move it to another plane, or change its type, delete
+the probe and create another.
 Cadence, train settings, parameters, and enabled state can be edited in place,
 whether the probe was created enabled or disabled.
 
@@ -385,8 +404,8 @@ preferring IPv4 when both families are available, and reports one packet sent,
 one received, and the request/response round-trip time.
 
 NTP is direct only. Each site selects its own external target, so different
-sites can verify different time servers, and the probe runs only on agents at
-its selected source site. Because sites commonly use per-site NTP endpoints
+sites can verify different time servers, and the probe runs only on agents on
+the probe's network at its selected source site. Because sites commonly use per-site NTP endpoints
 and peer agents do not serve time, NTP cannot be configured as a mesh
 template.
 
@@ -620,6 +639,14 @@ polarbeam-server probe add --config /etc/polarbeam/server.yaml \
 
 This gives directional latency, loss, jitter, and routing history while
 keeping unrelated network domains in separate workload boundaries.
+
+Regional meshes partition by geography; networks partition by plane. When the
+same sites host agents on mutually unreachable planes — a management network
+and an internet underlay, say — enroll each plane's agents onto their own
+network and give each plane its own mesh over the same site set
+(`mesh create --name mgmt-wan --network mgmt`) instead of duplicating site
+definitions or accepting cross-plane probe failures. The two partitions
+compose: `americas-mgmt` can be a regional mesh on the `mgmt` network.
 
 Full-mesh assignment count grows quadratically. With 100 sites and one agent
 per site, one template produces 9,900 directional assignments. At a 30-second
