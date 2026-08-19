@@ -15,7 +15,11 @@ type probeJSON struct {
 	// TargetID links a pair-detail check chip to its target's detail page.
 	// omitempty: matrix cells fold to site pairs and never carry it, so
 	// the matrix response shape is unchanged.
-	TargetID      *string   `json:"target_id,omitempty"`
+	TargetID *string `json:"target_id,omitempty"`
+	// Network is the series' plane. omitempty: set only on matrix probes
+	// (MatrixLatest); pair-detail chips (DirectionLatest) leave it empty
+	// because the pair page already filtered by endpoint IDs.
+	Network       string    `json:"network,omitempty"`
 	LatencyUS     *int64    `json:"latency_us"`
 	LatencySource string    `json:"latency_source"`
 	LossPct       *float32  `json:"loss_pct"`
@@ -31,63 +35,75 @@ type cellJSON struct {
 	LossPct       *float32    `json:"loss_pct"`
 	AsOf          time.Time   `json:"as_of"`
 	Probes        []probeJSON `json:"probes"`
+	// Networks breaks the same rows out per plane (length 1 on
+	// single-network installs). The top-level fields stay the all-plane
+	// fold so pre-networks consumers see an unchanged cell.
+	Networks []netCellJSON `json:"networks"`
+}
+
+// netCellJSON is one (src, dst, network) fold inside a cell — the same
+// aggregate rule at plane granularity, so the SPA's network filter and the
+// map's per-plane rollup never re-derive fold logic client-side.
+type netCellJSON struct {
+	Network       string      `json:"network"`
+	Status        string      `json:"status"`
+	LatencyUS     *int64      `json:"latency_us"`
+	LatencySource string      `json:"latency_source"`
+	LossPct       *float32    `json:"loss_pct"`
+	AsOf          time.Time   `json:"as_of"`
+	Probes        []probeJSON `json:"probes"`
 }
 
 // foldMatrix reduces latest-per-series rows plus the configured pair list
-// to one cell per ordered site pair. Pure function: offline-testable.
+// to one cell per ordered site pair, with a per-network breakdown inside
+// each cell. Pure function: offline-testable.
 //
 // Cell status: ok when every series' latest result is OK, down when none
 // are, degraded when mixed, stale when configuration expects the pair but
 // no series reported inside the horizon. Latency is the best (min) over OK
-// series — the purest estimate of the path; loss is the worst.
-func foldMatrix(rows []store.MatrixRow, expected []store.SitePair) []cellJSON {
+// series — the purest estimate of the path; loss is the worst. The same
+// rule folds each network's rows into its sub-cell; a plane expected by
+// configuration but silent in the horizon gets a stale sub-cell, so the
+// SPA's filter distinguishes "stale on this plane" from "not probed".
+func foldMatrix(rows []store.MatrixRow, expected []store.NetworkPair) []cellJSON {
 	type agg struct {
 		rows []store.MatrixRow
+		nets map[string][]store.MatrixRow
 	}
 	cells := map[store.SitePair]*agg{}
-	for _, r := range rows {
-		key := store.SitePair{Src: r.SrcSite, Dst: r.DstSite}
-		if cells[key] == nil {
-			cells[key] = &agg{}
+	get := func(key store.SitePair) *agg {
+		a := cells[key]
+		if a == nil {
+			a = &agg{nets: map[string][]store.MatrixRow{}}
+			cells[key] = a
 		}
-		cells[key].rows = append(cells[key].rows, r)
+		return a
+	}
+	for _, r := range rows {
+		a := get(store.SitePair{Src: r.SrcSite, Dst: r.DstSite})
+		a.rows = append(a.rows, r)
+		a.nets[r.Network] = append(a.nets[r.Network], r)
 	}
 	for _, p := range expected {
-		if cells[p] == nil {
-			cells[p] = &agg{} // no data in horizon → stale
+		a := get(store.SitePair{Src: p.Src, Dst: p.Dst}) // no data in horizon → stale
+		if _, seen := a.nets[p.Network]; !seen {
+			a.nets[p.Network] = nil // expected but silent on this plane → stale sub-cell
 		}
 	}
 
 	out := make([]cellJSON, 0, len(cells))
 	for pair, a := range cells {
-		c := cellJSON{Src: pair.Src, Dst: pair.Dst, Status: "stale", Probes: []probeJSON{}}
-		okCount := 0
-		for _, r := range a.rows {
-			ok := r.Status == int16(pb.ProbeStatus_PROBE_STATUS_OK)
-			if ok {
-				okCount++
-				if r.LatencyUS != nil && (c.LatencyUS == nil || *r.LatencyUS < *c.LatencyUS) {
-					c.LatencyUS = r.LatencyUS
-					c.LatencySource = r.LatencySource
-				}
-			}
-			if r.LossPct != nil && (c.LossPct == nil || *r.LossPct > *c.LossPct) {
-				c.LossPct = r.LossPct
-			}
-			if r.Time.After(c.AsOf) {
-				c.AsOf = r.Time
-			}
-			c.Probes = append(c.Probes, toProbeJSON(r))
+		c := cellJSON{Src: pair.Src, Dst: pair.Dst, Networks: make([]netCellJSON, 0, len(a.nets))}
+		c.Status, c.LatencyUS, c.LatencySource, c.LossPct, c.AsOf, c.Probes = foldGroup(a.rows)
+		names := make([]string, 0, len(a.nets))
+		for name := range a.nets {
+			names = append(names, name)
 		}
-		switch {
-		case len(a.rows) == 0:
-			c.Status = "stale"
-		case okCount == len(a.rows):
-			c.Status = "ok"
-		case okCount == 0:
-			c.Status = "down"
-		default:
-			c.Status = "degraded"
+		sort.Strings(names)
+		for _, name := range names {
+			n := netCellJSON{Network: name}
+			n.Status, n.LatencyUS, n.LatencySource, n.LossPct, n.AsOf, n.Probes = foldGroup(a.nets[name])
+			c.Networks = append(c.Networks, n)
 		}
 		out = append(out, c)
 	}
@@ -100,10 +116,47 @@ func foldMatrix(rows []store.MatrixRow, expected []store.SitePair) []cellJSON {
 	return out
 }
 
+// foldGroup applies the cell aggregate rule to one group of rows: status
+// from the ok/total split (stale when empty), best (min) OK latency, worst
+// loss, latest as_of. Shared by the site-pair and per-network folds so the
+// two levels can never disagree.
+func foldGroup(rows []store.MatrixRow) (status string, latencyUS *int64, latencySource string, lossPct *float32, asOf time.Time, probes []probeJSON) {
+	probes = []probeJSON{}
+	okCount := 0
+	for _, r := range rows {
+		if r.Status == int16(pb.ProbeStatus_PROBE_STATUS_OK) {
+			okCount++
+			if r.LatencyUS != nil && (latencyUS == nil || *r.LatencyUS < *latencyUS) {
+				latencyUS = r.LatencyUS
+				latencySource = r.LatencySource
+			}
+		}
+		if r.LossPct != nil && (lossPct == nil || *r.LossPct > *lossPct) {
+			lossPct = r.LossPct
+		}
+		if r.Time.After(asOf) {
+			asOf = r.Time
+		}
+		probes = append(probes, toProbeJSON(r))
+	}
+	switch {
+	case len(rows) == 0:
+		status = "stale"
+	case okCount == len(rows):
+		status = "ok"
+	case okCount == 0:
+		status = "down"
+	default:
+		status = "degraded"
+	}
+	return status, latencyUS, latencySource, lossPct, asOf, probes
+}
+
 func toProbeJSON(r store.MatrixRow) probeJSON {
 	p := probeJSON{
 		Type:          probeTypeName(r.ProbeType),
 		Status:        probeStatusName(r.Status),
+		Network:       r.Network,
 		LatencyUS:     r.LatencyUS,
 		LatencySource: r.LatencySource,
 		LossPct:       r.LossPct,

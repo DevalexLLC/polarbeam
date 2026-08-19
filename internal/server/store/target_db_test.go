@@ -77,6 +77,31 @@ func TestTargetEndpoints(t *testing.T) {
 		len(got.Sources[0].AgentIDs) != 2 || len(got.Sources[1].AgentIDs) != 1 {
 		t.Errorf("sources = %+v, want site-a×2 agents then site-b×1", got.Sources)
 	}
+	if got.Sources[0].Network != "default" || got.Sources[1].Network != "default" {
+		t.Errorf("sources = %+v, want every source on default", got.Sources)
+	}
+
+	// An off-plane agent at site-a splits the site into two source rows,
+	// ordered site first, then network.
+	mgmt := createNetwork(t, ctx, s, "mgmt")
+	a3 := uuid.New()
+	if _, err := s.Pool().Exec(ctx,
+		`INSERT INTO agents (id, site_id, network_id, hostname)
+		 VALUES ($1, (SELECT site_id FROM agents WHERE id = $2), $3, 'a3')`,
+		a3, a1, mgmt); err != nil {
+		t.Fatalf("insert mgmt agent: %v", err)
+	}
+	seedSeriesState(t, ctx, s, a3, uuid.New(), ext, 4)
+	got, err = s.TargetEndpoints(ctx, ext)
+	if err != nil {
+		t.Fatalf("TargetEndpoints(external, two planes): %v", err)
+	}
+	if len(got.Sources) != 3 ||
+		got.Sources[0].Site != "site-a" || got.Sources[0].Network != "default" || len(got.Sources[0].AgentIDs) != 2 ||
+		got.Sources[1].Site != "site-a" || got.Sources[1].Network != "mgmt" || len(got.Sources[1].AgentIDs) != 1 ||
+		got.Sources[2].Site != "site-b" || got.Sources[2].Network != "default" {
+		t.Errorf("sources = %+v, want site-a split by plane then site-b", got.Sources)
+	}
 
 	// Agent-kind target owned by b1: DstSite resolves through the owning
 	// agent's site.

@@ -132,7 +132,7 @@ func toCurrentPathJSON(paths []store.CurrentPath) []currentPathJSON {
 }
 
 func (a *api) handleTraceroute(w http.ResponseWriter, r *http.Request) {
-	ea, eb, ok := a.pairEndpoints(w, r)
+	ea, eb, _, ok := a.pairEndpoints(w, r)
 	if !ok {
 		return
 	}
@@ -186,7 +186,7 @@ func toCurrentMTUJSON(mtus []store.CurrentPathMTU) []currentMTUJSON {
 }
 
 func (a *api) handlePathMTU(w http.ResponseWriter, r *http.Request) {
-	ea, eb, ok := a.pairEndpoints(w, r)
+	ea, eb, _, ok := a.pairEndpoints(w, r)
 	if !ok {
 		return
 	}

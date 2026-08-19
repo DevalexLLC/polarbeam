@@ -338,6 +338,10 @@ func TestExpectedPairsNetworkScoped(t *testing.T) {
 	got := make(map[string]bool, len(pairs))
 	for _, p := range pairs {
 		got[p.Src+">"+p.Dst] = true
+		// m1 lives on default; every pair it expects is labeled with it.
+		if p.Network != "default" {
+			t.Errorf("pair %s>%s carries network %q, want default", p.Src, p.Dst, p.Network)
+		}
 	}
 	want := map[string]bool{
 		"site-a>site-b": true, "site-b>site-a": true,
@@ -356,6 +360,66 @@ func TestExpectedPairsNetworkScoped(t *testing.T) {
 		if strings.Contains(p, "site-c") {
 			t.Errorf("ExpectedPairs contains off-network site-c pair %s", p)
 		}
+	}
+}
+
+// TestSiteEndpointsNetworks pins the parallel-slice contract: Networks[i]
+// is AgentIDs[i]'s plane (and TargetIDs[i] that agent's target), so the
+// pair handlers can filter all three slices in lockstep by network.
+func TestSiteEndpointsNetworks(t *testing.T) {
+	ctx, s := newStore(t)
+	f := buildNetFixture(t, ctx, s)
+
+	ep, err := s.SiteEndpoints(ctx, "site-a")
+	if err != nil || ep == nil {
+		t.Fatalf("SiteEndpoints: %+v, %v", ep, err)
+	}
+	if len(ep.AgentIDs) != 2 || len(ep.TargetIDs) != 2 || len(ep.Networks) != 2 {
+		t.Fatalf("endpoints = %+v, want two aligned rows", ep)
+	}
+	wantNet := map[uuid.UUID]string{f.aDef: "default", f.aMgmt: "mgmt"}
+	wantTarget := map[uuid.UUID]uuid.UUID{f.aDef: f.tADef, f.aMgmt: f.tAMgmt}
+	for i, agent := range ep.AgentIDs {
+		if ep.Networks[i] != wantNet[agent] {
+			t.Errorf("agent %s network = %q, want %q", agent, ep.Networks[i], wantNet[agent])
+		}
+		if ep.TargetIDs[i] != wantTarget[agent] {
+			t.Errorf("agent %s target = %s, want %s", agent, ep.TargetIDs[i], wantTarget[agent])
+		}
+	}
+}
+
+// TestMatrixLatestCarriesNetwork pins the matrix rows' plane label: each
+// latest-per-series row carries its source agent's network name, which is
+// what the per-network sub-cell fold keys on.
+func TestMatrixLatestCarriesNetwork(t *testing.T) {
+	ctx, s := newStore(t)
+	f := buildNetFixture(t, ctx, s)
+
+	now := time.Now().UTC()
+	lat := int32(1500)
+	mk := func(target uuid.UUID) []store.ResultRow {
+		return []store.ResultRow{{
+			Time: now, TargetID: target, ProbeID: uuid.New(), ProbeType: 1,
+			Status: 1, Sent: 1, Received: 1, RttAvgUS: &lat,
+		}}
+	}
+	insertResults(t, ctx, s, f.aDef, mk(f.tBDef))
+	insertResults(t, ctx, s, f.aMgmt, mk(f.tBMgmt))
+
+	rows, err := s.MatrixLatest(ctx, time.Hour)
+	if err != nil {
+		t.Fatalf("MatrixLatest: %v", err)
+	}
+	got := map[string]int{}
+	for _, r := range rows {
+		if r.SrcSite != "site-a" || r.DstSite != "site-b" {
+			t.Errorf("row = %+v, want site-a→site-b", r)
+		}
+		got[r.Network]++
+	}
+	if len(rows) != 2 || got["default"] != 1 || got["mgmt"] != 1 {
+		t.Errorf("matrix rows by network = %v (%d rows), want one per plane", got, len(rows))
 	}
 }
 

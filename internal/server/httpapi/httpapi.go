@@ -60,7 +60,7 @@ type DB interface {
 	AgentProbeHealth(ctx context.Context, agentID uuid.UUID, window, bucket time.Duration) ([]store.AgentProbeHealthRow, error)
 	AgentBucketFailures(ctx context.Context, agentID uuid.UUID, bucketStart time.Time, bucket time.Duration, probeID *uuid.UUID, excludeProbeType int16) ([]store.AgentBucketFailureGroup, error)
 	MatrixLatest(ctx context.Context, horizon time.Duration) ([]store.MatrixRow, error)
-	ExpectedPairs(ctx context.Context) ([]store.SitePair, error)
+	ExpectedPairs(ctx context.Context) ([]store.NetworkPair, error)
 	SiteEndpoints(ctx context.Context, siteName string) (*store.SiteEndpoints, error)
 	PairSeries(ctx context.Context, srcAgents, dstTargets []uuid.UUID, bucket, window time.Duration, source store.Source, latencySource string) ([]store.SeriesBucket, error)
 	PairSummary(ctx context.Context, srcAgents, dstTargets []uuid.UUID, window time.Duration, source store.Source) (*store.PairSummaryRow, error)

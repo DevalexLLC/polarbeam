@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -319,8 +320,14 @@ func (a *api) handleMatrix(w http.ResponseWriter, r *http.Request) {
 }
 
 // pairEndpoints resolves both site path segments or answers the request
-// itself (404 with the offending name) and returns ok=false.
-func (a *api) pairEndpoints(w http.ResponseWriter, r *http.Request) (ea, eb *store.SiteEndpoints, ok bool) {
+// itself (404 with the offending name) and returns ok=false. networks is
+// the sorted names present at BOTH sites — the planes this pair can
+// measure, since a pair series only exists between same-network agents.
+// A non-empty ?network= is validated against the networks table (unknown
+// name → 404, never a silent no-op) and filters each endpoint's parallel
+// agent/target/network slices to that plane; a valid plane absent from one
+// site leaves its ID sets empty, which downstream folds render as stale.
+func (a *api) pairEndpoints(w http.ResponseWriter, r *http.Request) (ea, eb *store.SiteEndpoints, networks []string, ok bool) {
 	for _, seg := range []struct {
 		name string
 		dst  **store.SiteEndpoints
@@ -328,15 +335,47 @@ func (a *api) pairEndpoints(w http.ResponseWriter, r *http.Request) (ea, eb *sto
 		ep, err := a.db.SiteEndpoints(r.Context(), seg.name)
 		if err != nil {
 			internalError(w, "site endpoints", err)
-			return nil, nil, false
+			return nil, nil, nil, false
 		}
 		if ep == nil {
 			writeError(w, http.StatusNotFound, "unknown site "+seg.name)
-			return nil, nil, false
+			return nil, nil, nil, false
 		}
 		*seg.dst = ep
 	}
-	return ea, eb, true
+	inA := make(map[string]bool, len(ea.Networks))
+	for _, n := range ea.Networks {
+		inA[n] = true
+	}
+	networks = []string{}
+	seen := map[string]bool{}
+	for _, n := range eb.Networks {
+		if inA[n] && !seen[n] {
+			seen[n] = true
+			networks = append(networks, n)
+		}
+	}
+	sort.Strings(networks)
+	if net := r.URL.Query().Get("network"); net != "" {
+		if _, err := a.db.NetworkIDByName(r.Context(), net); err != nil {
+			writeStoreError(w, "resolve network", err)
+			return nil, nil, nil, false
+		}
+		for _, ep := range []*store.SiteEndpoints{ea, eb} {
+			agents := ep.AgentIDs[:0]
+			targets := ep.TargetIDs[:0]
+			nets := ep.Networks[:0]
+			for i, n := range ep.Networks {
+				if n == net {
+					agents = append(agents, ep.AgentIDs[i])
+					targets = append(targets, ep.TargetIDs[i])
+					nets = append(nets, n)
+				}
+			}
+			ep.AgentIDs, ep.TargetIDs, ep.Networks = agents, targets, nets
+		}
+	}
+	return ea, eb, networks, true
 }
 
 // Percentile fields carry omitempty: they exist only for aggregate-sourced
@@ -409,7 +448,7 @@ func (a *api) handlePair(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "unknown window (want 24h|7d|30d|90d|365d)")
 		return
 	}
-	ea, eb, ok := a.pairEndpoints(w, r)
+	ea, eb, networks, ok := a.pairEndpoints(w, r)
 	if !ok {
 		return
 	}
@@ -426,6 +465,10 @@ func (a *api) handlePair(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"a": ea.Name, "b": eb.Name,
 		"window": windowName(r), "source": string(spec.Source),
+		// network echoes the applied ?network= filter ("" = all planes);
+		// networks lists the planes present at both sites, so the SPA's
+		// selector offers only pairs that can actually have series.
+		"network": r.URL.Query().Get("network"), "networks": networks,
 		"a_to_b": aToB, "b_to_a": bToA,
 	})
 }
@@ -469,7 +512,7 @@ func (a *api) handleSeries(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "unknown window (want 24h|7d|30d|90d|365d)")
 		return
 	}
-	ea, eb, ok := a.pairEndpoints(w, r)
+	ea, eb, _, ok := a.pairEndpoints(w, r)
 	if !ok {
 		return
 	}
@@ -497,6 +540,7 @@ func (a *api) handleSeries(w http.ResponseWriter, r *http.Request) {
 		"metric": metric, "window": windowName(r),
 		"resolution_s": int(spec.Bucket.Seconds()),
 		"source":       string(spec.Source),
+		"network":      r.URL.Query().Get("network"),
 		// Top-level latency_source predates directional sources; it stays
 		// as the a_to_b alias so pre-M5 clients keep an honest axis label.
 		"latency_source": aSource,
