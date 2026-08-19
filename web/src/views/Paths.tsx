@@ -68,16 +68,37 @@ function EventRow({ e }: { e: PathEvent }) {
   const [expanded, setExpanded] = useState(false)
   const count = changedHopCount(e.old_hops, e.new_hops)
   const detailsID = `path-event-${e.id}`
+  // Destination links: site→site events go to the pair page, external
+  // targets to their detail page. A deleted target has no id and stays
+  // plain text.
+  const dst = e.dst_site ? (
+    e.src_site ? (
+      <a href={`#/pair/${encodeURIComponent(e.src_site)}/${encodeURIComponent(e.dst_site)}`}>{e.dst_site}</a>
+    ) : (
+      e.dst_site
+    )
+  ) : e.target && e.target_id ? (
+    <a href={`#/target/${encodeURIComponent(e.target_id)}`}>{e.target}</a>
+  ) : (
+    (e.target ?? '?')
+  )
   return (
     <div className="path-event">
-      <button
+      {/* Like the Agents rows: the header is a convenience click target
+          only, while the real disclosure semantics live on the View
+          details button — a link nested in a button role would be
+          flattened out of the accessibility tree. The a11y rules below
+          are satisfied by that button; the row click just duplicates it. */}
+      {/* oxlint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
+      <div
         className="path-event-head"
-        onClick={() => setExpanded(!expanded)}
-        aria-expanded={expanded}
-        aria-controls={detailsID}
+        onClick={(ev) => {
+          if ((ev.target as Element).closest('button, a')) return
+          setExpanded(!expanded)
+        }}
       >
         <span className="mono">
-          {e.src_site} → {e.dst_site ?? e.target ?? '?'}
+          {e.src_site} → {dst}
         </span>
         <span className="path-summary">
           {count} {count === 1 ? 'hop' : 'hops'} changed
@@ -85,10 +106,16 @@ function EventRow({ e }: { e: PathEvent }) {
         <span className="hint" title={fmtTime(e.time)}>
           {fmtAgo(e.time)}
         </span>
-        <span className="incident-toggle path-toggle">
+        <button
+          type="button"
+          className="incident-toggle path-toggle"
+          aria-expanded={expanded}
+          aria-controls={detailsID}
+          onClick={() => setExpanded(!expanded)}
+        >
           {expanded ? 'Hide details' : 'View details'} <span aria-hidden="true">{expanded ? '−' : '+'}</span>
-        </span>
-      </button>
+        </button>
+      </div>
       {expanded && (
         <div id={detailsID} className="path-event-details">
           <div className="path-hashes">

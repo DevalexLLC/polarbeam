@@ -359,6 +359,7 @@ export interface PathEvent {
   src_site: string
   dst_site: string | null
   target: string | null
+  target_id: string | null // null once the target row is deleted
   old_path_hash: string
   new_path_hash: string
   old_hops: Hop[]

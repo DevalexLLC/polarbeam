@@ -3828,7 +3828,8 @@ tr.agent-row {
 /* The Agents rows' expand affordance wears the Incidents rows' toggle
    (.incident-toggle text treatment); the reset is needed because here it
    is a standalone button, not a span inside one. */
-button.agent-detail-toggle {
+button.agent-detail-toggle,
+button.path-toggle {
   border: 0;
   background: none;
   padding: 0;
@@ -3836,7 +3837,8 @@ button.agent-detail-toggle {
   font-family: inherit;
 }
 
-button.agent-detail-toggle:hover {
+button.agent-detail-toggle:hover,
+button.path-toggle:hover {
   text-decoration: underline;
 }
 
