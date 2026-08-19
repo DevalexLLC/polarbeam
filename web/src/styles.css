@@ -1406,8 +1406,21 @@ tr.hop-changed td {
 
 .path-pair {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
   gap: 1.2rem;
+}
+
+/* Grid items refuse to shrink below their content by default, which would
+   let a wide path graph blow the .path-pair tracks out of the card instead
+   of scrolling inside its cell. */
+.path-current {
+  min-width: 0;
+}
+
+/* Long paths (isWidePath) take the whole row: a multi-hop graph squeezed
+   into a shared cell could only ever show a few hops per scroll viewport. */
+.path-current-wide {
+  grid-column: 1 / -1;
 }
 
 .path-current h4 {
@@ -1450,10 +1463,29 @@ tr.hop-changed td {
    ride the status tokens so light/dark stay in lockstep with the tables. */
 .path-graph {
   padding: 0.2rem 0 0.5rem;
+  /* A graph past its scale floor scrolls sideways; make that legible
+     instead of looking clipped: a thin persistent scrollbar plus edge
+     shadows that only show on the side with more content (the cover
+     gradients scroll with the content and hide them at the ends). */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+  background:
+    linear-gradient(90deg, var(--surface) 40%, transparent) left/28px 100%,
+    linear-gradient(270deg, var(--surface) 40%, transparent) right/28px 100%,
+    radial-gradient(farthest-side at 0 50%, color-mix(in srgb, var(--ink) 22%, transparent), transparent) left/12px 100%,
+    radial-gradient(farthest-side at 100% 50%, color-mix(in srgb, var(--ink) 22%, transparent), transparent) right/12px
+      100%;
+  background-repeat: no-repeat;
+  background-attachment: local, local, scroll, scroll;
 }
 
 .path-graph svg {
   display: block;
+  /* Scale down to fit the container (the inline style carries the natural
+     width as max-width, a legibility floor as min-width, and the
+     aspect-ratio); past the floor the scroll-x wrapper scrolls instead. */
+  width: 100%;
+  height: auto;
 }
 
 .path-graph text {

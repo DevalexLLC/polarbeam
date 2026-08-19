@@ -19,6 +19,13 @@ export interface GraphPath {
   destReached: boolean
 }
 
+// isWidePath: true when a path set is long enough that its graph deserves a
+// full grid row (.path-current-wide) instead of a shared .path-pair cell,
+// where it could only ever show a few hops per scroll viewport.
+export function isWidePath(paths: { hops: Hop[] }[]): boolean {
+  return paths.some((p) => p.hops.some((h) => h.ttl > 4))
+}
+
 interface Props {
   mode: 'current' | 'diff'
   source: string
@@ -161,6 +168,9 @@ const TERM_H = 38
 const COL_GAP = 42
 const ROW_GAP = 12
 const MARGIN = 4
+// The SVG scales down to fit its container, but no further than this —
+// below it the 11px labels stop being legible, so scroll-x takes over.
+const MIN_SCALE = 0.7
 
 function nodeWidth(label: string): number {
   return Math.ceil(label.length * CHAR_W) + PAD_X * 2
@@ -260,8 +270,12 @@ export default function PathGraph({ mode, source, dest, paths }: Props) {
         </div>
       )}
       <svg
-        width={width}
-        height={height}
+        viewBox={`0 0 ${width} ${height}`}
+        style={{
+          maxWidth: width,
+          minWidth: Math.ceil(width * MIN_SCALE),
+          aspectRatio: `${width} / ${height}`,
+        }}
         role="img"
         aria-label={`Traceroute path graph from ${source} to ${dest}: ${hopCount} ${hopCount === 1 ? 'hop' : 'hops'}`}
       >
