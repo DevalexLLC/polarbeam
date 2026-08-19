@@ -718,13 +718,16 @@ func meshMemberSiteIDs(ctx context.Context, tx pgx.Tx, meshID uuid.UUID) ([]uuid
 }
 
 // meshMemberTargets maps each member site of a mesh to the agent-kind
-// target IDs of its agents — the destination axis of the probe ID
-// derivation.
+// target IDs of its agents ON THE MESH'S NETWORK — the destination axis of
+// the probe ID derivation. The network predicate here is what keeps every
+// re-derivation (cleanup, retirement, expandedProbeIDs) aligned with the
+// expansion agents actually run.
 func meshMemberTargets(ctx context.Context, tx pgx.Tx, meshID uuid.UUID) (map[uuid.UUID][]uuid.UUID, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT mm.site_id, t.id
 		FROM mesh_members mm
-		JOIN agents a ON a.site_id = mm.site_id
+		JOIN mesh_groups mg ON mg.id = mm.mesh_id
+		JOIN agents a ON a.site_id = mm.site_id AND a.network_id = mg.network_id
 		JOIN targets t ON t.agent_id = a.id
 		WHERE mm.mesh_id = $1`, meshID)
 	if err != nil {
@@ -870,6 +873,10 @@ type AgentConfigInputs struct {
 
 // LoadAgentConfigInputs gathers the agent's site, its site's direct probes,
 // mesh templates covering the site, and mesh peers — one batched round trip.
+// Everything is scoped to the agent's network in the SQL itself (direct
+// probes match on (site, network); mesh templates and peers only where the
+// mesh's network matches), so meshexpand stays network-ignorant and the
+// ingest allowlist tightens for free.
 func (s *Store) LoadAgentConfigInputs(ctx context.Context, agentID uuid.UUID) (AgentConfigInputs, error) {
 	in := AgentConfigInputs{AgentID: agentID}
 
@@ -881,22 +888,24 @@ func (s *Store) LoadAgentConfigInputs(ctx context.Context, agentID uuid.UUID) (A
 		FROM probe_configs pc
 		JOIN targets t ON t.id = pc.target_id
 		LEFT JOIN agents dta ON dta.id = t.agent_id
-		JOIN agents a ON a.site_id = pc.site_id
+		JOIN agents a ON a.site_id = pc.site_id AND a.network_id = pc.network_id
 		WHERE a.id = $1 AND pc.enabled
 		ORDER BY pc.created_at`, agentID)
 	batch.Queue(`
 		SELECT pc.id, pc.mesh_id, pc.probe_type, pc.interval_ms, pc.timeout_ms, pc.train_count, pc.train_spacing_ms, pc.params
 		FROM probe_configs pc
+		JOIN mesh_groups mg ON mg.id = pc.mesh_id
 		JOIN mesh_members mm ON mm.mesh_id = pc.mesh_id
-		JOIN agents a ON a.site_id = mm.site_id
+		JOIN agents a ON a.site_id = mm.site_id AND a.network_id = mg.network_id
 		WHERE a.id = $1 AND pc.enabled
 		ORDER BY pc.created_at`, agentID)
 	batch.Queue(`
 		SELECT DISTINCT mine.mesh_id, peer.id, peer.site_id, t.id, peer.probe_address
 		FROM agents me
 		JOIN mesh_members mine ON mine.site_id = me.site_id
+		JOIN mesh_groups mg ON mg.id = mine.mesh_id AND mg.network_id = me.network_id
 		JOIN mesh_members theirs ON theirs.mesh_id = mine.mesh_id AND theirs.site_id <> mine.site_id
-		JOIN agents peer ON peer.site_id = theirs.site_id
+		JOIN agents peer ON peer.site_id = theirs.site_id AND peer.network_id = mg.network_id
 		JOIN targets t ON t.agent_id = peer.id
 		WHERE me.id = $1
 		ORDER BY mine.mesh_id, peer.id, t.id`, agentID)

@@ -219,8 +219,10 @@ func sweepOnce(ctx context.Context, db DB, now time.Time) error {
 		SELECT a.id, a.hostname, a.last_seen_at,
 			(SELECT min(pc.interval_ms) FROM probe_configs pc
 			 WHERE pc.enabled AND (
-				pc.site_id = a.site_id
+				(pc.site_id = a.site_id AND pc.network_id = a.network_id)
 				OR (pc.mesh_id IS NOT NULL
+					AND EXISTS (SELECT 1 FROM mesh_groups mg
+						WHERE mg.id = pc.mesh_id AND mg.network_id = a.network_id)
 					AND EXISTS (SELECT 1 FROM mesh_members mm
 						WHERE mm.mesh_id = pc.mesh_id AND mm.site_id = a.site_id)
 					AND EXISTS (SELECT 1 FROM mesh_members mo
