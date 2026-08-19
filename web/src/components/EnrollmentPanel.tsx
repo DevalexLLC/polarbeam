@@ -2,7 +2,13 @@ import { useEffect, useState } from 'react'
 import { apiDelete, apiGet, apiPost } from '../api'
 import { fmtAgo, fmtTime } from '../format'
 import { useTimezone } from '../timezone'
-import type { JoinToken, SitesConfigResponse, TokenCreateResponse, TokensResponse } from '../types'
+import type {
+  JoinToken,
+  NetworksConfigResponse,
+  SitesConfigResponse,
+  TokenCreateResponse,
+  TokensResponse,
+} from '../types'
 import ConfirmButton from './ConfirmButton'
 
 const POLL_MS = 30_000
@@ -35,9 +41,11 @@ export default function EnrollmentPanel({
   useTimezone() // re-render fmtTime renders on UTC/local toggle
   const [data, setData] = useState<TokensResponse | null>(null)
   const [siteNames, setSiteNames] = useState<string[]>([])
+  const [networkNames, setNetworkNames] = useState<string[]>([])
   const [error, setError] = useState('')
   const [actionError, setActionError] = useState('')
   const [site, setSite] = useState('')
+  const [network, setNetwork] = useState('default')
   const [ttlMS, setTtlMS] = useState(86_400_000)
   const [creating, setCreating] = useState(false)
   // The freshly minted token lives in its own state so the 30 s poll can
@@ -67,6 +75,13 @@ export default function EnrollmentPanel({
       apiGet<SitesConfigResponse>('/api/v1/config/sites')
         .then((res) => {
           if (!cancelled) setSiteNames(res.sites.map((s) => s.name))
+        })
+        .catch((err) => {
+          if (!cancelled) onAuthError(err)
+        })
+      apiGet<NetworksConfigResponse>('/api/v1/config/networks')
+        .then((res) => {
+          if (!cancelled) setNetworkNames(res.networks.map((n) => n.name))
         })
         .catch((err) => {
           if (!cancelled) onAuthError(err)
@@ -113,7 +128,13 @@ export default function EnrollmentPanel({
     setActionError('')
     setCopied(false)
     try {
-      const res = await apiPost<TokenCreateResponse>('/api/v1/config/tokens', { site, ttl_ms: ttlMS })
+      // Omitting network keeps the request identical to the pre-networks
+      // one; the server resolves it to 'default'.
+      const res = await apiPost<TokenCreateResponse>('/api/v1/config/tokens', {
+        site,
+        ttl_ms: ttlMS,
+        ...(network !== 'default' ? { network } : {}),
+      })
       setMinted(res)
       await reload()
     } catch (err) {
@@ -142,6 +163,11 @@ export default function EnrollmentPanel({
       () => setCopied(false),
     )
   }
+
+  // Single-network installs never see the network picker or column; the
+  // column also stays visible while any listed token names another plane.
+  const multiNetwork = networkNames.length > 1
+  const showNetworkColumn = multiNetwork || data.tokens.some((t) => t.network !== 'default')
 
   return (
     <>
@@ -188,6 +214,20 @@ export default function EnrollmentPanel({
                     </select>
                   </span>
                 </label>
+                {multiNetwork && (
+                  <label className="threshold-field">
+                    <span className="eyebrow">Network</span>
+                    <span className="threshold-input">
+                      <select value={network} disabled={creating} onChange={(e) => setNetwork(e.target.value)}>
+                        {networkNames.map((n) => (
+                          <option key={n} value={n}>
+                            {n}
+                          </option>
+                        ))}
+                      </select>
+                    </span>
+                  </label>
+                )}
                 <label className="threshold-field">
                   <span className="eyebrow">Valid for</span>
                   <span className="threshold-input">
@@ -211,6 +251,8 @@ export default function EnrollmentPanel({
               <span className="hint">
                 Use it with <code>polarbeam-agent enroll</code> — the install guide has the full command including the
                 CA fingerprint.
+                {multiNetwork &&
+                  ' The agent joins the token’s network permanently; move a box by re-enrolling with a token for the other network.'}
               </span>
               <span className="threshold-actions">
                 {/* Issuance stays blocked while a token is displayed: minting
@@ -231,7 +273,8 @@ export default function EnrollmentPanel({
           <div className="inline-alert" role="status">
             <div>
               <strong>
-                Token for {minted.site} (valid until {fmtTime(minted.expires_at)}).
+                Token for {minted.network !== 'default' ? `${minted.site} on ${minted.network}` : minted.site}, valid
+                until {fmtTime(minted.expires_at)}.
               </strong>{' '}
               Copy it now — it is shown only once and cannot be recovered.
               <div className="mono token-reveal">{minted.token}</div>
@@ -257,6 +300,7 @@ export default function EnrollmentPanel({
               <thead>
                 <tr>
                   <th>Site</th>
+                  {showNetworkColumn && <th>Network</th>}
                   <th>Created by</th>
                   <th>Created</th>
                   <th>Expires</th>
@@ -276,6 +320,11 @@ export default function EnrollmentPanel({
                       <td data-label="Site" className="mono">
                         {t.site}
                       </td>
+                      {showNetworkColumn && (
+                        <td data-label="Network" className="mono">
+                          {t.network}
+                        </td>
+                      )}
                       <td data-label="Created by">{t.created_by || '—'}</td>
                       <td data-label="Created">{fmtAgo(t.created_at)}</td>
                       <td data-label="Expires">{fmtTime(t.expires_at)}</td>

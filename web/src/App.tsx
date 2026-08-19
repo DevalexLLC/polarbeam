@@ -22,6 +22,7 @@ import Targets from './views/Targets'
 export type SettingsTab =
   | 'thresholds'
   | 'sites'
+  | 'networks'
   | 'targets'
   | 'meshes'
   | 'probes'
@@ -33,6 +34,7 @@ export type SettingsTab =
 const SETTINGS_TABS: SettingsTab[] = [
   'thresholds',
   'sites',
+  'networks',
   'targets',
   'meshes',
   'probes',

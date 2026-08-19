@@ -203,12 +203,14 @@ function ProbeDetail({
 
 function Row({
   a,
+  multiNetwork,
   expanded,
   onToggle,
   detail,
   detailError,
 }: {
   a: AgentInfo
+  multiNetwork: boolean
   expanded: boolean
   onToggle: () => void
   detail: AgentProbeHealthResponse | null
@@ -235,6 +237,11 @@ function Row({
         <td className="mono" data-label="Agent" title={`enrolled ${fmtTime(a.enrolled_at)} · ${a.id}`}>
           {a.site} · {a.hostname}
         </td>
+        {multiNetwork && (
+          <td className="mono" data-label="Network">
+            {a.network}
+          </td>
+        )}
         <td className="mono" data-label="Address">
           {a.probe_address || '—'}
         </td>
@@ -286,7 +293,7 @@ function Row({
       </tr>
       {expanded && (
         <tr className="agent-detail-row">
-          <td colSpan={10} data-label="24 h probes">
+          <td colSpan={multiNetwork ? 11 : 10} data-label="24 h probes">
             <ProbeDetail agentId={a.id} detail={detail} error={detailError} />
           </td>
         </tr>
@@ -380,7 +387,7 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
       if (filter === 'attention' && !needsAttention(row)) return false
       if (filter === 'healthy' && needsAttention(row)) return false
       if (!needle) return true
-      return [row.site, row.hostname, row.probe_address, row.version].some((value) =>
+      return [row.site, row.network, row.hostname, row.probe_address, row.version].some((value) =>
         value.toLowerCase().includes(needle),
       )
     })
@@ -400,6 +407,10 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
         Loading agents…
       </div>
     )
+
+  // Column appears only when the fleet actually spans networks, so
+  // single-network installs keep the exact pre-networks table.
+  const multiNetwork = new Set(data.agents.map((a) => a.network)).size > 1
 
   const down = data.agents.filter((a) => health(a).status === 'down').length
   const degraded = data.agents.filter((a) => health(a).status === 'degraded').length
@@ -501,6 +512,7 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
                 <tr>
                   <th className="eyebrow">status</th>
                   <th className="eyebrow">agent</th>
+                  {multiNetwork && <th className="eyebrow">network</th>}
                   <th className="eyebrow">address</th>
                   <th className="eyebrow">version</th>
                   <th className="eyebrow">last seen</th>
@@ -518,6 +530,7 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
                   <Row
                     key={a.id}
                     a={a}
+                    multiNetwork={multiNetwork}
                     expanded={expanded === a.id}
                     onToggle={() => {
                       location.hash = expanded === a.id ? '#/agents' : '#/agents/' + a.id
