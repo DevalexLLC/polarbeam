@@ -112,7 +112,7 @@ func TestInsertResultsTxDedupe(t *testing.T) {
 
 func createUser(t *testing.T, ctx context.Context, s *store.Store, username, role string) uuid.UUID {
 	t.Helper()
-	id, err := s.CreateUser(ctx, username, "$argon2id$test-hash", role)
+	id, err := s.CreateUser(ctx, username, "$argon2id$test-hash", role, nil)
 	if err != nil {
 		t.Fatalf("create %s %q: %v", role, username, err)
 	}
@@ -123,7 +123,7 @@ func TestLastAdminGuard(t *testing.T) {
 	ctx, s := newStore(t)
 	alice := createUser(t, ctx, s, "alice", "admin")
 
-	if _, err := s.CreateUser(ctx, "alice", "$argon2id$other", "viewer"); !errors.Is(err, store.ErrConflict) {
+	if _, err := s.CreateUser(ctx, "alice", "$argon2id$other", "viewer", nil); !errors.Is(err, store.ErrConflict) {
 		t.Errorf("duplicate username: err = %v, want ErrConflict", err)
 	}
 

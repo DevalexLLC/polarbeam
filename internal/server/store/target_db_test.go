@@ -47,7 +47,7 @@ func seedSeriesState(t *testing.T, ctx context.Context, s *store.Store, agentID,
 func TestTargetEndpoints(t *testing.T) {
 	ctx, s := newStore(t)
 
-	if got, err := s.TargetEndpoints(ctx, uuid.New()); err != nil || got != nil {
+	if got, err := s.TargetEndpoints(ctx, uuid.New(), nil); err != nil || got != nil {
 		t.Fatalf("unknown target: got %+v, %v; want nil, nil", got, err)
 	}
 
@@ -65,7 +65,7 @@ func TestTargetEndpoints(t *testing.T) {
 	seedSeriesState(t, ctx, s, a2, uuid.New(), ext, 4)
 	seedSeriesState(t, ctx, s, b1, uuid.New(), ext, 4)
 
-	got, err := s.TargetEndpoints(ctx, ext)
+	got, err := s.TargetEndpoints(ctx, ext, nil)
 	if err != nil {
 		t.Fatalf("TargetEndpoints(external): %v", err)
 	}
@@ -92,7 +92,7 @@ func TestTargetEndpoints(t *testing.T) {
 		t.Fatalf("insert mgmt agent: %v", err)
 	}
 	seedSeriesState(t, ctx, s, a3, uuid.New(), ext, 4)
-	got, err = s.TargetEndpoints(ctx, ext)
+	got, err = s.TargetEndpoints(ctx, ext, nil)
 	if err != nil {
 		t.Fatalf("TargetEndpoints(external, two planes): %v", err)
 	}
@@ -113,7 +113,7 @@ func TestTargetEndpoints(t *testing.T) {
 	}
 	seedSeriesState(t, ctx, s, a1, uuid.New(), agentTarget, 1)
 
-	got, err = s.TargetEndpoints(ctx, agentTarget)
+	got, err = s.TargetEndpoints(ctx, agentTarget, nil)
 	if err != nil {
 		t.Fatalf("TargetEndpoints(agent): %v", err)
 	}
@@ -247,7 +247,7 @@ func TestTargetProbeHealth(t *testing.T) {
 			ProbeType: 2, Status: 2, Sent: 1, Received: 0},
 	})
 
-	rows, err := s.TargetProbeHealth(ctx, target, 24*time.Hour, 30*time.Minute)
+	rows, err := s.TargetProbeHealth(ctx, target, 24*time.Hour, 30*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("TargetProbeHealth: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestTargetProbeHealth(t *testing.T) {
 		{Time: t0.Add(-40 * time.Minute), TargetID: target, ProbeID: enabledProbe,
 			ProbeType: 2, Status: 1, Sent: 1, Received: 1, TCPConnectUS: i32(500)},
 	})
-	rows, err = s.TargetProbeHealth(ctx, target, 24*time.Hour, 30*time.Minute)
+	rows, err = s.TargetProbeHealth(ctx, target, 24*time.Hour, 30*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("TargetProbeHealth (shared probe id): %v", err)
 	}
@@ -355,7 +355,7 @@ func TestAgentProbeHealthTargetID(t *testing.T) {
 	}
 	seedSeriesState(t, ctx, s, a1, goneProbe, gone, 2)
 
-	rows, err := s.AgentProbeHealth(ctx, a1, 24*time.Hour, 30*time.Minute)
+	rows, err := s.AgentProbeHealth(ctx, a1, 24*time.Hour, 30*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("AgentProbeHealth: %v", err)
 	}

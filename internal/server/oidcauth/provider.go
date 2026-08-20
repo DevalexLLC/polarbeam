@@ -26,6 +26,8 @@ type realProvider struct {
 	usernameClaim string
 	roleClaim     string
 	adminValues   []string
+	roleRules     []store.OIDCRoleRule
+	unmatchedRole string
 }
 
 // httpClient builds the dedicated IdP client. caPEM, when set, REPLACES the
@@ -130,6 +132,8 @@ func newProvider(ctx context.Context, cfg *store.OIDCSettings) (*realProvider, e
 		usernameClaim: cfg.UsernameClaim,
 		roleClaim:     cfg.RoleClaim,
 		adminValues:   cfg.AdminValues,
+		roleRules:     cfg.RoleRules,
+		unmatchedRole: cfg.UnmatchedRole,
 	}, nil
 }
 
@@ -163,5 +167,6 @@ func (p *realProvider) Exchange(ctx context.Context, code, pkceVerifier, expecte
 	if err := idToken.Claims(&all); err != nil {
 		return nil, fmt.Errorf("decode id_token claims: %w", err)
 	}
-	return mapClaims(p.usernameClaim, p.roleClaim, p.adminValues, idToken.Issuer, idToken.Subject, all)
+	return mapClaims(p.usernameClaim, p.roleClaim, p.adminValues, p.roleRules, p.unmatchedRole,
+		idToken.Issuer, idToken.Subject, all)
 }

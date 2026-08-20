@@ -224,9 +224,11 @@ func stateCookie(value string) *http.Cookie {
 func TestOIDCCallbackHappyPath(t *testing.T) {
 	f := newFakeDB()
 	f.oidcSettings = enabledSettings()
+	// The provider shares the STORED row (as the real manager's cache
+	// does): the callback's writes are bound to its updated_at.
 	fp := &fakeProviders{provider: &fakeProvider{
 		claims: &oidcauth.Claims{Issuer: testIssuer, Subject: "sub-1", Username: "alice@corp", Role: "admin"},
-	}}
+	}, settings: f.oidcSettings}
 	h := newTestAPIWithProviders(t, f, fp)
 
 	w := callback(t, h, "?code=authcode&state=st", stateCookie("st.n1.ver"))
@@ -279,7 +281,7 @@ func TestOIDCCallbackRoleRefreshKeepsDisabled(t *testing.T) {
 	f.addOIDCUser(testIssuer, "sub-1", "old-name", "admin", false)
 	fp := &fakeProviders{provider: &fakeProvider{
 		claims: &oidcauth.Claims{Issuer: testIssuer, Subject: "sub-1", Username: "new-name", Role: "viewer"},
-	}}
+	}, settings: f.oidcSettings}
 	h := newTestAPIWithProviders(t, f, fp)
 
 	w := callback(t, h, "?code=c&state=st", stateCookie("st.n.v"))
@@ -364,8 +366,13 @@ func TestOIDCCallbackProviderChangedMidFlight(t *testing.T) {
 	h := newTestAPIWithProviders(t, f, fp)
 
 	w := callback(t, h, "?code=c&state=st", stateCookie("st.n.v"))
-	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/#/sso-error=config" {
-		t.Fatalf("stale-provider callback = %d %q, want 303 to sso-error=config: %s",
+	// Any settings write bumps updated_at, so the stale callback is now
+	// refused at the USER upsert (sso-error=state, "try again") — before it
+	// can overwrite the role or scope a newer policy established. The
+	// provider-identity re-check in the session insert remains as
+	// defense-in-depth behind it.
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/#/sso-error=state" {
+		t.Fatalf("stale-provider callback = %d %q, want 303 to sso-error=state: %s",
 			w.Code, w.Header().Get("Location"), w.Body)
 	}
 	for _, c := range w.Result().Cookies() {
@@ -378,6 +385,9 @@ func TestOIDCCallbackProviderChangedMidFlight(t *testing.T) {
 	}
 	if len(f.logins) != 0 {
 		t.Errorf("recorded logins = %d, want none (event only after the session commits)", len(f.logins))
+	}
+	if len(f.oidcUsers) != 0 {
+		t.Errorf("oidc users = %d, want none (stale mapping must not provision)", len(f.oidcUsers))
 	}
 }
 
@@ -413,6 +423,7 @@ func TestOIDCCallbackFailures(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFakeDB()
+			f.oidcSettings = enabledSettings()
 			if tc.presetDB != nil {
 				tc.presetDB(f)
 			}
@@ -420,7 +431,7 @@ func TestOIDCCallbackFailures(t *testing.T) {
 			if p == nil {
 				p = &fakeProvider{claims: &oidcauth.Claims{Issuer: testIssuer, Subject: "s", Username: "u", Role: "viewer"}}
 			}
-			h := newTestAPIWithProviders(t, f, &fakeProviders{provider: p})
+			h := newTestAPIWithProviders(t, f, &fakeProviders{provider: p, settings: f.oidcSettings})
 
 			w := callback(t, h, tc.query, tc.cookie)
 			if w.Code != http.StatusSeeOther {
@@ -749,8 +760,14 @@ func TestOIDCSettingsProviderChangeRevokesSSOSessions(t *testing.T) {
 			m["client_id"] = "other-client"
 			m["client_secret"] = "fresh"
 		}, true},
-		{"same-provider edit", func(m map[string]any) {
+		// Role policy is authorization: sessions join role/scope live from
+		// the users row, which only a LOGIN remaps, so a policy edit must
+		// sign federated users out for remapping.
+		{"role policy edit", func(m map[string]any) {
 			m["admin_values"] = []string{"some-group"}
+		}, true},
+		{"policy-neutral edit", func(m map[string]any) {
+			m["scopes"] = []string{"openid", "profile", "email"}
 		}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -758,12 +775,15 @@ func TestOIDCSettingsProviderChangeRevokesSSOSessions(t *testing.T) {
 			f.oidcSettings = enabledSettings()
 			fp := &fakeProviders{provider: &fakeProvider{
 				claims: &oidcauth.Claims{Issuer: testIssuer, Subject: "sub-1", Username: "fed", Role: "viewer"},
-			}}
+			}, settings: f.oidcSettings}
 			h := newTestAPIWithProviders(t, f, fp)
 			ssoCookie := ssoLogin(t, h)
 			adminCookie, csrf := adminAndCookie(t, h, f)
 
 			body := oidcSettingsBody()
+			// Match the stored admin_values so only tc.mutate decides
+			// whether the write is a policy change.
+			body["admin_values"] = []string{"polarbeam-admins"}
 			tc.mutate(body)
 			w := doSettings(t, h, "PUT", "/api/v1/settings/oidc", body, adminCookie, csrf)
 			if w.Code != http.StatusOK {

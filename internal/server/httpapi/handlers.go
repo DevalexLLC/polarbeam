@@ -1,7 +1,9 @@
 package httpapi
 
 import (
+	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"time"
@@ -34,7 +36,7 @@ func toSiteJSON(sites []store.SiteInfo) []siteJSON {
 }
 
 func (a *api) handleSites(w http.ResponseWriter, r *http.Request) {
-	sites, err := a.db.ListSites(r.Context())
+	sites, err := a.db.ListSites(r.Context(), scopeIDs(r.Context()))
 	if err != nil {
 		internalError(w, "list sites", err)
 		return
@@ -43,7 +45,7 @@ func (a *api) handleSites(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) handleAgents(w http.ResponseWriter, r *http.Request) {
-	agents, err := a.db.ListAgents(r.Context())
+	agents, err := a.db.ListAgents(r.Context(), scopeIDs(r.Context()))
 	if err != nil {
 		internalError(w, "list agents", err)
 		return
@@ -109,7 +111,7 @@ func (a *api) handleAgentHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := a.db.AgentHealthSeries(r.Context(), agentHealthWindow, agentHealthBucket,
-		int16(pb.ProbeType_PROBE_TYPE_TRACEROUTE))
+		int16(pb.ProbeType_PROBE_TYPE_TRACEROUTE), scopeIDs(r.Context()))
 	if err != nil {
 		internalError(w, "agent health", err)
 		return
@@ -167,7 +169,7 @@ func (a *api) handleAgentProbeHealth(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad agent id")
 		return
 	}
-	rows, err := a.db.AgentProbeHealth(r.Context(), id, agentHealthWindow, agentHealthBucket)
+	rows, err := a.db.AgentProbeHealth(r.Context(), id, agentHealthWindow, agentHealthBucket, scopeIDs(r.Context()))
 	if err != nil {
 		internalError(w, "agent probe health", err)
 		return
@@ -265,7 +267,7 @@ func (a *api) handleAgentHealthBucket(w http.ResponseWriter, r *http.Request) {
 		probeID = &pid
 	}
 	rows, err := a.db.AgentBucketFailures(r.Context(), id, time.Unix(t, 0).UTC(), agentHealthBucket,
-		probeID, int16(pb.ProbeType_PROBE_TYPE_TRACEROUTE))
+		probeID, int16(pb.ProbeType_PROBE_TYPE_TRACEROUTE), scopeIDs(r.Context()))
 	if err != nil {
 		internalError(w, "agent bucket failures", err)
 		return
@@ -297,17 +299,18 @@ func (a *api) handleAgentHealthBucket(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) handleMatrix(w http.ResponseWriter, r *http.Request) {
-	sites, err := a.db.ListSites(r.Context())
+	scope := scopeIDs(r.Context())
+	sites, err := a.db.ListSites(r.Context(), scope)
 	if err != nil {
 		internalError(w, "list sites", err)
 		return
 	}
-	rows, err := a.db.MatrixLatest(r.Context(), staleHorizon)
+	rows, err := a.db.MatrixLatest(r.Context(), staleHorizon, scope)
 	if err != nil {
 		internalError(w, "matrix", err)
 		return
 	}
-	expected, err := a.db.ExpectedPairs(r.Context())
+	expected, err := a.db.ExpectedPairs(r.Context(), scope)
 	if err != nil {
 		internalError(w, "expected pairs", err)
 		return
@@ -327,12 +330,17 @@ func (a *api) handleMatrix(w http.ResponseWriter, r *http.Request) {
 // name → 404, never a silent no-op) and filters each endpoint's parallel
 // agent/target/network slices to that plane; a valid plane absent from one
 // site leaves its ID sets empty, which downstream folds render as stale.
+// Network-scoped sessions see only their planes' endpoint IDs (the scope
+// rides into SiteEndpoints), an out-of-scope site 404s exactly like an
+// unknown one, and an out-of-scope ?network= 404s exactly like an unknown
+// name — a tenant can never distinguish "foreign" from "nonexistent".
 func (a *api) pairEndpoints(w http.ResponseWriter, r *http.Request) (ea, eb *store.SiteEndpoints, networks []string, ok bool) {
+	scope := scopeIDs(r.Context())
 	for _, seg := range []struct {
 		name string
 		dst  **store.SiteEndpoints
 	}{{r.PathValue("a"), &ea}, {r.PathValue("b"), &eb}} {
-		ep, err := a.db.SiteEndpoints(r.Context(), seg.name)
+		ep, err := a.db.SiteEndpoints(r.Context(), seg.name, scope)
 		if err != nil {
 			internalError(w, "site endpoints", err)
 			return nil, nil, nil, false
@@ -357,6 +365,13 @@ func (a *api) pairEndpoints(w http.ResponseWriter, r *http.Request) (ea, eb *sto
 	}
 	sort.Strings(networks)
 	if net := r.URL.Query().Get("network"); net != "" {
+		// The scope check runs BEFORE existence resolution so the two
+		// failures are byte-identical 404s: resolving first would let a
+		// tenant distinguish another tenant's plane from a typo.
+		if names := scopeNames(r.Context()); names != nil && !slices.Contains(names, net) {
+			writeError(w, http.StatusNotFound, fmt.Sprintf("network %q does not exist", net))
+			return nil, nil, nil, false
+		}
 		if _, err := a.db.NetworkIDByName(r.Context(), net); err != nil {
 			writeStoreError(w, "resolve network", err)
 			return nil, nil, nil, false

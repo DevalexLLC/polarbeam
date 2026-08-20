@@ -40,14 +40,19 @@ func scanPathThreshold(row interface{ Scan(...any) error }) (*PathThresholdOverr
 }
 
 // ListPathThresholds returns every override, pair names lexically ordered
-// within each row and rows sorted by pair.
-func (s *Store) ListPathThresholds(ctx context.Context) ([]PathThresholdOverride, error) {
+// within each row and rows sorted by pair. networks is the caller's network
+// scope (nil = unfiltered): a scoped caller sees only overrides whose BOTH
+// sites are visible under siteScopePredicate — override rows carry site
+// names, which must never leak across tenants.
+func (s *Store) ListPathThresholds(ctx context.Context, networks []uuid.UUID) ([]PathThresholdOverride, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT least(sa.name, sb.name), greatest(sa.name, sb.name), `+pathThresholdValueColumns+`
 		  FROM path_thresholds pt
 		  JOIN sites sa ON sa.id = pt.site_a_id
 		  JOIN sites sb ON sb.id = pt.site_b_id
-		 ORDER BY 1, 2`)
+		 WHERE `+siteScopePredicate("pt.site_a_id", "$1")+`
+		   AND `+siteScopePredicate("pt.site_b_id", "$1")+`
+		 ORDER BY 1, 2`, networks)
 	if err != nil {
 		return nil, fmt.Errorf("list path thresholds: %w", err)
 	}

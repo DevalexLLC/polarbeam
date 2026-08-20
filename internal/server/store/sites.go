@@ -76,15 +76,30 @@ type SiteAdminInfo struct {
 
 // ListSitesConfig lists all sites with per-site reference counts. The
 // dashboard's ListSites stays separate so the map/matrix payload shape is
-// stable.
-func (s *Store) ListSitesConfig(ctx context.Context) ([]SiteAdminInfo, error) {
+// stable. networks is the caller's network scope (nil = unfiltered):
+// visibility follows siteScopePredicate, and every count describes only the
+// caller's planes. Site NAMES are shared operator vocabulary, but the
+// counts are tenant activity — a shared site reporting server-wide agent,
+// mesh, and probe totals would tell one tenant how large another's
+// footprint there is. Only direct probe rows carry site_id (mesh templates
+// keep it NULL by CHECK), so the probe predicate needs no mesh join; mesh
+// membership takes its plane from the owning group.
+func (s *Store) ListSitesConfig(ctx context.Context, networks []uuid.UUID) ([]SiteAdminInfo, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT s.id, s.name, s.display_name, s.location, s.latitude, s.longitude, s.created_at,
-		       (SELECT count(*) FROM agents a WHERE a.site_id = s.id),
-		       (SELECT count(*) FROM mesh_members mm WHERE mm.site_id = s.id),
-		       (SELECT count(*) FROM probe_configs pc WHERE pc.site_id = s.id)
+		       (SELECT count(*) FROM agents a
+		         WHERE a.site_id = s.id
+		           AND ($1::uuid[] IS NULL OR a.network_id = ANY($1))),
+		       (SELECT count(*) FROM mesh_members mm
+		          JOIN mesh_groups mg ON mg.id = mm.mesh_id
+		         WHERE mm.site_id = s.id
+		           AND ($1::uuid[] IS NULL OR mg.network_id = ANY($1))),
+		       (SELECT count(*) FROM probe_configs pc
+		         WHERE pc.site_id = s.id
+		           AND ($1::uuid[] IS NULL OR pc.network_id = ANY($1)))
 		  FROM sites s
-		 ORDER BY s.name`)
+		 WHERE `+siteScopePredicate("s.id", "$1")+`
+		 ORDER BY s.name`, networks)
 	if err != nil {
 		return nil, fmt.Errorf("list sites config: %w", err)
 	}

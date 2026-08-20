@@ -36,6 +36,9 @@ type userJSON struct {
 	// AuthSource ("local" or "oidc") lets the SPA hide password management
 	// for federated accounts, whose credential lives at the IdP.
 	AuthSource string `json:"auth_source"`
+	// Networks is the network scope of the network-scoped roles (sorted
+	// names; [] = scoped but sees nothing) and null for global roles.
+	Networks []string `json:"networks"`
 }
 
 // loginResponse is shared by handleLogin and handleMe, so the dashboard
@@ -124,7 +127,7 @@ func (a *api) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, loginResponse{
-		User:      userJSON{Username: user.Username, Role: user.Role, AuthSource: user.AuthSource},
+		User:      userJSON{Username: user.Username, Role: user.Role, AuthSource: user.AuthSource, Networks: user.Networks},
 		CSRFToken: csrf,
 		Version:   version.String(),
 	})
@@ -207,7 +210,7 @@ func (a *api) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (a *api) handleMe(w http.ResponseWriter, r *http.Request) {
 	s := sessionFrom(r.Context())
 	writeJSON(w, http.StatusOK, loginResponse{
-		User:      userJSON{Username: s.Username, Role: s.Role, AuthSource: s.AuthSource},
+		User:      userJSON{Username: s.Username, Role: s.Role, AuthSource: s.AuthSource, Networks: scopeNames(r.Context())},
 		CSRFToken: s.CSRFToken,
 		Version:   version.String(),
 	})

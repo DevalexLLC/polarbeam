@@ -26,7 +26,8 @@ func (f *fakeDB) NetworkIDByName(_ context.Context, name string) (uuid.UUID, err
 	return uuid.Nil, fmt.Errorf("network %q does not exist%w", name, store.ErrNotFound)
 }
 
-func (f *fakeDB) ListNetworksConfig(_ context.Context) ([]store.NetworkAdminInfo, error) {
+func (f *fakeDB) ListNetworksConfig(_ context.Context, networks []uuid.UUID) ([]store.NetworkAdminInfo, error) {
+	f.recordScope("ListNetworksConfig", networks)
 	// Recompute reference counts from the other fake slices so tests seed
 	// plain rows and the counts stay honest, like the store's subqueries.
 	out := make([]store.NetworkAdminInfo, len(f.networks))

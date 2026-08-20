@@ -81,7 +81,7 @@ func cmdSite(args []string) error {
 		}
 		defer cancel()
 		defer st.Close()
-		sites, err := st.ListSites(ctx)
+		sites, err := st.ListSites(ctx, nil)
 		if err != nil {
 			return err
 		}
@@ -201,7 +201,7 @@ func cmdTarget(args []string) error {
 		}
 		defer cancel()
 		defer st.Close()
-		targets, err := st.ListTargets(ctx)
+		targets, err := st.ListTargets(ctx, nil)
 		if err != nil {
 			return err
 		}
@@ -347,7 +347,7 @@ func cmdProbe(args []string) error {
 		}
 		defer cancel()
 		defer st.Close()
-		probes, err := st.ListProbeConfigs(ctx)
+		probes, err := st.ListProbeConfigs(ctx, nil)
 		if err != nil {
 			return err
 		}
@@ -498,7 +498,7 @@ func cmdMesh(args []string) error {
 		}
 		defer cancel()
 		defer st.Close()
-		meshes, err := st.ListMeshGroups(ctx)
+		meshes, err := st.ListMeshGroups(ctx, nil)
 		if err != nil {
 			return err
 		}

@@ -70,7 +70,7 @@ func toSiteConfigJSON(si store.SiteAdminInfo) siteConfigJSON {
 }
 
 func (a *api) handleSitesConfigGet(w http.ResponseWriter, r *http.Request) {
-	sites, err := a.db.ListSitesConfig(r.Context())
+	sites, err := a.db.ListSitesConfig(r.Context(), scopeIDs(r.Context()))
 	if err != nil {
 		internalError(w, "list sites config", err)
 		return

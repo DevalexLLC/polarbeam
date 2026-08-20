@@ -165,7 +165,7 @@ func TestNetworksMigrationUpgrade(t *testing.T) {
 		}
 	}
 
-	pairs, err := s.ExpectedPairs(ctx)
+	pairs, err := s.ExpectedPairs(ctx, nil)
 	if err != nil {
 		t.Fatalf("ExpectedPairs: %v", err)
 	}

@@ -30,7 +30,7 @@ func (a *api) handleOutages(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "unknown window (want 24h|7d|30d|90d|365d)")
 		return
 	}
-	outages, err := a.db.ListOutages(r.Context(), spec.Window)
+	outages, err := a.db.ListOutages(r.Context(), spec.Window, scopeIDs(r.Context()))
 	if err != nil {
 		internalError(w, "list outages", err)
 		return
@@ -79,7 +79,7 @@ func (a *api) handlePathEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "unknown window (want 24h|7d|30d|90d|365d)")
 		return
 	}
-	events, err := a.db.ListPathEvents(r.Context(), spec.Window)
+	events, err := a.db.ListPathEvents(r.Context(), spec.Window, scopeIDs(r.Context()))
 	if err != nil {
 		internalError(w, "list path events", err)
 		return

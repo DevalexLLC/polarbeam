@@ -34,15 +34,16 @@ type DB interface {
 	RecordLogin(ctx context.Context, userID uuid.UUID) error
 	ListUserAccounts(ctx context.Context, f store.UserAccountFilter) ([]store.UserAccountInfo, int64, error)
 	MonthlyLoginStats(ctx context.Context, months int) ([]store.LoginMonthStat, error)
-	CreateUser(ctx context.Context, username, passwordHash, role string) (uuid.UUID, error)
+	CreateUser(ctx context.Context, username, passwordHash, role string, networks []uuid.UUID) (uuid.UUID, error)
+	SetUserNetworks(ctx context.Context, id uuid.UUID, networks []uuid.UUID) error
 	SetUserDisabled(ctx context.Context, id uuid.UUID, disabled bool) error
 	DeleteUser(ctx context.Context, id uuid.UUID) error
 	GetUserByID(ctx context.Context, id uuid.UUID) (*store.UserInfo, error)
 	ResetLocalUserPassword(ctx context.Context, id uuid.UUID, passwordHash string) (username, role string, err error)
 	UpdateOwnPassword(ctx context.Context, userID uuid.UUID, verifiedHash, passwordHash string, keepSessionID uuid.UUID) error
 
-	ListSites(ctx context.Context) ([]store.SiteInfo, error)
-	ListSitesConfig(ctx context.Context) ([]store.SiteAdminInfo, error)
+	ListSites(ctx context.Context, networks []uuid.UUID) ([]store.SiteInfo, error)
+	ListSitesConfig(ctx context.Context, networks []uuid.UUID) ([]store.SiteAdminInfo, error)
 	CreateSite(ctx context.Context, name string, up store.SiteUpdate) (uuid.UUID, error)
 	UpdateSite(ctx context.Context, name string, up store.SiteUpdate) error
 	DeleteSite(ctx context.Context, name string) (int64, error)
@@ -51,48 +52,48 @@ type DB interface {
 	CreateJoinToken(ctx context.Context, siteID, networkID uuid.UUID, createdBy string, ttl time.Duration) (string, error)
 	DeleteJoinToken(ctx context.Context, id uuid.UUID) error
 	NetworkIDByName(ctx context.Context, name string) (uuid.UUID, error)
-	ListNetworksConfig(ctx context.Context) ([]store.NetworkAdminInfo, error)
+	ListNetworksConfig(ctx context.Context, networks []uuid.UUID) ([]store.NetworkAdminInfo, error)
 	CreateNetwork(ctx context.Context, name, displayName string) (uuid.UUID, error)
 	UpdateNetwork(ctx context.Context, name, displayName string) error
 	DeleteNetwork(ctx context.Context, name string) (int64, error)
-	ListAgents(ctx context.Context) ([]store.AgentListInfo, error)
-	AgentHealthSeries(ctx context.Context, window, bucket time.Duration, excludeProbeType int16) ([]store.AgentHealthBucket, error)
-	AgentProbeHealth(ctx context.Context, agentID uuid.UUID, window, bucket time.Duration) ([]store.AgentProbeHealthRow, error)
-	AgentBucketFailures(ctx context.Context, agentID uuid.UUID, bucketStart time.Time, bucket time.Duration, probeID *uuid.UUID, excludeProbeType int16) ([]store.AgentBucketFailureGroup, error)
-	MatrixLatest(ctx context.Context, horizon time.Duration) ([]store.MatrixRow, error)
-	ExpectedPairs(ctx context.Context) ([]store.NetworkPair, error)
-	SiteEndpoints(ctx context.Context, siteName string) (*store.SiteEndpoints, error)
+	ListAgents(ctx context.Context, networks []uuid.UUID) ([]store.AgentListInfo, error)
+	AgentHealthSeries(ctx context.Context, window, bucket time.Duration, excludeProbeType int16, networks []uuid.UUID) ([]store.AgentHealthBucket, error)
+	AgentProbeHealth(ctx context.Context, agentID uuid.UUID, window, bucket time.Duration, networks []uuid.UUID) ([]store.AgentProbeHealthRow, error)
+	AgentBucketFailures(ctx context.Context, agentID uuid.UUID, bucketStart time.Time, bucket time.Duration, probeID *uuid.UUID, excludeProbeType int16, networks []uuid.UUID) ([]store.AgentBucketFailureGroup, error)
+	MatrixLatest(ctx context.Context, horizon time.Duration, networks []uuid.UUID) ([]store.MatrixRow, error)
+	ExpectedPairs(ctx context.Context, networks []uuid.UUID) ([]store.NetworkPair, error)
+	SiteEndpoints(ctx context.Context, siteName string, networks []uuid.UUID) (*store.SiteEndpoints, error)
 	PairSeries(ctx context.Context, srcAgents, dstTargets []uuid.UUID, bucket, window time.Duration, source store.Source, latencySource string) ([]store.SeriesBucket, error)
 	PairSummary(ctx context.Context, srcAgents, dstTargets []uuid.UUID, window time.Duration, source store.Source) (*store.PairSummaryRow, error)
 	PairLatencySource(ctx context.Context, srcAgents, dstTargets []uuid.UUID, window time.Duration, source store.Source) (string, error)
 	DirectionLatest(ctx context.Context, srcAgents, dstTargets []uuid.UUID, horizon time.Duration) ([]store.MatrixRow, error)
-	TargetEndpoints(ctx context.Context, targetID uuid.UUID) (*store.TargetEndpoints, error)
+	TargetEndpoints(ctx context.Context, targetID uuid.UUID, networks []uuid.UUID) (*store.TargetEndpoints, error)
 	TargetStageSeries(ctx context.Context, srcAgents []uuid.UUID, targetID uuid.UUID, bucket, window time.Duration, source store.Source) ([]store.StageBucket, error)
-	TargetProbeHealth(ctx context.Context, targetID uuid.UUID, window, bucket time.Duration) ([]store.TargetProbeHealthRow, error)
+	TargetProbeHealth(ctx context.Context, targetID uuid.UUID, window, bucket time.Duration, networks []uuid.UUID) ([]store.TargetProbeHealthRow, error)
 
 	GetSettings(ctx context.Context) (*store.ThresholdSettings, error)
 	UpdateSettings(ctx context.Context, ts store.ThresholdSettings) (*store.ThresholdSettings, error)
-	ListPathThresholds(ctx context.Context) ([]store.PathThresholdOverride, error)
+	ListPathThresholds(ctx context.Context, networks []uuid.UUID) ([]store.PathThresholdOverride, error)
 	UpsertPathThreshold(ctx context.Context, siteA, siteB string, o store.PathThresholdOverride) (*store.PathThresholdOverride, error)
 	DeletePathThreshold(ctx context.Context, siteA, siteB string) error
 
-	ListTargets(ctx context.Context) ([]store.TargetInfo, error)
+	ListTargets(ctx context.Context, networks []uuid.UUID) ([]store.TargetInfo, error)
 	UpsertExternalTarget(ctx context.Context, name, address string, port int32, url string) (uuid.UUID, error)
 	DeleteTarget(ctx context.Context, name string) error
-	ListMeshGroups(ctx context.Context) ([]store.MeshGroupInfo, error)
+	ListMeshGroups(ctx context.Context, networks []uuid.UUID) ([]store.MeshGroupInfo, error)
 	UpsertMeshGroup(ctx context.Context, name string, networkID *uuid.UUID) (uuid.UUID, error)
 	DeleteMeshGroup(ctx context.Context, name string) (int64, error)
 	AddMeshMember(ctx context.Context, meshName, siteName string) error
 	RemoveMeshMember(ctx context.Context, meshName, siteName string) error
-	ListProbeConfigs(ctx context.Context) ([]store.ProbeConfigInfo, error)
+	ListProbeConfigs(ctx context.Context, networks []uuid.UUID) ([]store.ProbeConfigInfo, error)
 	GetProbeConfig(ctx context.Context, id uuid.UUID) (*store.ProbeConfigInfo, error)
 	AddDirectProbe(ctx context.Context, siteName, targetName string, networkID uuid.UUID, ps store.ProbeSettings, enabled bool, updatedBy string) (uuid.UUID, error)
 	AddMeshProbe(ctx context.Context, meshName string, ps store.ProbeSettings, enabled bool, updatedBy string) (uuid.UUID, error)
 	UpdateProbeConfig(ctx context.Context, id uuid.UUID, ps store.ProbeSettings, enabled bool, updatedBy string) error
 	DeleteProbeConfig(ctx context.Context, id uuid.UUID) error
 
-	ListOutages(ctx context.Context, window time.Duration) ([]store.OutageInfo, error)
-	ListPathEvents(ctx context.Context, window time.Duration) ([]store.PathEventInfo, error)
+	ListOutages(ctx context.Context, window time.Duration, networks []uuid.UUID) ([]store.OutageInfo, error)
+	ListPathEvents(ctx context.Context, window time.Duration, networks []uuid.UUID) ([]store.PathEventInfo, error)
 	CurrentPaths(ctx context.Context, srcAgents, dstTargets []uuid.UUID) ([]store.CurrentPath, error)
 	CurrentPathMTUs(ctx context.Context, srcAgents, dstTargets []uuid.UUID) ([]store.CurrentPathMTU, error)
 
@@ -100,9 +101,9 @@ type DB interface {
 	UpdateBannerSettings(ctx context.Context, b store.BannerSettings) (*store.BannerSettings, error)
 
 	GetOIDCSettings(ctx context.Context) (*store.OIDCSettings, error)
-	UpdateOIDCSettings(ctx context.Context, o store.OIDCSettings, keepSecret bool) (*store.OIDCSettings, int64, error)
-	UpsertOIDCUser(ctx context.Context, issuer, subject, username, role string) (*store.UserInfo, error)
-	CreateOIDCSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time, issuer, clientID string) error
+	UpdateOIDCSettings(ctx context.Context, o store.OIDCSettings, keepSecret, keepRoleRules, keepUnmatchedRole bool) (*store.OIDCSettings, int64, error)
+	UpsertOIDCUser(ctx context.Context, issuer, subject, username, role string, networks []uuid.UUID, policyUpdatedAt time.Time) (*store.UserInfo, error)
+	CreateOIDCSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time, issuer, clientID string, policyUpdatedAt time.Time) error
 }
 
 // OIDCProviders is the slice of oidcauth.Manager the handlers use — an
@@ -299,6 +300,46 @@ const sessionKey ctxKey = 0
 func sessionFrom(ctx context.Context) *store.SessionInfo {
 	s, _ := ctx.Value(sessionKey).(*store.SessionInfo)
 	return s
+}
+
+// scopeIDs is the session's network scope as store-query input: nil for
+// global roles (unfiltered) and the allowed network IDs for the scoped
+// roles, where an empty non-nil slice matches nothing (fails closed).
+// Every scoped read handler resolves its visibility through this one
+// helper and passes the result straight to the store.
+func scopeIDs(ctx context.Context) []uuid.UUID {
+	s := sessionFrom(ctx)
+	if s == nil {
+		return []uuid.UUID{}
+	}
+	scope, ok := s.NetworkScope()
+	if !ok {
+		return nil
+	}
+	ids := make([]uuid.UUID, len(scope))
+	for i, n := range scope {
+		ids[i] = n.ID
+	}
+	return ids
+}
+
+// scopeNames is the session's allowed network names (nil = unscoped),
+// mirroring scopeIDs for the places that reason about names — the
+// ?network= guard and the /auth/me response.
+func scopeNames(ctx context.Context) []string {
+	s := sessionFrom(ctx)
+	if s == nil {
+		return []string{}
+	}
+	scope, ok := s.NetworkScope()
+	if !ok {
+		return nil
+	}
+	names := make([]string, len(scope))
+	for i, n := range scope {
+		names[i] = n.Name
+	}
+	return names
 }
 
 func withSessionCtx(ctx context.Context, s *store.SessionInfo) context.Context {

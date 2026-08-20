@@ -29,7 +29,8 @@ func fakePairKey(a, b string) string {
 	return a + "\x00" + b
 }
 
-func (f *fakeDB) ListPathThresholds(_ context.Context) ([]store.PathThresholdOverride, error) {
+func (f *fakeDB) ListPathThresholds(_ context.Context, networks []uuid.UUID) ([]store.PathThresholdOverride, error) {
+	f.recordScope("ListPathThresholds", networks)
 	out := make([]store.PathThresholdOverride, 0, len(f.pathThresholds))
 	for _, k := range slices.Sorted(maps.Keys(f.pathThresholds)) {
 		out = append(out, *f.pathThresholds[k])

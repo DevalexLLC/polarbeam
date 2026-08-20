@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/devalexllc/polarbeam/internal/server/store"
 )
 
 func TestMapClaims(t *testing.T) {
@@ -57,7 +59,7 @@ func TestMapClaims(t *testing.T) {
 			if tc.issuer == "-" { // sentinel: the empty-issuer case
 				issuer = ""
 			}
-			got, err := mapClaims("preferred_username", "groups", admins, issuer, tc.subject, tc.all)
+			got, err := mapClaims("preferred_username", "groups", admins, nil, "viewer", issuer, tc.subject, tc.all)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("err = %v, want mention of %q", err, tc.wantErr)
@@ -81,7 +83,7 @@ func TestMapClaims(t *testing.T) {
 func TestMapClaimsNoAdminValues(t *testing.T) {
 	// With no admin_values configured nothing can elevate, whatever the
 	// claim carries.
-	got, err := mapClaims("sub", "groups", nil, "https://idp.example/realms/x", "s1",
+	got, err := mapClaims("sub", "groups", nil, nil, "viewer", "https://idp.example/realms/x", "s1",
 		map[string]any{"sub": "s1", "groups": []any{"anything"}})
 	if err != nil {
 		t.Fatalf("mapClaims: %v", err)
@@ -89,4 +91,82 @@ func TestMapClaimsNoAdminValues(t *testing.T) {
 	if got.Role != "viewer" {
 		t.Errorf("role = %q, want viewer floor", got.Role)
 	}
+}
+
+func TestMapClaimsRoleRules(t *testing.T) {
+	admins := []string{"polarbeam-admins"}
+	rules := []store.OIDCRoleRule{
+		{Value: "tenant-a-admins", Role: store.RoleNetworkAdmin, Networks: []string{"tenant-a"}},
+		{Value: "tenant-b-admins", Role: store.RoleNetworkAdmin, Networks: []string{"tenant-b"}},
+		{Value: "tenant-a-viewers", Role: store.RoleNetworkViewer, Networks: []string{"tenant-a"}},
+	}
+	claims := func(groups ...any) map[string]any {
+		return map[string]any{"preferred_username": "u", "groups": groups}
+	}
+	run := func(t *testing.T, unmatched string, all map[string]any) (*Claims, error) {
+		t.Helper()
+		return mapClaims("preferred_username", "groups", admins, rules, unmatched,
+			"https://idp.example/realms/x", "s1", all)
+	}
+
+	t.Run("rule match grants scoped role", func(t *testing.T) {
+		got, err := run(t, "deny", claims("tenant-a-admins"))
+		if err != nil {
+			t.Fatalf("mapClaims: %v", err)
+		}
+		if got.Role != store.RoleNetworkAdmin || len(got.Networks) != 1 || got.Networks[0] != "tenant-a" {
+			t.Errorf("claims = %+v, want network_admin over [tenant-a]", got)
+		}
+	})
+	t.Run("admin_values beats rules", func(t *testing.T) {
+		got, err := run(t, "deny", claims("polarbeam-admins", "tenant-a-admins"))
+		if err != nil {
+			t.Fatalf("mapClaims: %v", err)
+		}
+		if got.Role != store.RoleAdmin || got.Networks != nil {
+			t.Errorf("claims = %+v, want unscoped admin", got)
+		}
+	})
+	t.Run("same-role rules union networks", func(t *testing.T) {
+		got, err := run(t, "deny", claims("tenant-a-admins", "tenant-b-admins"))
+		if err != nil {
+			t.Fatalf("mapClaims: %v", err)
+		}
+		if got.Role != store.RoleNetworkAdmin || len(got.Networks) != 2 ||
+			got.Networks[0] != "tenant-a" || got.Networks[1] != "tenant-b" {
+			t.Errorf("claims = %+v, want network_admin over [tenant-a tenant-b]", got)
+		}
+	})
+	t.Run("stronger role wins over weaker", func(t *testing.T) {
+		got, err := run(t, "deny", claims("tenant-a-viewers", "tenant-a-admins"))
+		if err != nil {
+			t.Fatalf("mapClaims: %v", err)
+		}
+		if got.Role != store.RoleNetworkAdmin {
+			t.Errorf("role = %q, want network_admin (admin rule outranks viewer rule)", got.Role)
+		}
+	})
+	t.Run("unmatched with deny refuses", func(t *testing.T) {
+		_, err := run(t, "deny", claims("unrelated"))
+		var denied *AccessDeniedError
+		if !errors.As(err, &denied) {
+			t.Fatalf("err = %v, want *AccessDeniedError", err)
+		}
+	})
+	t.Run("unmatched with viewer keeps the floor", func(t *testing.T) {
+		got, err := run(t, "viewer", claims("unrelated"))
+		if err != nil {
+			t.Fatalf("mapClaims: %v", err)
+		}
+		if got.Role != store.RoleViewer || got.Networks != nil {
+			t.Errorf("claims = %+v, want unscoped viewer", got)
+		}
+	})
+	t.Run("absent claim with deny refuses", func(t *testing.T) {
+		_, err := run(t, "deny", map[string]any{"preferred_username": "u"})
+		var denied *AccessDeniedError
+		if !errors.As(err, &denied) {
+			t.Fatalf("err = %v, want *AccessDeniedError", err)
+		}
+	})
 }

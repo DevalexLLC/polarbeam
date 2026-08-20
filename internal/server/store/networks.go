@@ -78,7 +78,10 @@ func (s *Store) UpdateNetwork(ctx context.Context, name, displayName string) err
 }
 
 // ListNetworksConfig lists all networks with per-network reference counts.
-func (s *Store) ListNetworksConfig(ctx context.Context) ([]NetworkAdminInfo, error) {
+// networks is the caller's network scope (nil = unfiltered): a scoped
+// caller sees only its own planes — the network inventory must never
+// enumerate other tenants.
+func (s *Store) ListNetworksConfig(ctx context.Context, networks []uuid.UUID) ([]NetworkAdminInfo, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT n.id, n.name, n.display_name, n.created_at,
 		       (SELECT count(*) FROM agents a WHERE a.network_id = n.id),
@@ -86,22 +89,23 @@ func (s *Store) ListNetworksConfig(ctx context.Context) ([]NetworkAdminInfo, err
 		       (SELECT count(*) FROM mesh_groups g WHERE g.network_id = n.id),
 		       (SELECT count(*) FROM probe_configs pc WHERE pc.network_id = n.id)
 		  FROM networks n
-		 ORDER BY n.name`)
+		 WHERE $1::uuid[] IS NULL OR n.id = ANY($1)
+		 ORDER BY n.name`, networks)
 	if err != nil {
 		return nil, fmt.Errorf("list networks config: %w", err)
 	}
 	defer rows.Close()
 
-	var networks []NetworkAdminInfo
+	var out []NetworkAdminInfo
 	for rows.Next() {
 		var ni NetworkAdminInfo
 		if err := rows.Scan(&ni.ID, &ni.Name, &ni.DisplayName, &ni.CreatedAt,
 			&ni.AgentCount, &ni.TokenCount, &ni.MeshCount, &ni.ProbeCount); err != nil {
 			return nil, fmt.Errorf("list networks config: %w", err)
 		}
-		networks = append(networks, ni)
+		out = append(out, ni)
 	}
-	return networks, rows.Err()
+	return out, rows.Err()
 }
 
 // DeleteNetwork removes a network that nothing references, deleting its

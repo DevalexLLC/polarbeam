@@ -79,9 +79,11 @@ func validateThresholds(t thresholdsJSON) error {
 }
 
 // settingsWithOverrides folds the override list into the response; both
-// settings handlers return the same complete shape.
+// settings handlers return the same complete shape. Scoped sessions see
+// only overrides whose site pair is visible to them — the global defaults
+// themselves stay readable (they decide the tenant's severities too).
 func (a *api) settingsWithOverrides(r *http.Request, ts *store.ThresholdSettings) (settingsResponse, error) {
-	overrides, err := a.db.ListPathThresholds(r.Context())
+	overrides, err := a.db.ListPathThresholds(r.Context(), scopeIDs(r.Context()))
 	if err != nil {
 		return settingsResponse{}, err
 	}

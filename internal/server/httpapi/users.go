@@ -10,6 +10,7 @@ package httpapi
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -41,6 +42,9 @@ type userAccountJSON struct {
 	LoginCount  int64      `json:"login_count"`
 	LastLoginAt *time.Time `json:"last_login_at"` // null = never
 	CreatedAt   *time.Time `json:"created_at"`    // null for deleted identities
+	// Networks is the scope of a live network-scoped account; null for
+	// global roles and deleted identities.
+	Networks []string `json:"networks"`
 }
 
 type loginMonthJSON struct {
@@ -71,7 +75,7 @@ func (a *api) handleUsersGet(w http.ResponseWriter, r *http.Request) {
 	var problems []string
 	f := store.UserAccountFilter{
 		Query:  q.Get("q"),
-		Role:   oneOf(&problems, "role", q.Get("role"), "admin", "viewer"),
+		Role:   oneOf(&problems, "role", q.Get("role"), store.Roles...),
 		Status: oneOf(&problems, "status", q.Get("status"), "active", "disabled", "deleted"),
 		Source: oneOf(&problems, "source", q.Get("source"), "local", "oidc"),
 		Limit:  usersDefaultLimit,
@@ -114,7 +118,7 @@ func (a *api) handleUsersGet(w http.ResponseWriter, r *http.Request) {
 			ID: acc.ID.String(), Username: acc.Username, Role: acc.Role,
 			AuthSource: acc.AuthSource, Status: acc.Status,
 			LoginCount: acc.LoginCount, LastLoginAt: acc.LastLoginAt,
-			CreatedAt: acc.CreatedAt,
+			CreatedAt: acc.CreatedAt, Networks: acc.Networks,
 		})
 	}
 	monthsOut := make([]loginMonthJSON, 0, len(months))
@@ -138,8 +142,9 @@ func (a *api) handleUsersGet(w http.ResponseWriter, r *http.Request) {
 // first login.
 func (a *api) handleUserPost(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Username string `json:"username"`
-		Role     string `json:"role"`
+		Username string   `json:"username"`
+		Role     string   `json:"role"`
+		Networks []string `json:"networks"`
 	}
 	if !decodeStrict(w, r, &in) {
 		return
@@ -148,9 +153,18 @@ func (a *api) handleUserPost(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(in.Username) == "" {
 		problems = append(problems, "username is required")
 	}
-	if in.Role != "admin" && in.Role != "viewer" {
-		problems = append(problems, "role must be one of: admin, viewer")
+	if !store.ValidRole(in.Role) {
+		problems = append(problems, "role must be one of: "+strings.Join(store.Roles, ", "))
+	} else if store.RoleIsNetworkScoped(in.Role) && len(in.Networks) == 0 {
+		problems = append(problems, "networks is required for role "+in.Role)
+	} else if !store.RoleIsNetworkScoped(in.Role) && len(in.Networks) > 0 {
+		problems = append(problems, "networks is only valid for the network-scoped roles")
 	}
+	networkIDs, nprob, ok := a.resolveNetworkNames(w, r, in.Networks)
+	if !ok {
+		return
+	}
+	problems = append(problems, nprob...)
 	if len(problems) > 0 {
 		writeError(w, http.StatusBadRequest, strings.Join(problems, "; "))
 		return
@@ -160,17 +174,38 @@ func (a *api) handleUserPost(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	id, err := a.db.CreateUser(r.Context(), strings.TrimSpace(in.Username), hash, in.Role)
+	id, err := a.db.CreateUser(r.Context(), strings.TrimSpace(in.Username), hash, in.Role, networkIDs)
 	if err != nil {
 		writeStoreError(w, "create user", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"id":       id.String(),
 		"username": strings.TrimSpace(in.Username),
 		"role":     in.Role,
+		"networks": in.Networks,
 		"password": password,
 	})
+}
+
+// resolveNetworkNames maps network names to IDs, collecting a problem per
+// unknown name (never silently dropping one — the scope is a trust
+// decision, same posture as token minting). ok=false means an internal
+// error was already written.
+func (a *api) resolveNetworkNames(w http.ResponseWriter, r *http.Request, names []string) (ids []uuid.UUID, problems []string, ok bool) {
+	for _, name := range names {
+		id, err := a.db.NetworkIDByName(r.Context(), name)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				problems = append(problems, fmt.Sprintf("network %q does not exist", name))
+				continue
+			}
+			internalError(w, "resolve network", err)
+			return nil, nil, false
+		}
+		ids = append(ids, id)
+	}
+	return ids, problems, true
 }
 
 // mintPassword generates the shown-once password for admin-driven account
@@ -243,17 +278,40 @@ func (a *api) handleUserPut(w http.ResponseWriter, r *http.Request) {
 	}
 	var in struct {
 		Disabled *bool `json:"disabled"`
+		// Networks replaces a local scoped user's network set. The store
+		// refuses it for global roles and for federated accounts (whose
+		// scope the IdP mapping re-derives on every login).
+		Networks []string `json:"networks"`
 	}
 	if !decodeStrict(w, r, &in) {
 		return
 	}
-	if in.Disabled == nil {
-		writeError(w, http.StatusBadRequest, "disabled is required")
+	if in.Disabled == nil && in.Networks == nil {
+		writeError(w, http.StatusBadRequest, "disabled or networks is required")
 		return
 	}
-	if err := a.db.SetUserDisabled(r.Context(), id, *in.Disabled); err != nil {
-		writeStoreError(w, "set user disabled", err)
-		return
+	if in.Networks != nil {
+		networkIDs, problems, ok := a.resolveNetworkNames(w, r, in.Networks)
+		if !ok {
+			return
+		}
+		if len(in.Networks) == 0 {
+			problems = append(problems, "networks must not be empty (a scoped user needs at least one network)")
+		}
+		if len(problems) > 0 {
+			writeError(w, http.StatusBadRequest, strings.Join(problems, "; "))
+			return
+		}
+		if err := a.db.SetUserNetworks(r.Context(), id, networkIDs); err != nil {
+			writeStoreError(w, "set user networks", err)
+			return
+		}
+	}
+	if in.Disabled != nil {
+		if err := a.db.SetUserDisabled(r.Context(), id, *in.Disabled); err != nil {
+			writeStoreError(w, "set user disabled", err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{})
 }

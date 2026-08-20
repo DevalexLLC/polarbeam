@@ -44,7 +44,7 @@ func (a *api) targetEndpoints(w http.ResponseWriter, r *http.Request) (*store.Ta
 		writeError(w, http.StatusBadRequest, "bad target id")
 		return nil, false
 	}
-	ep, err := a.db.TargetEndpoints(r.Context(), id)
+	ep, err := a.db.TargetEndpoints(r.Context(), id, scopeIDs(r.Context()))
 	if err != nil {
 		internalError(w, "target endpoints", err)
 		return nil, false
@@ -257,7 +257,7 @@ func (a *api) handleTargetHealth(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rows, err := a.db.TargetProbeHealth(r.Context(), ep.ID, agentHealthWindow, agentHealthBucket)
+	rows, err := a.db.TargetProbeHealth(r.Context(), ep.ID, agentHealthWindow, agentHealthBucket, scopeIDs(r.Context()))
 	if err != nil {
 		internalError(w, "target probe health", err)
 		return
