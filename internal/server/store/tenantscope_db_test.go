@@ -291,11 +291,11 @@ func TestScopedReadsKeepPlanesApart(t *testing.T) {
 	})
 
 	t.Run("path thresholds require both sites visible", func(t *testing.T) {
-		if _, err := s.UpsertPathThreshold(ctx, "site-a", "site-b",
+		if _, err := s.UpsertPathThreshold(ctx, "site-a", "site-b", nil,
 			store.PathThresholdOverride{LatencyWarnUS: ptr(int64(1000)), UpdatedBy: "test"}); err != nil {
 			t.Fatalf("UpsertPathThreshold a/b: %v", err)
 		}
-		if _, err := s.UpsertPathThreshold(ctx, "site-a", "site-def-only",
+		if _, err := s.UpsertPathThreshold(ctx, "site-a", "site-def-only", nil,
 			store.PathThresholdOverride{LatencyWarnUS: ptr(int64(2000)), UpdatedBy: "test"}); err != nil {
 			t.Fatalf("UpsertPathThreshold a/def-only: %v", err)
 		}
@@ -351,11 +351,11 @@ func TestScopedSitesCoverExpectedPairs(t *testing.T) {
 		t.Fatalf("UpsertMeshGroup: %v", err)
 	}
 	for _, site := range []string{"site-a", "site-unstaffed"} {
-		if err := s.AddMeshMember(ctx, "mgmt-mesh", site); err != nil {
+		if err := s.AddMeshMember(ctx, "mgmt-mesh", site, nil); err != nil {
 			t.Fatalf("AddMeshMember %q: %v", site, err)
 		}
 	}
-	if _, err := s.AddMeshProbe(ctx, "mgmt-mesh", netProbeSettings, true, "test"); err != nil {
+	if _, err := s.AddMeshProbe(ctx, "mgmt-mesh", netProbeSettings, true, "test", nil); err != nil {
 		t.Fatalf("AddMeshProbe: %v", err)
 	}
 	scope := []uuid.UUID{mgmt}

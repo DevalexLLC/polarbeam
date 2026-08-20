@@ -60,12 +60,19 @@ func testSession(f *fakeDB, role string, networks []store.NetworkRef) (*http.Coo
 //	          filtered data, never a 403)
 //	admin   — global admin only; every other role is 403 by requireRole's
 //	          exact string compare
+//	scoped  — global admin OR network_admin, behind networkWrite; the
+//	          read-only roles (viewer, network_viewer) are 403. Admission
+//	          is not authorization: the handler must still prove the
+//	          touched resource's plane is in scope and answer 404 when it
+//	          is not — that half is covered by the store-level tests and
+//	          the per-handler tests, not by this inventory.
 //
 // TestRouteInventoryAuthz fails when a mounted route is missing here (or a
 // listed route is no longer mounted), so a future endpoint cannot silently
 // default to an unclassified surface — this table is the tenant-isolation
-// regression fence. Classify new routes deliberately; a tenant-writable
-// route (PR 2's networkWrite) will get its own class when it exists.
+// regression fence. Classify new routes deliberately: moving one out of
+// "admin" is what grants tenants a write, so it must be an edit someone
+// makes on purpose and a reviewer can see.
 var routeDispositions = map[string]string{
 	"GET /healthz": "open",
 	"/api/":        "open", // JSON 404 fallback
@@ -104,37 +111,39 @@ var routeDispositions = map[string]string{
 	"GET /api/v1/traceroute/{a}/{b}":        "session",
 	"GET /api/v1/path-mtu/{a}/{b}":          "session",
 
-	"PUT /api/v1/settings":                               "admin",
-	"PUT /api/v1/settings/path-thresholds/{a}/{b}":       "admin",
-	"DELETE /api/v1/settings/path-thresholds/{a}/{b}":    "admin",
-	"GET /api/v1/settings/oidc":                          "admin",
-	"PUT /api/v1/settings/oidc":                          "admin",
-	"POST /api/v1/settings/oidc/test":                    "admin",
-	"GET /api/v1/settings/ui-banner":                     "admin",
-	"PUT /api/v1/settings/ui-banner":                     "admin",
-	"POST /api/v1/config/targets":                        "admin",
-	"DELETE /api/v1/config/targets/{name}":               "admin",
-	"POST /api/v1/config/meshes":                         "admin",
-	"DELETE /api/v1/config/meshes/{name}":                "admin",
-	"POST /api/v1/config/meshes/{name}/members/{site}":   "admin",
-	"DELETE /api/v1/config/meshes/{name}/members/{site}": "admin",
-	"POST /api/v1/config/probes":                         "admin",
-	"PUT /api/v1/config/probes/{id}":                     "admin",
-	"DELETE /api/v1/config/probes/{id}":                  "admin",
-	"POST /api/v1/config/networks":                       "admin",
-	"PUT /api/v1/config/networks/{name}":                 "admin",
-	"DELETE /api/v1/config/networks/{name}":              "admin",
-	"POST /api/v1/config/sites":                          "admin",
-	"PUT /api/v1/config/sites/{name}":                    "admin",
-	"DELETE /api/v1/config/sites/{name}":                 "admin",
-	"GET /api/v1/config/tokens":                          "admin",
-	"POST /api/v1/config/tokens":                         "admin",
-	"DELETE /api/v1/config/tokens/{id}":                  "admin",
-	"GET /api/v1/users":                                  "admin",
-	"POST /api/v1/users":                                 "admin",
-	"PUT /api/v1/users/{id}":                             "admin",
-	"DELETE /api/v1/users/{id}":                          "admin",
-	"POST /api/v1/users/{id}/reset-password":             "admin",
+	"PUT /api/v1/settings":                                 "admin",
+	"PUT /api/v1/settings/path-thresholds/{a}/{b}":         "scoped",
+	"DELETE /api/v1/settings/path-thresholds/{a}/{b}":      "scoped",
+	"PUT /api/v1/settings/network-thresholds/{network}":    "scoped",
+	"DELETE /api/v1/settings/network-thresholds/{network}": "scoped",
+	"GET /api/v1/settings/oidc":                            "admin",
+	"PUT /api/v1/settings/oidc":                            "admin",
+	"POST /api/v1/settings/oidc/test":                      "admin",
+	"GET /api/v1/settings/ui-banner":                       "admin",
+	"PUT /api/v1/settings/ui-banner":                       "admin",
+	"POST /api/v1/config/targets":                          "scoped",
+	"DELETE /api/v1/config/targets/{name}":                 "scoped",
+	"POST /api/v1/config/meshes":                           "scoped",
+	"DELETE /api/v1/config/meshes/{name}":                  "scoped",
+	"POST /api/v1/config/meshes/{name}/members/{site}":     "scoped",
+	"DELETE /api/v1/config/meshes/{name}/members/{site}":   "scoped",
+	"POST /api/v1/config/probes":                           "scoped",
+	"PUT /api/v1/config/probes/{id}":                       "scoped",
+	"DELETE /api/v1/config/probes/{id}":                    "scoped",
+	"POST /api/v1/config/networks":                         "admin",
+	"PUT /api/v1/config/networks/{name}":                   "admin",
+	"DELETE /api/v1/config/networks/{name}":                "admin",
+	"POST /api/v1/config/sites":                            "admin",
+	"PUT /api/v1/config/sites/{name}":                      "admin",
+	"DELETE /api/v1/config/sites/{name}":                   "admin",
+	"GET /api/v1/config/tokens":                            "scoped",
+	"POST /api/v1/config/tokens":                           "scoped",
+	"DELETE /api/v1/config/tokens/{id}":                    "scoped",
+	"GET /api/v1/users":                                    "admin",
+	"POST /api/v1/users":                                   "admin",
+	"PUT /api/v1/users/{id}":                               "admin",
+	"DELETE /api/v1/users/{id}":                            "admin",
+	"POST /api/v1/users/{id}/reset-password":               "admin",
 }
 
 // mountedRoutes parses newHandler's mux registrations out of httpapi.go —
@@ -255,6 +264,30 @@ func TestRouteInventoryAuthz(t *testing.T) {
 				}
 				if w := probeRoute(h, route, adminP.cookie, adminP.csrf); w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden {
 					t.Errorf("admin = %d, must not be refused", w.Code)
+				}
+			case "scoped":
+				if w := probeRoute(h, route, nil, ""); w.Code != http.StatusUnauthorized {
+					t.Errorf("unauthenticated = %d, want 401", w.Code)
+				}
+				// Read-only roles never reach a write surface, scoped or
+				// not: network_viewer is a tenant's NOC account, and the
+				// global viewer is the operator's.
+				for _, p := range others {
+					if p.name == "network_admin" {
+						continue
+					}
+					if w := probeRoute(h, route, p.cookie, p.csrf); w.Code != http.StatusForbidden {
+						t.Errorf("%s = %d, want 403", p.name, w.Code)
+					}
+				}
+				// Both writing roles are ADMITTED. What happens next is the
+				// handler's scope proof, which answers 404 for a foreign
+				// plane — never 403, so this assertion stays honest either
+				// way.
+				for _, p := range []principal{adminP, {"network_admin", nadmC, nadmT}} {
+					if w := probeRoute(h, route, p.cookie, p.csrf); w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden {
+						t.Errorf("%s = %d, must not be refused by the guard", p.name, w.Code)
+					}
 				}
 			default:
 				t.Fatalf("unknown disposition %q", class)

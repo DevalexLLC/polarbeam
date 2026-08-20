@@ -24,24 +24,44 @@ func (f *fakeDB) ListTargets(_ context.Context, networks []uuid.UUID) ([]store.T
 	return f.targets, nil
 }
 
-func (f *fakeDB) UpsertExternalTarget(_ context.Context, name, address string, port int32, url string) (uuid.UUID, error) {
-	for i := range f.targets {
-		if f.targets[i].Name == name {
-			if f.targets[i].Kind != "external" {
-				return uuid.Nil, fmt.Errorf("target %q already exists as an agent target%w", name, store.ErrConflict)
-			}
-			f.targets[i].Address, f.targets[i].Port, f.targets[i].URL = address, port, url
-			return f.targets[i].ID, nil
-		}
+// targetWritable mirrors the store's targetInScope: unscoped callers write
+// anything, scoped callers only their own planes' rows — never a global one.
+func (f *fakeDB) targetWritable(t store.TargetInfo, scope []uuid.UUID) bool {
+	if scope == nil {
+		return true
 	}
-	t := store.TargetInfo{ID: uuid.New(), Kind: "external", Name: name, Address: address, Port: port, URL: url}
+	return t.Network != "" && f.networkInScope(t.Network, scope)
+}
+
+func (f *fakeDB) UpsertExternalTarget(ctx context.Context, name, address string, port int32, url string, networkID *uuid.UUID, scope []uuid.UUID) (uuid.UUID, error) {
+	network := f.networkName(networkID)
+	for i := range f.targets {
+		if f.targets[i].Name != name {
+			continue
+		}
+		if f.targets[i].Kind != "external" {
+			return uuid.Nil, fmt.Errorf("target %q already exists as an agent target%w", name, store.ErrConflict)
+		}
+		if !f.targetWritable(f.targets[i], scope) {
+			return uuid.Nil, fmt.Errorf("external target %q does not exist%w", name, store.ErrNotFound)
+		}
+		if network != "" && f.targets[i].Network != network {
+			return uuid.Nil, fmt.Errorf("target %q already exists on a different network; delete and re-create it to move planes%w", name, store.ErrConflict)
+		}
+		f.targets[i].Address, f.targets[i].Port, f.targets[i].URL = address, port, url
+		return f.targets[i].ID, nil
+	}
+	t := store.TargetInfo{ID: uuid.New(), Kind: "external", Name: name, Address: address, Port: port, URL: url, Network: network}
 	f.targets = append(f.targets, t)
 	return t.ID, nil
 }
 
-func (f *fakeDB) DeleteTarget(_ context.Context, name string) error {
+func (f *fakeDB) DeleteTarget(_ context.Context, name string, scope []uuid.UUID) error {
 	for i, t := range f.targets {
 		if t.Name == name && t.Kind == "external" {
+			if !f.targetWritable(t, scope) {
+				return fmt.Errorf("external target %q does not exist%w", name, store.ErrNotFound)
+			}
 			if t.ProbeCount > 0 {
 				return store.InUseError{Name: name, Count: t.ProbeCount}
 			}
@@ -82,7 +102,32 @@ func (f *fakeDB) UpsertMeshGroup(_ context.Context, name string, networkID *uuid
 	return m.ID, nil
 }
 
-func (f *fakeDB) DeleteMeshGroup(_ context.Context, name string) (int64, error) {
+// meshVisible mirrors the store's lockMesh scope proof: out of scope is
+// ErrNotFound with the same wording a missing mesh gets.
+//
+// Only the SCOPE half is modelled. Existence is the real store's business
+// (meshIDByName), and this fake is deliberately lenient about it so the
+// probe tests can create mesh probes without standing up a mesh first.
+func (f *fakeDB) meshVisible(name string, scope []uuid.UUID) error {
+	if scope == nil {
+		return nil
+	}
+	for _, m := range f.meshes {
+		if m.Name != name {
+			continue
+		}
+		if !f.networkInScope(m.Network, scope) {
+			return fmt.Errorf("mesh group %q does not exist%w", name, store.ErrNotFound)
+		}
+		return nil
+	}
+	return fmt.Errorf("mesh group %q does not exist%w", name, store.ErrNotFound)
+}
+
+func (f *fakeDB) DeleteMeshGroup(_ context.Context, name string, scope []uuid.UUID) (int64, error) {
+	if err := f.meshVisible(name, scope); err != nil {
+		return 0, err
+	}
 	for i, m := range f.meshes {
 		if m.Name == name {
 			f.meshes = append(f.meshes[:i], f.meshes[i+1:]...)
@@ -92,7 +137,10 @@ func (f *fakeDB) DeleteMeshGroup(_ context.Context, name string) (int64, error) 
 	return 0, fmt.Errorf("mesh group %q does not exist%w", name, store.ErrNotFound)
 }
 
-func (f *fakeDB) AddMeshMember(_ context.Context, meshName, siteName string) error {
+func (f *fakeDB) AddMeshMember(_ context.Context, meshName, siteName string, scope []uuid.UUID) error {
+	if err := f.meshVisible(meshName, scope); err != nil {
+		return err
+	}
 	for i := range f.meshes {
 		if f.meshes[i].Name == meshName {
 			f.meshes[i].Sites = append(f.meshes[i].Sites, siteName)
@@ -102,7 +150,10 @@ func (f *fakeDB) AddMeshMember(_ context.Context, meshName, siteName string) err
 	return fmt.Errorf("mesh group %q does not exist%w", meshName, store.ErrNotFound)
 }
 
-func (f *fakeDB) RemoveMeshMember(_ context.Context, meshName, siteName string) error {
+func (f *fakeDB) RemoveMeshMember(_ context.Context, meshName, siteName string, scope []uuid.UUID) error {
+	if err := f.meshVisible(meshName, scope); err != nil {
+		return err
+	}
 	for i := range f.meshes {
 		if f.meshes[i].Name != meshName {
 			continue
@@ -133,7 +184,7 @@ func (f *fakeDB) GetProbeConfig(_ context.Context, id uuid.UUID) (*store.ProbeCo
 	return nil, fmt.Errorf("probe config %s does not exist%w", id, store.ErrNotFound)
 }
 
-func (f *fakeDB) AddDirectProbe(_ context.Context, siteName, targetName string, networkID uuid.UUID, ps store.ProbeSettings, enabled bool, updatedBy string) (uuid.UUID, error) {
+func (f *fakeDB) AddDirectProbe(_ context.Context, siteName, targetName string, networkID uuid.UUID, ps store.ProbeSettings, enabled bool, updatedBy string, scope []uuid.UUID) (uuid.UUID, error) {
 	// Mirror the store's rule: agent-kind targets cannot take direct probes.
 	for _, t := range f.targets {
 		if t.Name == targetName && t.Kind == "agent" {
@@ -155,7 +206,10 @@ func (f *fakeDB) AddDirectProbe(_ context.Context, siteName, targetName string, 
 	return p.ID, nil
 }
 
-func (f *fakeDB) AddMeshProbe(_ context.Context, meshName string, ps store.ProbeSettings, enabled bool, updatedBy string) (uuid.UUID, error) {
+func (f *fakeDB) AddMeshProbe(_ context.Context, meshName string, ps store.ProbeSettings, enabled bool, updatedBy string, scope []uuid.UUID) (uuid.UUID, error) {
+	if err := f.meshVisible(meshName, scope); err != nil {
+		return uuid.Nil, err
+	}
 	p := store.ProbeConfigInfo{
 		ID: uuid.New(), Mesh: meshName, ProbeType: ps.ProbeType,
 		Interval: ps.Interval, Timeout: ps.Timeout, TrainCount: ps.TrainCount,

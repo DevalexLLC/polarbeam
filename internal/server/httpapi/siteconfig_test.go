@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -105,8 +106,32 @@ func (f *fakeDB) SiteIDByName(_ context.Context, name string) (uuid.UUID, error)
 	return uuid.Nil, fmt.Errorf("site %q does not exist%w", name, store.ErrNotFound)
 }
 
-func (f *fakeDB) ListJoinTokens(_ context.Context) ([]store.JoinTokenInfo, error) {
-	return f.joinTokens, nil
+func (f *fakeDB) ListJoinTokens(_ context.Context, networks []uuid.UUID) ([]store.JoinTokenInfo, error) {
+	f.recordScope("ListJoinTokens", networks)
+	if networks == nil {
+		return f.joinTokens, nil
+	}
+	var out []store.JoinTokenInfo
+	for _, t := range f.joinTokens {
+		if f.networkInScope(t.Network, networks) {
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
+// networkInScope mirrors the store's plane predicate for the fakes: resolve
+// the plane by name, then test membership.
+func (f *fakeDB) networkInScope(name string, scope []uuid.UUID) bool {
+	if scope == nil {
+		return true
+	}
+	for _, n := range f.networks {
+		if n.Name == name {
+			return slices.Contains(scope, n.ID)
+		}
+	}
+	return false
 }
 
 func (f *fakeDB) CreateJoinToken(_ context.Context, siteID, networkID uuid.UUID, createdBy string, ttl time.Duration) (string, error) {
@@ -130,10 +155,13 @@ func (f *fakeDB) CreateJoinToken(_ context.Context, siteID, networkID uuid.UUID,
 	return t.ID.String() + ".fixed-secret", nil
 }
 
-func (f *fakeDB) DeleteJoinToken(_ context.Context, id uuid.UUID) error {
+func (f *fakeDB) DeleteJoinToken(_ context.Context, id uuid.UUID, scope []uuid.UUID) error {
 	for i, t := range f.joinTokens {
 		if t.ID != id {
 			continue
+		}
+		if !f.networkInScope(t.Network, scope) {
+			return fmt.Errorf("join token %s does not exist%w", id, store.ErrNotFound)
 		}
 		if t.UsedAt != nil {
 			return fmt.Errorf("join token %s was used to enroll an agent and is kept as an audit record%w", id, store.ErrConflict)

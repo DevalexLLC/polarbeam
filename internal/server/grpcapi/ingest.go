@@ -94,9 +94,16 @@ func (c *assignmentCache) put(agentID uuid.UUID, probes map[uuid.UUID]probeAssig
 // agentProbeMap returns the agent's current probe assignments, derived from
 // the SAME expansion that builds config snapshots (meshexpand.BuildSnapshot),
 // so ingest can never accept a probe ID the agent wasn't told to run. Each
-// assignment carries the direction's effective critical thresholds: the
-// global dashboard_settings merged with the (src site, dst site) override;
-// external targets have no dst site and grade on the global values.
+// assignment carries the direction's effective critical thresholds, resolved
+// per metric most-specific-first over four layers:
+//
+//	(src site, dst site) on the agent's plane
+//	(src site, dst site) all-planes row
+//	the agent's plane default (network_thresholds)
+//	global dashboard_settings
+//
+// External targets have no dst site and so grade on plane-then-global. The
+// same order is mirrored in httpapi and the SPA — see internal/server/thresholds.
 func (s *Server) agentProbeMap(ctx context.Context, agentID uuid.UUID) (map[uuid.UUID]probeAssignment, error) {
 	now := time.Now()
 	if m, hit := s.assignments.lookup(agentID, now); hit {
@@ -118,21 +125,49 @@ func (s *Server) agentProbeMap(ctx context.Context, agentID uuid.UUID) (map[uuid
 	if err != nil {
 		return nil, err
 	}
+	// The agent's own plane supplies the network layer. Every probe in this
+	// map is measured BY this agent, so one lookup covers them all.
+	networkOverlay, err := s.store.NetworkThresholdByID(ctx, in.NetworkID)
+	if err != nil {
+		return nil, err
+	}
 	global := thresholds.T{
 		LatencyWarnUS: settings.LatencyWarnUS,
 		LatencyCritUS: settings.LatencyCritUS,
 		LossWarnPct:   settings.LossWarnPct,
 		LossCritPct:   settings.LossCritPct,
 	}
-	overrideByPair := make(map[sitePair]thresholds.Override, len(overrides))
+	var networkLayer thresholds.Override
+	if networkOverlay != nil {
+		networkLayer = thresholds.Override{
+			LatencyWarnUS: networkOverlay.LatencyWarnUS,
+			LatencyCritUS: networkOverlay.LatencyCritUS,
+			LossWarnPct:   networkOverlay.LossWarnPct,
+			LossCritPct:   networkOverlay.LossCritPct,
+		}
+	}
+	// Two maps, because a pair may carry both a row for this agent's plane
+	// and the all-planes row that predates tenancy — and the plane-qualified
+	// one wins per field without erasing the other's fields.
+	pairPlane := make(map[sitePair]thresholds.Override, len(overrides))
+	pairAllPlanes := make(map[sitePair]thresholds.Override, len(overrides))
 	for _, o := range overrides {
 		// Rows are already stored in canonical (bytewise) order.
-		overrideByPair[sitePair{o.SiteAID, o.SiteBID}] = thresholds.Override{
+		key := sitePair{o.SiteAID, o.SiteBID}
+		layer := thresholds.Override{
 			LatencyWarnUS: o.LatencyWarnUS,
 			LatencyCritUS: o.LatencyCritUS,
 			LossWarnPct:   o.LossWarnPct,
 			LossCritPct:   o.LossCritPct,
 		}
+		switch {
+		case o.NetworkID == nil:
+			pairAllPlanes[key] = layer
+		case *o.NetworkID == in.NetworkID:
+			pairPlane[key] = layer
+		}
+		// Another plane's row for this pair is loaded (the query filters by
+		// site, not plane) and deliberately ignored.
 	}
 	targetSite := make(map[uuid.UUID]uuid.UUID, len(in.Peers))
 	for _, p := range in.Peers {
@@ -154,12 +189,22 @@ func (s *Server) agentProbeMap(ctx context.Context, agentID uuid.UUID) (map[uuid
 		if err != nil {
 			continue
 		}
-		crit := global
+		// Four layers, most specific first: this pair on this plane, then
+		// the pair's all-planes row, then the plane's default, then the
+		// global row. External targets have no destination site, so they
+		// skip both pair layers and grade on plane-then-global.
+		layers := make([]thresholds.Override, 0, 3)
 		if dstSite, hasSite := targetSite[targetID]; hasSite {
-			if o, hasOverride := overrideByPair[canonicalPair(in.SiteID, dstSite)]; hasOverride {
-				crit = thresholds.Effective(global, o)
+			key := canonicalPair(in.SiteID, dstSite)
+			if o, ok := pairPlane[key]; ok {
+				layers = append(layers, o)
+			}
+			if o, ok := pairAllPlanes[key]; ok {
+				layers = append(layers, o)
 			}
 		}
+		layers = append(layers, networkLayer)
+		crit := thresholds.Effective(global, layers...)
 		m[probeID] = probeAssignment{TargetID: targetID, Crit: crit}
 	}
 	s.assignments.put(agentID, m, now)

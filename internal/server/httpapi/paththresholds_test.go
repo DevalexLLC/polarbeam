@@ -22,11 +22,27 @@ import (
 // fakePairKey canonicalizes by name where the real store canonicalizes by
 // uuid order — equivalent for the fake's purposes (both orders of a PUT
 // must land on one row).
-func fakePairKey(a, b string) string {
+// fakePairKey mirrors the store's three-part key: the unordered pair plus
+// the plane, where "" is the all-planes row.
+func fakePairKey(a, b, network string) string {
 	if a > b {
 		a, b = b, a
 	}
-	return a + "\x00" + b
+	return a + "\x00" + b + "\x00" + network
+}
+
+// networkName resolves a plane id back to its name the way the store's
+// joins do; "" for the all-planes row.
+func (f *fakeDB) networkName(id *uuid.UUID) string {
+	if id == nil {
+		return ""
+	}
+	for _, n := range f.networks {
+		if n.ID == *id {
+			return n.Name
+		}
+	}
+	return ""
 }
 
 func (f *fakeDB) ListPathThresholds(_ context.Context, networks []uuid.UUID) ([]store.PathThresholdOverride, error) {
@@ -38,7 +54,7 @@ func (f *fakeDB) ListPathThresholds(_ context.Context, networks []uuid.UUID) ([]
 	return out, nil
 }
 
-func (f *fakeDB) UpsertPathThreshold(ctx context.Context, siteA, siteB string, o store.PathThresholdOverride) (*store.PathThresholdOverride, error) {
+func (f *fakeDB) UpsertPathThreshold(ctx context.Context, siteA, siteB string, networkID *uuid.UUID, o store.PathThresholdOverride) (*store.PathThresholdOverride, error) {
 	if _, err := f.SiteIDByName(ctx, siteA); err != nil {
 		return nil, err
 	}
@@ -48,27 +64,67 @@ func (f *fakeDB) UpsertPathThreshold(ctx context.Context, siteA, siteB string, o
 	if siteA > siteB {
 		siteA, siteB = siteB, siteA
 	}
-	o.A, o.B = siteA, siteB
+	o.A, o.B, o.Network = siteA, siteB, f.networkName(networkID)
 	o.UpdatedAt = time.Now()
 	if f.pathThresholds == nil {
 		f.pathThresholds = map[string]*store.PathThresholdOverride{}
 	}
-	f.pathThresholds[fakePairKey(siteA, siteB)] = &o
+	f.pathThresholds[fakePairKey(siteA, siteB, o.Network)] = &o
 	return &o, nil
 }
 
-func (f *fakeDB) DeletePathThreshold(ctx context.Context, siteA, siteB string) error {
+func (f *fakeDB) DeletePathThreshold(ctx context.Context, siteA, siteB string, networkID *uuid.UUID) error {
 	if _, err := f.SiteIDByName(ctx, siteA); err != nil {
 		return err
 	}
 	if _, err := f.SiteIDByName(ctx, siteB); err != nil {
 		return err
 	}
-	key := fakePairKey(siteA, siteB)
+	key := fakePairKey(siteA, siteB, f.networkName(networkID))
 	if _, ok := f.pathThresholds[key]; !ok {
 		return fmt.Errorf("no threshold override for %s and %s%w", siteA, siteB, store.ErrNotFound)
 	}
 	delete(f.pathThresholds, key)
+	return nil
+}
+
+func (f *fakeDB) ListNetworkThresholds(_ context.Context, networks []uuid.UUID) ([]store.NetworkThreshold, error) {
+	f.recordScope("ListNetworkThresholds", networks)
+	out := make([]store.NetworkThreshold, 0, len(f.networkThresholds))
+	for _, k := range slices.Sorted(maps.Keys(f.networkThresholds)) {
+		out = append(out, *f.networkThresholds[k])
+	}
+	return out, nil
+}
+
+func (f *fakeDB) UpsertNetworkThreshold(ctx context.Context, network string, t store.NetworkThreshold, scope []uuid.UUID) (*store.NetworkThreshold, error) {
+	id, err := f.NetworkIDByName(ctx, network)
+	if err != nil {
+		return nil, err
+	}
+	if scope != nil && !slices.Contains(scope, id) {
+		return nil, fmt.Errorf("network %q does not exist%w", network, store.ErrNotFound)
+	}
+	t.Network, t.UpdatedAt = network, time.Now()
+	if f.networkThresholds == nil {
+		f.networkThresholds = map[string]*store.NetworkThreshold{}
+	}
+	f.networkThresholds[network] = &t
+	return &t, nil
+}
+
+func (f *fakeDB) DeleteNetworkThreshold(ctx context.Context, network string, scope []uuid.UUID) error {
+	id, err := f.NetworkIDByName(ctx, network)
+	if err != nil {
+		return err
+	}
+	if scope != nil && !slices.Contains(scope, id) {
+		return fmt.Errorf("network %q does not exist%w", network, store.ErrNotFound)
+	}
+	if _, ok := f.networkThresholds[network]; !ok {
+		return fmt.Errorf("no threshold overlay for network %q%w", network, store.ErrNotFound)
+	}
+	delete(f.networkThresholds, network)
 	return nil
 }
 
@@ -378,7 +434,8 @@ func TestValidateOverrideNamesEveryProblem(t *testing.T) {
 	err := validateOverride(pathThresholdFields{
 		LatencyWarnUS: &warn, LatencyCritUS: &crit,
 		LossWarnPct: &lossW, LossCritPct: &lossC,
-	}, thresholdsJSON{LatencyWarnUS: 100000, LatencyCritUS: 250000, LossWarnPct: 1, LossCritPct: 5})
+	}, thresholdsJSON{LatencyWarnUS: 100000, LatencyCritUS: 250000, LossWarnPct: 1, LossCritPct: 5},
+		"global settings")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -392,7 +449,8 @@ func TestValidateOverrideNamesEveryProblem(t *testing.T) {
 func TestValidateOverrideNamesInheritedSide(t *testing.T) {
 	warn := int64(300000) // above the inherited global crit of 250000
 	err := validateOverride(pathThresholdFields{LatencyWarnUS: &warn},
-		thresholdsJSON{LatencyWarnUS: 100000, LatencyCritUS: 250000, LossWarnPct: 1, LossCritPct: 5})
+		thresholdsJSON{LatencyWarnUS: 100000, LatencyCritUS: 250000, LossWarnPct: 1, LossCritPct: 5},
+		"global settings")
 	if err == nil {
 		t.Fatal("expected error")
 	}

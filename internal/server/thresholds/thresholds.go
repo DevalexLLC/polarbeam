@@ -4,6 +4,11 @@
 // buildThresholdResolver + directionSeverity) and the httpapi validation
 // merge (effectiveThresholds) — the three must agree or the live map and
 // the incident history would disagree about the same measurements.
+//
+// Effective is the single definition of that merge: httpapi calls straight
+// into it, and testdata/threshold-merge.json holds the shared case table
+// that both this package's tests and the SPA's parity check read, so the Go
+// and TypeScript resolvers cannot drift silently.
 package thresholds
 
 import (
@@ -19,8 +24,10 @@ type T struct {
 	LossCritPct   float64
 }
 
-// Override is one path_thresholds row's metric fields: nil inherits the
-// global value for that field.
+// Override is one layer's metric fields: nil inherits whatever the next,
+// less specific layer supplies for that field. A path_thresholds row and a
+// network_thresholds row are both Overrides — they differ only in where
+// Effective's caller places them.
 type Override struct {
 	LatencyWarnUS *int64
 	LatencyCritUS *int64
@@ -28,20 +35,34 @@ type Override struct {
 	LossCritPct   *float64
 }
 
-// Effective merges an override over the global thresholds per field.
-func Effective(global T, o Override) T {
+// Effective merges override layers over the global thresholds, per field
+// and independently: for each metric the FIRST layer that sets it wins, and
+// a metric no layer sets falls through to global. Callers pass layers in
+// specificity order, most specific first:
+//
+//	Effective(global, pairNetwork, pairAllPlanes, networkDefault)
+//
+// Absent layers are simply omitted (a zero Override is also inert), so the
+// pre-tenancy one-layer call Effective(global, o) still means exactly what
+// it did. Order is the caller's contract — this function never reorders,
+// because "most specific wins" is a statement about the schema, not
+// something a merge of anonymous tuples could infer.
+func Effective(global T, layers ...Override) T {
 	out := global
-	if o.LatencyWarnUS != nil {
-		out.LatencyWarnUS = *o.LatencyWarnUS
-	}
-	if o.LatencyCritUS != nil {
-		out.LatencyCritUS = *o.LatencyCritUS
-	}
-	if o.LossWarnPct != nil {
-		out.LossWarnPct = *o.LossWarnPct
-	}
-	if o.LossCritPct != nil {
-		out.LossCritPct = *o.LossCritPct
+	var haveLatWarn, haveLatCrit, haveLossWarn, haveLossCrit bool
+	for _, o := range layers {
+		if o.LatencyWarnUS != nil && !haveLatWarn {
+			out.LatencyWarnUS, haveLatWarn = *o.LatencyWarnUS, true
+		}
+		if o.LatencyCritUS != nil && !haveLatCrit {
+			out.LatencyCritUS, haveLatCrit = *o.LatencyCritUS, true
+		}
+		if o.LossWarnPct != nil && !haveLossWarn {
+			out.LossWarnPct, haveLossWarn = *o.LossWarnPct, true
+		}
+		if o.LossCritPct != nil && !haveLossCrit {
+			out.LossCritPct, haveLossCrit = *o.LossCritPct, true
+		}
 	}
 	return out
 }

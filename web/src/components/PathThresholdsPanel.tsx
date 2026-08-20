@@ -8,7 +8,12 @@ import PathThresholdEditor, { pathThresholdURL } from './PathThresholdEditor'
 // Management table for the per-site-pair threshold overrides carried on
 // GET /settings. Rows expand to the shared PathThresholdEditor; the add
 // flow is two site selects feeding the same editor with no override yet.
-const pairKey = (a: string, b: string) => (a < b ? a + '\u0000' + b : b + '\u0000' + a)
+// Row identity is the unordered pair PLUS the plane: one pair can carry an
+// all-planes row and a row per network at the same time, so keying on the
+// pair alone would collide React keys and point every edit at whichever row
+// happened to render first.
+const pairKey = (a: string, b: string, network = '') =>
+  (a < b ? a + '\u0000' + b : b + '\u0000' + a) + '\u0000' + network
 
 function valueCell(us: number | null, unit: 'ms' | '%', globalValue: number) {
   const scale = unit === 'ms' ? 1000 : 1
@@ -51,12 +56,12 @@ export default function PathThresholdsPanel({
 
   const overrides = settings.overrides
   const global = settings.thresholds
-  const overridden = new Set(overrides.map((o) => pairKey(o.a, o.b)))
+  const overridden = new Set(overrides.map((o) => pairKey(o.a, o.b, o.network)))
 
   const remove = async (o: PathThresholdOverride) => {
     setRowError('')
     try {
-      await apiDelete(pathThresholdURL(o.a, o.b))
+      await apiDelete(pathThresholdURL(o.a, o.b, o.network))
       onChanged()
     } catch (err) {
       onAuthError(err)
@@ -125,12 +130,13 @@ export default function PathThresholdsPanel({
             </thead>
             <tbody>
               {overrides.map((o) => {
-                const key = pairKey(o.a, o.b)
+                const key = pairKey(o.a, o.b, o.network)
                 return (
                   <Fragment key={key}>
                     <tr>
                       <td data-label="Pair" className="mono">
                         {o.a} ↔ {o.b}
+                        {o.network !== '' && <span className="hint"> · {o.network}</span>}
                       </td>
                       <td data-label="Latency degraded">
                         {valueCell(o.latency_warn_us, 'ms', global.latency_warn_us)}
@@ -168,10 +174,12 @@ export default function PathThresholdsPanel({
                           <div className="config-form">
                             <h3 className="eyebrow">
                               Edit override · {o.a} ↔ {o.b}
+                              {o.network !== '' ? ` · network ${o.network}` : ''}
                             </h3>
                             <PathThresholdEditor
                               a={o.a}
                               b={o.b}
+                              network={o.network}
                               override={o}
                               global={global}
                               isAdmin={isAdmin}

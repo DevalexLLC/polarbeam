@@ -4,7 +4,7 @@ import ConnectivityCard, { type ConnectivityMode } from '../components/Connectiv
 import FleetAgentsCard from '../components/FleetAgentsCard'
 import { fmtAgo } from '../format'
 import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
-import { buildThresholdResolver, directionSeverity } from '../severity'
+import { buildThresholdResolver, cellSeverity } from '../severity'
 import type {
   AgentHealthResponse,
   AgentInfo,
@@ -169,9 +169,7 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
   }, [active])
   const activeTargetCount = new Set(active.map(targetKey)).size
   const attention = shownAgents.filter((a) => attentionReason(a) != null)
-  const healthyDirections = shownCells.filter(
-    (cell) => directionSeverity(cell, resolveThresholds(cell.src, cell.dst)) === 'ok',
-  ).length
+  const healthyDirections = shownCells.filter((cell) => cellSeverity(cell, resolveThresholds) === 'ok').length
   const totalDirections = shownCells.length
   const availableSites = shownSites.filter((site) => {
     const own = shownAgents.filter((a) => a.site === site.name)

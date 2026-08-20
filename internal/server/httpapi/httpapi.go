@@ -6,8 +6,10 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -48,9 +50,9 @@ type DB interface {
 	UpdateSite(ctx context.Context, name string, up store.SiteUpdate) error
 	DeleteSite(ctx context.Context, name string) (int64, error)
 	SiteIDByName(ctx context.Context, name string) (uuid.UUID, error)
-	ListJoinTokens(ctx context.Context) ([]store.JoinTokenInfo, error)
+	ListJoinTokens(ctx context.Context, networks []uuid.UUID) ([]store.JoinTokenInfo, error)
 	CreateJoinToken(ctx context.Context, siteID, networkID uuid.UUID, createdBy string, ttl time.Duration) (string, error)
-	DeleteJoinToken(ctx context.Context, id uuid.UUID) error
+	DeleteJoinToken(ctx context.Context, id uuid.UUID, scope []uuid.UUID) error
 	NetworkIDByName(ctx context.Context, name string) (uuid.UUID, error)
 	ListNetworksConfig(ctx context.Context, networks []uuid.UUID) ([]store.NetworkAdminInfo, error)
 	CreateNetwork(ctx context.Context, name, displayName string) (uuid.UUID, error)
@@ -74,21 +76,24 @@ type DB interface {
 	GetSettings(ctx context.Context) (*store.ThresholdSettings, error)
 	UpdateSettings(ctx context.Context, ts store.ThresholdSettings) (*store.ThresholdSettings, error)
 	ListPathThresholds(ctx context.Context, networks []uuid.UUID) ([]store.PathThresholdOverride, error)
-	UpsertPathThreshold(ctx context.Context, siteA, siteB string, o store.PathThresholdOverride) (*store.PathThresholdOverride, error)
-	DeletePathThreshold(ctx context.Context, siteA, siteB string) error
+	UpsertPathThreshold(ctx context.Context, siteA, siteB string, networkID *uuid.UUID, o store.PathThresholdOverride) (*store.PathThresholdOverride, error)
+	DeletePathThreshold(ctx context.Context, siteA, siteB string, networkID *uuid.UUID) error
+	ListNetworkThresholds(ctx context.Context, networks []uuid.UUID) ([]store.NetworkThreshold, error)
+	UpsertNetworkThreshold(ctx context.Context, network string, t store.NetworkThreshold, scope []uuid.UUID) (*store.NetworkThreshold, error)
+	DeleteNetworkThreshold(ctx context.Context, network string, scope []uuid.UUID) error
 
 	ListTargets(ctx context.Context, networks []uuid.UUID) ([]store.TargetInfo, error)
-	UpsertExternalTarget(ctx context.Context, name, address string, port int32, url string) (uuid.UUID, error)
-	DeleteTarget(ctx context.Context, name string) error
+	UpsertExternalTarget(ctx context.Context, name, address string, port int32, url string, networkID *uuid.UUID, scope []uuid.UUID) (uuid.UUID, error)
+	DeleteTarget(ctx context.Context, name string, scope []uuid.UUID) error
 	ListMeshGroups(ctx context.Context, networks []uuid.UUID) ([]store.MeshGroupInfo, error)
 	UpsertMeshGroup(ctx context.Context, name string, networkID *uuid.UUID) (uuid.UUID, error)
-	DeleteMeshGroup(ctx context.Context, name string) (int64, error)
-	AddMeshMember(ctx context.Context, meshName, siteName string) error
-	RemoveMeshMember(ctx context.Context, meshName, siteName string) error
+	DeleteMeshGroup(ctx context.Context, name string, scope []uuid.UUID) (int64, error)
+	AddMeshMember(ctx context.Context, meshName, siteName string, scope []uuid.UUID) error
+	RemoveMeshMember(ctx context.Context, meshName, siteName string, scope []uuid.UUID) error
 	ListProbeConfigs(ctx context.Context, networks []uuid.UUID) ([]store.ProbeConfigInfo, error)
 	GetProbeConfig(ctx context.Context, id uuid.UUID) (*store.ProbeConfigInfo, error)
-	AddDirectProbe(ctx context.Context, siteName, targetName string, networkID uuid.UUID, ps store.ProbeSettings, enabled bool, updatedBy string) (uuid.UUID, error)
-	AddMeshProbe(ctx context.Context, meshName string, ps store.ProbeSettings, enabled bool, updatedBy string) (uuid.UUID, error)
+	AddDirectProbe(ctx context.Context, siteName, targetName string, networkID uuid.UUID, ps store.ProbeSettings, enabled bool, updatedBy string, scope []uuid.UUID) (uuid.UUID, error)
+	AddMeshProbe(ctx context.Context, meshName string, ps store.ProbeSettings, enabled bool, updatedBy string, scope []uuid.UUID) (uuid.UUID, error)
 	UpdateProbeConfig(ctx context.Context, id uuid.UUID, ps store.ProbeSettings, enabled bool, updatedBy string) error
 	DeleteProbeConfig(ctx context.Context, id uuid.UUID) error
 
@@ -189,12 +194,32 @@ func newHandler(sdb DB, static fs.FS, providers OIDCProviders) http.Handler {
 	adminWrite := func(h http.HandlerFunc) http.Handler {
 		return a.withSession(requireRole("admin", h).ServeHTTP)
 	}
+	// networkWrite admits the global admin AND the tenant admin. It is a
+	// gate, not a grant: every handler mounted here MUST prove the touched
+	// resource's network is in the caller's scope before it mutates
+	// anything — requireNetworkScope / requireNetworkScopeName / the
+	// store's own scope arguments — and must answer 404, never 403, when it
+	// is not, so an out-of-scope plane is indistinguishable from one that
+	// does not exist.
+	//
+	// Deliberately a SEPARATE wrapper rather than a widening of
+	// requireRole: adminWrite's exact string compare is what keeps Users,
+	// Authentication, Banner, Networks, Sites, and the global thresholds
+	// closed to tenants without any code of their own, today and for
+	// whatever gets mounted behind it next. Moving a route here is an
+	// explicit act, and tenantscope_test.go's route inventory makes it a
+	// visible one.
+	networkWrite := func(h http.HandlerFunc) http.Handler {
+		return a.withSession(requireRoles(h, store.RoleAdmin, store.RoleNetworkAdmin).ServeHTTP)
+	}
 	// OIDC settings: GET is admin-only too — issuer, claim mapping, and
 	// admin group names are IdP topology, not viewer material.
 	// Per-site-pair threshold overrides ride on GET /settings; only the
 	// writes get their own routes. Either site order addresses the same row.
-	mux.Handle("PUT /api/v1/settings/path-thresholds/{a}/{b}", adminWrite(a.handlePathThresholdPut))
-	mux.Handle("DELETE /api/v1/settings/path-thresholds/{a}/{b}", adminWrite(a.handlePathThresholdDelete))
+	mux.Handle("PUT /api/v1/settings/path-thresholds/{a}/{b}", networkWrite(a.handlePathThresholdPut))
+	mux.Handle("DELETE /api/v1/settings/path-thresholds/{a}/{b}", networkWrite(a.handlePathThresholdDelete))
+	mux.Handle("PUT /api/v1/settings/network-thresholds/{network}", networkWrite(a.handleNetworkThresholdPut))
+	mux.Handle("DELETE /api/v1/settings/network-thresholds/{network}", networkWrite(a.handleNetworkThresholdDelete))
 	mux.Handle("GET /api/v1/settings/oidc", adminWrite(a.handleOIDCSettingsGet))
 	mux.Handle("PUT /api/v1/settings/oidc", adminWrite(a.handleOIDCSettingsPut))
 	mux.Handle("POST /api/v1/settings/oidc/test", adminWrite(a.handleOIDCSettingsTest))
@@ -206,17 +231,17 @@ func newHandler(sdb DB, static fs.FS, providers OIDCProviders) http.Handler {
 	mux.Handle("PUT /api/v1/settings/ui-banner", adminWrite(a.handleBannerSettingsPut))
 	mux.Handle("GET /api/v1/config/probe-types", a.withSession(a.handleProbeTypes))
 	mux.Handle("GET /api/v1/config/targets", a.withSession(a.handleTargetsGet))
-	mux.Handle("POST /api/v1/config/targets", adminWrite(a.handleTargetPost))
-	mux.Handle("DELETE /api/v1/config/targets/{name}", adminWrite(a.handleTargetDelete))
+	mux.Handle("POST /api/v1/config/targets", networkWrite(a.handleTargetPost))
+	mux.Handle("DELETE /api/v1/config/targets/{name}", networkWrite(a.handleTargetDelete))
 	mux.Handle("GET /api/v1/config/meshes", a.withSession(a.handleMeshesGet))
-	mux.Handle("POST /api/v1/config/meshes", adminWrite(a.handleMeshPost))
-	mux.Handle("DELETE /api/v1/config/meshes/{name}", adminWrite(a.handleMeshDelete))
-	mux.Handle("POST /api/v1/config/meshes/{name}/members/{site}", adminWrite(a.handleMeshMemberPost))
-	mux.Handle("DELETE /api/v1/config/meshes/{name}/members/{site}", adminWrite(a.handleMeshMemberDelete))
+	mux.Handle("POST /api/v1/config/meshes", networkWrite(a.handleMeshPost))
+	mux.Handle("DELETE /api/v1/config/meshes/{name}", networkWrite(a.handleMeshDelete))
+	mux.Handle("POST /api/v1/config/meshes/{name}/members/{site}", networkWrite(a.handleMeshMemberPost))
+	mux.Handle("DELETE /api/v1/config/meshes/{name}/members/{site}", networkWrite(a.handleMeshMemberDelete))
 	mux.Handle("GET /api/v1/config/probes", a.withSession(a.handleProbesGet))
-	mux.Handle("POST /api/v1/config/probes", adminWrite(a.handleProbePost))
-	mux.Handle("PUT /api/v1/config/probes/{id}", adminWrite(a.handleProbePut))
-	mux.Handle("DELETE /api/v1/config/probes/{id}", adminWrite(a.handleProbeDelete))
+	mux.Handle("POST /api/v1/config/probes", networkWrite(a.handleProbePost))
+	mux.Handle("PUT /api/v1/config/probes/{id}", networkWrite(a.handleProbePut))
+	mux.Handle("DELETE /api/v1/config/probes/{id}", networkWrite(a.handleProbeDelete))
 	mux.Handle("GET /api/v1/config/networks", a.withSession(a.handleNetworksGet))
 	mux.Handle("POST /api/v1/config/networks", adminWrite(a.handleNetworkPost))
 	mux.Handle("PUT /api/v1/config/networks/{name}", adminWrite(a.handleNetworkPut))
@@ -228,7 +253,9 @@ func newHandler(sdb DB, static fs.FS, providers OIDCProviders) http.Handler {
 	// Enrollment tokens: GET is admin-only too — token audit rows are
 	// credentials metadata, not viewer material (GET /settings/oidc
 	// precedent).
-	mux.Handle("GET /api/v1/config/tokens", adminWrite(a.handleTokensGet))
+	// Tokens are network-scoped both ways: a tenant admin that could mint a
+	// token but not list it would be operating blind.
+	mux.Handle("GET /api/v1/config/tokens", networkWrite(a.handleTokensGet))
 	// Account inventory (usernames, roles, login history) is admin-only for
 	// the same reason; so are the account mutations.
 	mux.Handle("GET /api/v1/users", adminWrite(a.handleUsersGet))
@@ -236,8 +263,8 @@ func newHandler(sdb DB, static fs.FS, providers OIDCProviders) http.Handler {
 	mux.Handle("PUT /api/v1/users/{id}", adminWrite(a.handleUserPut))
 	mux.Handle("DELETE /api/v1/users/{id}", adminWrite(a.handleUserDelete))
 	mux.Handle("POST /api/v1/users/{id}/reset-password", adminWrite(a.handleUserResetPassword))
-	mux.Handle("POST /api/v1/config/tokens", adminWrite(a.handleTokenPost))
-	mux.Handle("DELETE /api/v1/config/tokens/{id}", adminWrite(a.handleTokenDelete))
+	mux.Handle("POST /api/v1/config/tokens", networkWrite(a.handleTokenPost))
+	mux.Handle("DELETE /api/v1/config/tokens/{id}", networkWrite(a.handleTokenDelete))
 	mux.Handle("GET /api/v1/pairs/{a}/{b}", a.withSession(a.handlePair))
 	mux.Handle("GET /api/v1/pairs/{a}/{b}/series", a.withSession(a.handleSeries))
 	// Target detail: reads any-session (the /config/targets precedent). The
@@ -341,6 +368,53 @@ func scopeNames(ctx context.Context) []string {
 	}
 	return names
 }
+
+// requireNetworkScope reports whether the caller may WRITE on networkID,
+// answering the request itself when not. Global roles (nil scope) always
+// pass; a scoped caller passes only for its own planes.
+//
+// The refusal is 404, never 403, and its wording matches the one a
+// nonexistent network produces: a tenant that could tell "forbidden" from
+// "no such thing" could enumerate the other planes on the control plane one
+// guess at a time. Every handler behind networkWrite calls this — or
+// requireNetworkScopeName — before it mutates anything.
+func (a *api) requireNetworkScope(w http.ResponseWriter, r *http.Request, networkID uuid.UUID, name string) bool {
+	scope := scopeIDs(r.Context())
+	if scope == nil || slices.Contains(scope, networkID) {
+		return true
+	}
+	writeError(w, http.StatusNotFound, fmt.Sprintf("network %q does not exist", name))
+	return false
+}
+
+// requireNetworkScopeName resolves a network NAME to its id under the
+// caller's scope. The scope check runs BEFORE existence resolution — the
+// same ordering pairEndpoints uses for ?network= — so an out-of-scope plane
+// and a typo produce byte-identical 404s. Resolving first would let a tenant
+// distinguish another tenant's plane from a name that was never taken.
+//
+// This is the only correct way for a scoped write to turn a network name
+// into an id: store.NetworkIDByName is deliberately scope-blind, so calling
+// it directly from a networkWrite handler resolves foreign planes happily.
+func (a *api) requireNetworkScopeName(w http.ResponseWriter, r *http.Request, name string) (uuid.UUID, bool) {
+	notFound := func() { writeError(w, http.StatusNotFound, fmt.Sprintf("network %q does not exist", name)) }
+	if names := scopeNames(r.Context()); names != nil && !slices.Contains(names, name) {
+		notFound()
+		return uuid.Nil, false
+	}
+	id, err := a.db.NetworkIDByName(r.Context(), name)
+	if err != nil {
+		writeStoreError(w, "resolve network", err)
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+// callerIsScoped reports whether the session's role limits it to a set of
+// networks. Handlers use it where a scoped caller owes MORE input than a
+// global one — a tenant admin must name the plane it is writing on, while
+// an admin omitting it means "global"/"all planes".
+func callerIsScoped(ctx context.Context) bool { return scopeIDs(ctx) != nil }
 
 func withSessionCtx(ctx context.Context, s *store.SessionInfo) context.Context {
 	return context.WithValue(ctx, sessionKey, s)

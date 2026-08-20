@@ -25,13 +25,16 @@ type networkConfigJSON struct {
 	TokenCount  int64     `json:"token_count"`
 	MeshCount   int64     `json:"mesh_count"`
 	ProbeCount  int64     `json:"probe_count"`
+	// Tenant-owned external targets; like the counts above, a non-zero
+	// value blocks DELETE.
+	TargetCount int64 `json:"target_count"`
 }
 
 func toNetworkConfigJSON(ni store.NetworkAdminInfo) networkConfigJSON {
 	return networkConfigJSON{
 		ID: ni.ID.String(), Name: ni.Name, DisplayName: ni.DisplayName,
 		CreatedAt: ni.CreatedAt, AgentCount: ni.AgentCount, TokenCount: ni.TokenCount,
-		MeshCount: ni.MeshCount, ProbeCount: ni.ProbeCount,
+		MeshCount: ni.MeshCount, ProbeCount: ni.ProbeCount, TargetCount: ni.TargetCount,
 	}
 }
 

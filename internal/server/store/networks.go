@@ -24,6 +24,11 @@ type NetworkAdminInfo struct {
 	TokenCount  int64
 	MeshCount   int64
 	ProbeCount  int64
+	// TargetCount is tenant-owned external targets. It joined the list with
+	// 0019: targets.network_id is ON DELETE RESTRICT, so these block a
+	// delete exactly as agents and meshes do, and a listing that omitted
+	// them would let the UI offer a delete guaranteed to 409.
+	TargetCount int64
 }
 
 // NetworkIDByName resolves a network name WITHOUT creating it. Networks are
@@ -87,7 +92,8 @@ func (s *Store) ListNetworksConfig(ctx context.Context, networks []uuid.UUID) ([
 		       (SELECT count(*) FROM agents a WHERE a.network_id = n.id),
 		       (SELECT count(*) FROM join_tokens t WHERE t.network_id = n.id),
 		       (SELECT count(*) FROM mesh_groups g WHERE g.network_id = n.id),
-		       (SELECT count(*) FROM probe_configs pc WHERE pc.network_id = n.id)
+		       (SELECT count(*) FROM probe_configs pc WHERE pc.network_id = n.id),
+		       (SELECT count(*) FROM targets tg WHERE tg.network_id = n.id)
 		  FROM networks n
 		 WHERE $1::uuid[] IS NULL OR n.id = ANY($1)
 		 ORDER BY n.name`, networks)
@@ -100,7 +106,7 @@ func (s *Store) ListNetworksConfig(ctx context.Context, networks []uuid.UUID) ([
 	for rows.Next() {
 		var ni NetworkAdminInfo
 		if err := rows.Scan(&ni.ID, &ni.Name, &ni.DisplayName, &ni.CreatedAt,
-			&ni.AgentCount, &ni.TokenCount, &ni.MeshCount, &ni.ProbeCount); err != nil {
+			&ni.AgentCount, &ni.TokenCount, &ni.MeshCount, &ni.ProbeCount, &ni.TargetCount); err != nil {
 			return nil, fmt.Errorf("list networks config: %w", err)
 		}
 		out = append(out, ni)
@@ -160,20 +166,29 @@ func (s *Store) DeleteNetwork(ctx context.Context, name string) (tokensDeleted i
 	// invert the token → network lock order and deadlock against
 	// EnrollAgent — and READ COMMITTED gives this statement a fresh
 	// snapshot, so it sees that raced commit.
-	var agents, meshes, probes, tokens int64
+	//
+	// targets joined the list in 0019: targets.network_id is ON DELETE
+	// RESTRICT (a target is probe workload, not presentation config), so
+	// without counting it here a tenant-owned target would surface as an
+	// opaque FK violation instead of a refusal naming what blocks. Contrast
+	// path_thresholds and network_thresholds, which cascade by design and
+	// must NOT be counted — user_networks likewise (user scope must never
+	// block operator topology changes).
+	var agents, meshes, probes, tokens, targets int64
 	err = tx.QueryRow(ctx, `
 		SELECT (SELECT count(*) FROM agents a WHERE a.network_id = $1),
 		       (SELECT count(*) FROM mesh_groups g WHERE g.network_id = $1),
 		       (SELECT count(*) FROM probe_configs pc WHERE pc.network_id = $1),
-		       (SELECT count(*) FROM join_tokens t WHERE t.network_id = $1)`,
-		id).Scan(&agents, &meshes, &probes, &tokens)
+		       (SELECT count(*) FROM join_tokens t WHERE t.network_id = $1),
+		       (SELECT count(*) FROM targets tg WHERE tg.network_id = $1)`,
+		id).Scan(&agents, &meshes, &probes, &tokens, &targets)
 	if err != nil {
 		return 0, fmt.Errorf("delete network %q: %w", name, err)
 	}
-	if agents > 0 || meshes > 0 || probes > 0 || tokens > 0 {
+	if agents > 0 || meshes > 0 || probes > 0 || tokens > 0 || targets > 0 {
 		// Rollback restores the token rows deleted above.
-		return 0, conflictf("network %q is referenced by %d agent(s), %d mesh group(s), %d probe config(s), and %d join token(s)",
-			name, agents, meshes, probes, tokens)
+		return 0, conflictf("network %q is referenced by %d agent(s), %d mesh group(s), %d probe config(s), %d join token(s), and %d target(s)",
+			name, agents, meshes, probes, tokens, targets)
 	}
 
 	if _, err := tx.Exec(ctx, `DELETE FROM networks WHERE id = $1`, id); err != nil {
