@@ -16,7 +16,8 @@ import (
 
 // --- fakeDB implementation of the site/token config methods ---
 
-func (f *fakeDB) ListSitesConfig(_ context.Context) ([]store.SiteAdminInfo, error) {
+func (f *fakeDB) ListSitesConfig(_ context.Context, networks []uuid.UUID) ([]store.SiteAdminInfo, error) {
+	f.recordScope("ListSitesConfig", networks)
 	return f.siteConfigs, nil
 }
 

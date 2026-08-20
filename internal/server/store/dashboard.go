@@ -265,10 +265,42 @@ type PairSummaryRow struct {
 	TLSHandshakeAvgUS *float64
 }
 
-// ListSites returns all sites ordered by name.
-func (s *Store) ListSites(ctx context.Context) ([]SiteInfo, error) {
+// siteScopePredicate builds the scoped-site visibility rule shared by
+// ListSites, ListSitesConfig, SiteEndpoints, and ListPathThresholds, as a
+// SQL fragment over siteCol (a trusted identifier or placeholder, never
+// input) and param (the uuid[] scope placeholder). With a nil scope every
+// site is visible. With a scope, a site is visible when it participates in
+// the tenant's probing surface: it hosts an agent on an allowed plane, is
+// a member of a mesh on one, is the source site of an in-scope direct
+// probe, or hosts the destination agent of one. The last three matter for
+// UNSTAFFED sites: ExpectedPairs deliberately keeps a configured pair
+// whose member site has no agents yet (it renders as stale), so the
+// scoped matrix would otherwise reference sites absent from the scoped
+// site list and pair detail would 404. Tenants never learn a foreign
+// plane's site names — a shared site (co-located agents on several
+// planes) stays visible, which is accepted: site names are shared
+// operator vocabulary.
+func siteScopePredicate(siteCol, param string) string {
+	return fmt.Sprintf(`(%[2]s::uuid[] IS NULL
+		OR EXISTS (SELECT 1 FROM agents sca WHERE sca.site_id = %[1]s AND sca.network_id = ANY(%[2]s))
+		OR EXISTS (SELECT 1 FROM mesh_members scm JOIN mesh_groups scg ON scg.id = scm.mesh_id
+		            WHERE scm.site_id = %[1]s AND scg.network_id = ANY(%[2]s))
+		OR EXISTS (SELECT 1 FROM probe_configs scp
+		            WHERE scp.site_id = %[1]s AND scp.network_id = ANY(%[2]s))
+		OR EXISTS (SELECT 1 FROM probe_configs scd
+		            JOIN targets sct ON sct.id = scd.target_id
+		            JOIN agents scda ON scda.id = sct.agent_id
+		            WHERE scda.site_id = %[1]s AND scd.network_id = ANY(%[2]s)))`, siteCol, param)
+}
+
+// ListSites returns all sites ordered by name. networks is the caller's
+// network scope (nil = unfiltered, the convention every scoped read here
+// follows); visibility follows siteScopePredicate.
+func (s *Store) ListSites(ctx context.Context, networks []uuid.UUID) ([]SiteInfo, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, name, display_name, location, latitude, longitude FROM sites ORDER BY name`)
+		`SELECT id, name, display_name, location, latitude, longitude FROM sites
+		  WHERE `+siteScopePredicate("sites.id", "$1")+`
+		  ORDER BY name`, networks)
 	if err != nil {
 		return nil, fmt.Errorf("list sites: %w", err)
 	}
@@ -420,7 +452,8 @@ func (s *Store) EnabledProbeIDs(ctx context.Context) ([]uuid.UUID, error) {
 // disabled probe produces no successes) must not keep the agent degraded
 // or make ProbesFailing exceed ProbesTotal. The outage sweep closes such
 // stuck events within a tick; this rollup filters them in the meantime.
-func (s *Store) ListAgents(ctx context.Context) ([]AgentListInfo, error) {
+// networks is the caller's network scope (nil = unfiltered).
+func (s *Store) ListAgents(ctx context.Context, networks []uuid.UUID) ([]AgentListInfo, error) {
 	enabled, err := s.enabledProbeIDs(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list agents: %w", err)
@@ -454,7 +487,8 @@ func (s *Store) ListAgents(ctx context.Context) ([]AgentListInfo, error) {
 		          JOIN unnest($1::uuid[]) AS ep(probe_id) ON ep.probe_id = ss.probe_id
 		         GROUP BY ss.agent_id
 		   ) ss ON ss.agent_id = a.id
-		  ORDER BY s.name, a.hostname`, enabled)
+		  WHERE $2::uuid[] IS NULL OR a.network_id = ANY($2)
+		  ORDER BY s.name, a.hostname`, enabled, networks)
 	if err != nil {
 		return nil, fmt.Errorf("list agents: %w", err)
 	}
@@ -483,7 +517,9 @@ func (s *Store) ListAgents(ctx context.Context) ([]AgentListInfo, error) {
 // bucket must be a multiple of 30 min and windows must stay inside the
 // cagg's retention (14 d); materialized_only = false serves the un-refreshed
 // tail live from raw, so the current half hour is never stale.
-func (s *Store) AgentHealthSeries(ctx context.Context, window, bucket time.Duration, excludeProbeType int16) ([]AgentHealthBucket, error) {
+// networks is the caller's network scope (nil = unfiltered); the cagg has
+// no plane column, so scope filters through the agents table.
+func (s *Store) AgentHealthSeries(ctx context.Context, window, bucket time.Duration, excludeProbeType int16, networks []uuid.UUID) ([]AgentHealthBucket, error) {
 	// Alias b, not bucket: GROUP BY resolves unqualified names against input
 	// columns first, so "AS bucket ... GROUP BY bucket" would group by the
 	// cagg's 30-min column and skip the re-bucket. sum(bigint) is numeric;
@@ -494,8 +530,10 @@ func (s *Store) AgentHealthSeries(ctx context.Context, window, bucket time.Durat
 		   FROM probe_results_health_30m
 		  WHERE bucket > now() - $2::interval
 		    AND probe_type <> $3
+		    AND ($4::uuid[] IS NULL
+		         OR agent_id IN (SELECT id FROM agents WHERE network_id = ANY($4)))
 		  GROUP BY agent_id, b
-		  ORDER BY agent_id, b`, bucket, window, excludeProbeType)
+		  ORDER BY agent_id, b`, bucket, window, excludeProbeType, networks)
 	if err != nil {
 		return nil, fmt.Errorf("agent health series: %w", err)
 	}
@@ -528,7 +566,10 @@ func (s *Store) AgentHealthSeries(ctx context.Context, window, bucket time.Durat
 // live. The subquery's GROUP BY repeats the time_bucket expression instead of
 // naming the alias — the alias must stay "bucket" for the outer ORDER BY, but
 // an unqualified GROUP BY bucket would resolve to the cagg's input column.
-func (s *Store) AgentProbeHealth(ctx context.Context, agentID uuid.UUID, window, bucket time.Duration) ([]AgentProbeHealthRow, error) {
+// networks is the caller's network scope (nil = unfiltered): an
+// out-of-scope agent yields no rows, indistinguishable from an unknown
+// agent id (which is already an empty list, not an error).
+func (s *Store) AgentProbeHealth(ctx context.Context, agentID uuid.UUID, window, bucket time.Duration, networks []uuid.UUID) ([]AgentProbeHealthRow, error) {
 	enabled, err := s.enabledProbeIDs(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("agent probe health: %w", err)
@@ -551,7 +592,9 @@ func (s *Store) AgentProbeHealth(ctx context.Context, agentID uuid.UUID, window,
 		         GROUP BY probe_id, time_bucket($2::interval, bucket)
 		   ) b ON b.probe_id = ss.probe_id
 		  WHERE ss.agent_id = $1
-		  ORDER BY ss.probe_id, b.bucket`, agentID, bucket, window, enabled)
+		    AND ($5::uuid[] IS NULL
+		         OR EXISTS (SELECT 1 FROM agents ag WHERE ag.id = $1 AND ag.network_id = ANY($5)))
+		  ORDER BY ss.probe_id, b.bucket`, agentID, bucket, window, enabled, networks)
 	if err != nil {
 		return nil, fmt.Errorf("agent probe health: %w", err)
 	}
@@ -584,9 +627,11 @@ func (s *Store) AgentProbeHealth(ctx context.Context, agentID uuid.UUID, window,
 // keeps a NULL-error newest row from hiding an older real message. Bucket
 // starts must sit inside raw retention (14 d); this reads probe_results
 // directly.
+// networks is the caller's network scope (nil = unfiltered); out-of-scope
+// agents yield no rows, matching AgentProbeHealth.
 func (s *Store) AgentBucketFailures(ctx context.Context, agentID uuid.UUID,
 	bucketStart time.Time, bucket time.Duration,
-	probeID *uuid.UUID, excludeProbeType int16) ([]AgentBucketFailureGroup, error) {
+	probeID *uuid.UUID, excludeProbeType int16, networks []uuid.UUID) ([]AgentBucketFailureGroup, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT pr.probe_id, pr.probe_type, t.kind, t.name, dst.name, pr.status,
 		        count(*),
@@ -602,9 +647,11 @@ func (s *Store) AgentBucketFailures(ctx context.Context, agentID uuid.UUID,
 		    AND pr.status <> 1
 		    AND ($4::uuid IS NULL OR pr.probe_id = $4)
 		    AND ($4::uuid IS NOT NULL OR pr.probe_type <> $5)
+		    AND ($6::uuid[] IS NULL
+		         OR EXISTS (SELECT 1 FROM agents ag WHERE ag.id = $1 AND ag.network_id = ANY($6)))
 		  GROUP BY pr.probe_id, pr.probe_type, t.kind, t.name, dst.name, pr.status
 		  ORDER BY count(*) DESC, pr.probe_id, pr.status`,
-		agentID, bucketStart, bucket, probeID, excludeProbeType)
+		agentID, bucketStart, bucket, probeID, excludeProbeType, networks)
 	if err != nil {
 		return nil, fmt.Errorf("agent bucket failures: %w", err)
 	}
@@ -624,7 +671,10 @@ func (s *Store) AgentBucketFailures(ctx context.Context, agentID uuid.UUID,
 // MatrixLatest returns the latest result per (agent, agent-target, probe
 // type) series within the staleness horizon, mapped to ordered site pairs.
 // External targets have no destination site and are excluded by the join.
-func (s *Store) MatrixLatest(ctx context.Context, horizon time.Duration) ([]MatrixRow, error) {
+// networks is the caller's network scope (nil = unfiltered), applied to the
+// SOURCE agent's plane — the series' plane, since expansion pairs
+// same-network agents.
+func (s *Store) MatrixLatest(ctx context.Context, horizon time.Duration, networks []uuid.UUID) ([]MatrixRow, error) {
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(
 		`WITH latest AS (
 		    SELECT DISTINCT ON (agent_id, target_id, probe_type)
@@ -642,8 +692,9 @@ func (s *Store) MatrixLatest(ctx context.Context, horizon time.Duration) ([]Matr
 		  JOIN networks nw ON nw.id = sa.network_id
 		  JOIN targets t ON t.id = l.target_id AND t.agent_id IS NOT NULL
 		  JOIN agents da ON da.id = t.agent_id
-		  JOIN sites  ds ON ds.id = da.site_id`, latencyExpr, latencySourceExpr),
-		horizon)
+		  JOIN sites  ds ON ds.id = da.site_id
+		 WHERE $2::uuid[] IS NULL OR sa.network_id = ANY($2)`, latencyExpr, latencySourceExpr),
+		horizon, networks)
 	if err != nil {
 		return nil, fmt.Errorf("matrix latest: %w", err)
 	}
@@ -670,7 +721,10 @@ func (s *Store) MatrixLatest(ctx context.Context, horizon time.Duration) ([]Matr
 // cross-plane unreachability). A member site with no agents at all keeps
 // its pairs — rendering stale for an unstaffed member is today's behavior
 // and stays, so the matrix is bit-identical across the networks upgrade.
-func (s *Store) ExpectedPairs(ctx context.Context) ([]NetworkPair, error) {
+//
+// networks is the caller's network scope (nil = unfiltered), applied to the
+// pair's plane.
+func (s *Store) ExpectedPairs(ctx context.Context, networks []uuid.UUID) ([]NetworkPair, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT DISTINCT s1.name, s2.name, n.name
 		   FROM probe_configs pc
@@ -681,6 +735,7 @@ func (s *Store) ExpectedPairs(ctx context.Context) ([]NetworkPair, error) {
 		   JOIN sites s1 ON s1.id = m1.site_id
 		   JOIN sites s2 ON s2.id = m2.site_id
 		  WHERE pc.enabled
+		    AND ($1::uuid[] IS NULL OR mg.network_id = ANY($1))
 		    AND (EXISTS (SELECT 1 FROM agents a WHERE a.site_id = m1.site_id AND a.network_id = mg.network_id)
 		         OR NOT EXISTS (SELECT 1 FROM agents a WHERE a.site_id = m1.site_id))
 		    AND (EXISTS (SELECT 1 FROM agents a WHERE a.site_id = m2.site_id AND a.network_id = mg.network_id)
@@ -694,8 +749,9 @@ func (s *Store) ExpectedPairs(ctx context.Context) ([]NetworkPair, error) {
 		   JOIN agents da ON da.id = t.agent_id
 		   JOIN sites s2 ON s2.id = da.site_id
 		  WHERE pc.enabled AND s1.id <> s2.id
+		    AND ($1::uuid[] IS NULL OR pc.network_id = ANY($1))
 		    AND (EXISTS (SELECT 1 FROM agents a WHERE a.site_id = pc.site_id AND a.network_id = pc.network_id)
-		         OR NOT EXISTS (SELECT 1 FROM agents a WHERE a.site_id = pc.site_id))`)
+		         OR NOT EXISTS (SELECT 1 FROM agents a WHERE a.site_id = pc.site_id))`, networks)
 	if err != nil {
 		return nil, fmt.Errorf("expected pairs: %w", err)
 	}
@@ -714,8 +770,11 @@ func (s *Store) ExpectedPairs(ctx context.Context) ([]NetworkPair, error) {
 // SiteEndpoints resolves a site name to its agents and their agent-kind
 // targets, or (nil, nil) when the site does not exist. Resolving IDs first
 // lets the hypertable scans hit the (agent_id, target_id, ...) index with
-// no joins.
-func (s *Store) SiteEndpoints(ctx context.Context, siteName string) (*SiteEndpoints, error) {
+// no joins. networks is the caller's network scope (nil = unfiltered): a
+// scoped caller sees only its planes' endpoint IDs, and a site hosting no
+// in-scope agents resolves to (nil, nil) — byte-identical to an unknown
+// site, so a tenant cannot probe for other tenants' site names.
+func (s *Store) SiteEndpoints(ctx context.Context, siteName string, networks []uuid.UUID) (*SiteEndpoints, error) {
 	var ep SiteEndpoints
 	err := s.pool.QueryRow(ctx,
 		`SELECT id, name, display_name, location, latitude, longitude FROM sites WHERE name = $1`, siteName).
@@ -726,12 +785,29 @@ func (s *Store) SiteEndpoints(ctx context.Context, siteName string) (*SiteEndpoi
 	if err != nil {
 		return nil, fmt.Errorf("site %q: %w", siteName, err)
 	}
+	if networks != nil {
+		// Visibility follows siteScopePredicate (the ListSites rule),
+		// checked on its own rather than against the endpoint rows below
+		// so an in-scope agent with no targets yet — or an unstaffed
+		// mesh-member site whose expected pairs render as stale — still
+		// resolves for its tenant.
+		var visible bool
+		err := s.pool.QueryRow(ctx,
+			`SELECT `+siteScopePredicate("$1::uuid", "$2"), ep.ID, networks).Scan(&visible)
+		if err != nil {
+			return nil, fmt.Errorf("site %q: %w", siteName, err)
+		}
+		if !visible {
+			return nil, nil
+		}
+	}
 	rows, err := s.pool.Query(ctx,
 		`SELECT a.id, t.id, n.name
 		   FROM agents a
 		   JOIN targets t ON t.agent_id = a.id
 		   JOIN networks n ON n.id = a.network_id
-		  WHERE a.site_id = $1`, ep.ID)
+		  WHERE a.site_id = $1
+		    AND ($2::uuid[] IS NULL OR a.network_id = ANY($2))`, ep.ID, networks)
 	if err != nil {
 		return nil, fmt.Errorf("site %q endpoints: %w", siteName, err)
 	}

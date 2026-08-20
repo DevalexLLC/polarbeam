@@ -108,7 +108,7 @@ type targetJSON struct {
 }
 
 func (a *api) handleTargetsGet(w http.ResponseWriter, r *http.Request) {
-	targets, err := a.db.ListTargets(r.Context())
+	targets, err := a.db.ListTargets(r.Context(), scopeIDs(r.Context()))
 	if err != nil {
 		internalError(w, "list targets", err)
 		return
@@ -170,7 +170,7 @@ type meshJSON struct {
 }
 
 func (a *api) handleMeshesGet(w http.ResponseWriter, r *http.Request) {
-	meshes, err := a.db.ListMeshGroups(r.Context())
+	meshes, err := a.db.ListMeshGroups(r.Context(), scopeIDs(r.Context()))
 	if err != nil {
 		internalError(w, "list meshes", err)
 		return
@@ -284,7 +284,7 @@ func toProbeCfgJSON(p store.ProbeConfigInfo) probeCfgJSON {
 }
 
 func (a *api) handleProbesGet(w http.ResponseWriter, r *http.Request) {
-	probes, err := a.db.ListProbeConfigs(r.Context())
+	probes, err := a.db.ListProbeConfigs(r.Context(), scopeIDs(r.Context()))
 	if err != nil {
 		internalError(w, "list probes", err)
 		return

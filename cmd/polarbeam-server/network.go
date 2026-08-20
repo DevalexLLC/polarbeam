@@ -30,7 +30,7 @@ func cmdNetwork(args []string) error {
 		}
 		defer cancel()
 		defer st.Close()
-		networks, err := st.ListNetworksConfig(ctx)
+		networks, err := st.ListNetworksConfig(ctx, nil)
 		if err != nil {
 			return err
 		}

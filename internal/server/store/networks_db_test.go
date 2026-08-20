@@ -331,7 +331,7 @@ func TestExpectedPairsNetworkScoped(t *testing.T) {
 		t.Fatalf("AddMeshMember site-d: %v", err)
 	}
 
-	pairs, err := s.ExpectedPairs(ctx)
+	pairs, err := s.ExpectedPairs(ctx, nil)
 	if err != nil {
 		t.Fatalf("ExpectedPairs: %v", err)
 	}
@@ -370,7 +370,7 @@ func TestSiteEndpointsNetworks(t *testing.T) {
 	ctx, s := newStore(t)
 	f := buildNetFixture(t, ctx, s)
 
-	ep, err := s.SiteEndpoints(ctx, "site-a")
+	ep, err := s.SiteEndpoints(ctx, "site-a", nil)
 	if err != nil || ep == nil {
 		t.Fatalf("SiteEndpoints: %+v, %v", ep, err)
 	}
@@ -407,7 +407,7 @@ func TestMatrixLatestCarriesNetwork(t *testing.T) {
 	insertResults(t, ctx, s, f.aDef, mk(f.tBDef))
 	insertResults(t, ctx, s, f.aMgmt, mk(f.tBMgmt))
 
-	rows, err := s.MatrixLatest(ctx, time.Hour)
+	rows, err := s.MatrixLatest(ctx, time.Hour, nil)
 	if err != nil {
 		t.Fatalf("MatrixLatest: %v", err)
 	}
@@ -581,7 +581,7 @@ func TestNetworkCRUD(t *testing.T) {
 		t.Errorf("UpdateNetwork(nope): err = %v, want ErrNotFound", err)
 	}
 
-	nets, err := s.ListNetworksConfig(ctx)
+	nets, err := s.ListNetworksConfig(ctx, nil)
 	if err != nil {
 		t.Fatalf("ListNetworksConfig: %v", err)
 	}
@@ -596,7 +596,7 @@ func TestListNetworksConfigCounts(t *testing.T) {
 	ctx, s := newStore(t)
 	buildNetFixture(t, ctx, s)
 
-	nets, err := s.ListNetworksConfig(ctx)
+	nets, err := s.ListNetworksConfig(ctx, nil)
 	if err != nil {
 		t.Fatalf("ListNetworksConfig: %v", err)
 	}
@@ -727,7 +727,7 @@ func TestEventListsCarryNetwork(t *testing.T) {
 
 	want := map[string]string{"a-def": "default", "a-mgmt": "mgmt", "": ""}
 
-	outages, err := s.ListOutages(ctx, 24*time.Hour)
+	outages, err := s.ListOutages(ctx, 24*time.Hour, nil)
 	if err != nil {
 		t.Fatalf("ListOutages: %v", err)
 	}
@@ -744,7 +744,7 @@ func TestEventListsCarryNetwork(t *testing.T) {
 		}
 	}
 
-	events, err := s.ListPathEvents(ctx, 24*time.Hour)
+	events, err := s.ListPathEvents(ctx, 24*time.Hour, nil)
 	if err != nil {
 		t.Fatalf("ListPathEvents: %v", err)
 	}

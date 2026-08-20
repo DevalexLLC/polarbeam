@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -102,21 +103,31 @@ func stageTable(source Source) string {
 // TargetEndpoints resolves a target ID to its row and probing sites, or
 // (nil, nil) when the target does not exist. Resolving agent IDs first
 // lets the hypertable and cagg scans hit the (agent_id, target_id, ...)
-// indexes with no joins — the SiteEndpoints design.
-func (s *Store) TargetEndpoints(ctx context.Context, targetID uuid.UUID) (*TargetEndpoints, error) {
+// indexes with no joins — the SiteEndpoints design. networks is the
+// caller's network scope (nil = unfiltered): sources are filtered to
+// allowed planes, and an agent-kind target whose owning agent sits on a
+// foreign plane resolves to (nil, nil) — byte-identical to an unknown id.
+// External targets stay visible to every scope (operator-published probe
+// destinations carry no plane yet).
+func (s *Store) TargetEndpoints(ctx context.Context, targetID uuid.UUID, networks []uuid.UUID) (*TargetEndpoints, error) {
 	var ep TargetEndpoints
+	var dstNetworkID *uuid.UUID
 	err := s.pool.QueryRow(ctx,
-		`SELECT t.id, t.kind, t.name, t.address, t.port, t.url, t.agent_id, ds.name
+		`SELECT t.id, t.kind, t.name, t.address, t.port, t.url, t.agent_id, ds.name, da.network_id
 		   FROM targets t
 		   LEFT JOIN agents da ON da.id = t.agent_id
 		   LEFT JOIN sites ds ON ds.id = da.site_id
 		  WHERE t.id = $1`, targetID).
-		Scan(&ep.ID, &ep.Kind, &ep.Name, &ep.Address, &ep.Port, &ep.URL, &ep.AgentID, &ep.DstSite)
+		Scan(&ep.ID, &ep.Kind, &ep.Name, &ep.Address, &ep.Port, &ep.URL, &ep.AgentID, &ep.DstSite, &dstNetworkID)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("target %s: %w", targetID, err)
+	}
+	if networks != nil && ep.AgentID != nil &&
+		(dstNetworkID == nil || !slices.Contains(networks, *dstNetworkID)) {
+		return nil, nil
 	}
 	rows, err := s.pool.Query(ctx,
 		`SELECT s.name, n.name, ss.agent_id
@@ -125,8 +136,9 @@ func (s *Store) TargetEndpoints(ctx context.Context, targetID uuid.UUID) (*Targe
 		   JOIN sites  s ON s.id = a.site_id
 		   JOIN networks n ON n.id = a.network_id
 		  WHERE ss.target_id = $1
+		    AND ($2::uuid[] IS NULL OR a.network_id = ANY($2))
 		  GROUP BY s.name, n.name, ss.agent_id
-		  ORDER BY s.name, n.name, ss.agent_id`, targetID)
+		  ORDER BY s.name, n.name, ss.agent_id`, targetID, networks)
 	if err != nil {
 		return nil, fmt.Errorf("target %s sources: %w", targetID, err)
 	}
@@ -215,7 +227,9 @@ func (s *Store) TargetStageSeries(ctx context.Context, srcAgents []uuid.UUID, ta
 // windows must stay inside its 14 d retention. The subquery's GROUP BY
 // repeats the time_bucket expression instead of naming the alias for the
 // same input-column-resolution reason as AgentProbeHealth.
-func (s *Store) TargetProbeHealth(ctx context.Context, targetID uuid.UUID, window, bucket time.Duration) ([]TargetProbeHealthRow, error) {
+// networks is the caller's network scope (nil = unfiltered), applied to the
+// source agents' planes.
+func (s *Store) TargetProbeHealth(ctx context.Context, targetID uuid.UUID, window, bucket time.Duration, networks []uuid.UUID) ([]TargetProbeHealthRow, error) {
 	enabled, err := s.enabledProbeIDs(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("target probe health: %w", err)
@@ -240,7 +254,8 @@ func (s *Store) TargetProbeHealth(ctx context.Context, targetID uuid.UUID, windo
 		         GROUP BY h.agent_id, h.probe_id, time_bucket($2::interval, h.bucket)
 		   ) b ON b.agent_id = ss.agent_id AND b.probe_id = ss.probe_id
 		  WHERE ss.target_id = $1
-		  ORDER BY s.name, a.hostname, ss.agent_id, ss.probe_id, b.bucket`, targetID, bucket, window, enabled)
+		    AND ($5::uuid[] IS NULL OR a.network_id = ANY($5))
+		  ORDER BY s.name, a.hostname, ss.agent_id, ss.probe_id, b.bucket`, targetID, bucket, window, enabled, networks)
 	if err != nil {
 		return nil, fmt.Errorf("target probe health: %w", err)
 	}

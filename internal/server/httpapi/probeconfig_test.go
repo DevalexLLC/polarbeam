@@ -19,7 +19,10 @@ import (
 
 // --- fakeDB implementation of the config methods ---
 
-func (f *fakeDB) ListTargets(_ context.Context) ([]store.TargetInfo, error) { return f.targets, nil }
+func (f *fakeDB) ListTargets(_ context.Context, networks []uuid.UUID) ([]store.TargetInfo, error) {
+	f.recordScope("ListTargets", networks)
+	return f.targets, nil
+}
 
 func (f *fakeDB) UpsertExternalTarget(_ context.Context, name, address string, port int32, url string) (uuid.UUID, error) {
 	for i := range f.targets {
@@ -49,7 +52,8 @@ func (f *fakeDB) DeleteTarget(_ context.Context, name string) error {
 	return fmt.Errorf("external target %q does not exist%w", name, store.ErrNotFound)
 }
 
-func (f *fakeDB) ListMeshGroups(_ context.Context) ([]store.MeshGroupInfo, error) {
+func (f *fakeDB) ListMeshGroups(_ context.Context, networks []uuid.UUID) ([]store.MeshGroupInfo, error) {
+	f.recordScope("ListMeshGroups", networks)
 	return f.meshes, nil
 }
 
@@ -114,7 +118,8 @@ func (f *fakeDB) RemoveMeshMember(_ context.Context, meshName, siteName string) 
 	return fmt.Errorf("mesh group %q does not exist%w", meshName, store.ErrNotFound)
 }
 
-func (f *fakeDB) ListProbeConfigs(_ context.Context) ([]store.ProbeConfigInfo, error) {
+func (f *fakeDB) ListProbeConfigs(_ context.Context, networks []uuid.UUID) ([]store.ProbeConfigInfo, error) {
+	f.recordScope("ListProbeConfigs", networks)
 	return f.probes, nil
 }
 

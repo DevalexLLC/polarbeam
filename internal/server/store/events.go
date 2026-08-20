@@ -35,7 +35,14 @@ type OutageInfo struct {
 // LIMIT is parenthesized onto the closed branch only — attached to the
 // union it would drop the oldest open outages during a >500-event
 // incident, exactly when the dashboard must show them all.
-func (s *Store) ListOutages(ctx context.Context, window time.Duration) ([]OutageInfo, error) {
+// networks is the caller's network scope (nil = unfiltered). Scoped callers
+// also lose events whose agent row is gone (plane unknowable): attribution
+// fails closed rather than leaking a possibly foreign event. The scope
+// predicate lives INSIDE both union branches, not on the outer query: the
+// closed branch's LIMIT must count only in-scope events, or a noisy foreign
+// tenant's 500 newest closed outages would crowd a scoped tenant's own
+// history out of the response entirely.
+func (s *Store) ListOutages(ctx context.Context, window time.Duration, networks []uuid.UUID) ([]OutageInfo, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT oe.id, oe.kind, COALESCE(a.hostname, ''), COALESCE(n.name, ''),
 			COALESCE(src.name, ''),
@@ -44,10 +51,14 @@ func (s *Store) ListOutages(ctx context.Context, window time.Duration) ([]Outage
 			SELECT id, kind, agent_id, target_id, probe_type, opened_at, closed_at, open_error
 			FROM outage_events
 			WHERE closed_at IS NULL
+			  AND ($2::uuid[] IS NULL
+			       OR agent_id IN (SELECT id FROM agents WHERE network_id = ANY($2)))
 			UNION ALL
 			(SELECT id, kind, agent_id, target_id, probe_type, opened_at, closed_at, open_error
 			FROM outage_events
 			WHERE closed_at > now() - $1::interval
+			  AND ($2::uuid[] IS NULL
+			       OR agent_id IN (SELECT id FROM agents WHERE network_id = ANY($2)))
 			ORDER BY opened_at DESC
 			LIMIT 500)
 		) oe
@@ -57,7 +68,7 @@ func (s *Store) ListOutages(ctx context.Context, window time.Duration) ([]Outage
 		LEFT JOIN targets t ON t.id = oe.target_id
 		LEFT JOIN agents ta ON ta.id = t.agent_id
 		LEFT JOIN sites dst ON dst.id = ta.site_id
-		ORDER BY oe.opened_at DESC`, window)
+		ORDER BY oe.opened_at DESC`, window, networks)
 	if err != nil {
 		return nil, fmt.Errorf("list outages: %w", err)
 	}
@@ -93,7 +104,9 @@ type PathEventInfo struct {
 }
 
 // ListPathEvents returns path change events within the window, newest first.
-func (s *Store) ListPathEvents(ctx context.Context, window time.Duration) ([]PathEventInfo, error) {
+// networks is the caller's network scope (nil = unfiltered); deleted-agent
+// events fail closed for scoped callers, as in ListOutages.
+func (s *Store) ListPathEvents(ctx context.Context, window time.Duration, networks []uuid.UUID) ([]PathEventInfo, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT pe.id, pe.time, COALESCE(a.hostname, ''), COALESCE(n.name, ''),
 			COALESCE(src.name, ''),
@@ -106,8 +119,9 @@ func (s *Store) ListPathEvents(ctx context.Context, window time.Duration) ([]Pat
 		LEFT JOIN agents ta ON ta.id = t.agent_id
 		LEFT JOIN sites dst ON dst.id = ta.site_id
 		WHERE pe.time > now() - $1::interval
+		  AND ($2::uuid[] IS NULL OR a.network_id = ANY($2))
 		ORDER BY pe.time DESC
-		LIMIT 500`, window)
+		LIMIT 500`, window, networks)
 	if err != nil {
 		return nil, fmt.Errorf("list path events: %w", err)
 	}

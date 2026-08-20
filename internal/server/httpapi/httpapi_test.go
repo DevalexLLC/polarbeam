@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -100,13 +101,36 @@ type fakeDB struct {
 	lastStageAgents  []uuid.UUID
 	lastStageTarget  uuid.UUID
 	lastTargetHealth uuid.UUID
+
+	// userScopes seeds SessionInfo.Networks for scoped users (key: user ID).
+	userScopes map[uuid.UUID][]store.NetworkRef
+	// scopeArgs records the networks argument of every scoped read, keyed
+	// by method name — handler tests assert the session scope reached the
+	// store (nil = unfiltered, non-nil = scoped).
+	scopeArgs map[string][]uuid.UUID
+	// networks argument of the last CreateUser / SetUserNetworks call
+	lastUserNetworks []uuid.UUID
+}
+
+// recordScope notes a scoped read's networks argument. The distinction the
+// tests care about is nil (global role, unfiltered) vs non-nil (scoped).
+func (f *fakeDB) recordScope(method string, networks []uuid.UUID) {
+	if f.scopeArgs == nil {
+		f.scopeArgs = map[string][]uuid.UUID{}
+	}
+	if networks == nil {
+		f.scopeArgs[method] = nil
+		return
+	}
+	f.scopeArgs[method] = append([]uuid.UUID{}, networks...)
 }
 
 func newFakeDB() *fakeDB {
 	return &fakeDB{
-		users:     map[string]*store.UserInfo{},
-		sessions:  map[string]*store.SessionInfo{},
-		oidcUsers: map[string]*store.UserInfo{},
+		users:      map[string]*store.UserInfo{},
+		sessions:   map[string]*store.SessionInfo{},
+		oidcUsers:  map[string]*store.UserInfo{},
+		userScopes: map[uuid.UUID][]store.NetworkRef{},
 		// Mirror migration 0017's seed: the default network always exists,
 		// and token/probe handlers unconditionally resolve a network.
 		networks: []store.NetworkAdminInfo{
@@ -137,9 +161,18 @@ func (f *fakeDB) CreateSession(_ context.Context, userID uuid.UUID, tokenHash []
 			username, role, authSource = u.Username, u.Role, u.AuthSource
 		}
 	}
+	// Mirrors GetSessionByTokenHash: scoped roles carry their (possibly
+	// empty, but non-nil) scope; global roles carry nil.
+	var networks []store.NetworkRef
+	if store.RoleIsNetworkScoped(role) {
+		networks = f.userScopes[userID]
+		if networks == nil {
+			networks = []store.NetworkRef{}
+		}
+	}
 	f.sessions[string(tokenHash)] = &store.SessionInfo{
 		ID: uuid.New(), UserID: userID, Username: username, Role: role, AuthSource: authSource,
-		CSRFToken: csrf, ExpiresAt: expiresAt, LastUsedAt: time.Now(),
+		CSRFToken: csrf, ExpiresAt: expiresAt, LastUsedAt: time.Now(), Networks: networks,
 	}
 	return nil
 }
@@ -189,13 +222,29 @@ func (f *fakeDB) RecordLogin(_ context.Context, userID uuid.UUID) error {
 	return nil
 }
 
-func (f *fakeDB) CreateUser(_ context.Context, username, passwordHash, role string) (uuid.UUID, error) {
+func (f *fakeDB) CreateUser(_ context.Context, username, passwordHash, role string, networks []uuid.UUID) (uuid.UUID, error) {
 	if f.users[username] != nil {
 		return uuid.Nil, fmt.Errorf("user %q already exists%w", username, store.ErrConflict)
 	}
+	f.lastUserNetworks = networks
 	u := &store.UserInfo{ID: uuid.New(), Username: username, PasswordHash: passwordHash, Role: role, AuthSource: "local"}
 	f.users[username] = u
 	return u.ID, nil
+}
+
+func (f *fakeDB) SetUserNetworks(_ context.Context, id uuid.UUID, networks []uuid.UUID) error {
+	u := f.userByID(id)
+	if u == nil {
+		return fmt.Errorf("user %s does not exist%w", id, store.ErrNotFound)
+	}
+	if !store.RoleIsNetworkScoped(u.Role) {
+		return fmt.Errorf("role %s is global and cannot be limited to networks%w", u.Role, store.ErrConflict)
+	}
+	if u.AuthSource != "local" {
+		return fmt.Errorf("federated accounts derive their networks from the identity provider on every login%w", store.ErrConflict)
+	}
+	f.lastUserNetworks = networks
+	return nil
 }
 
 func (f *fakeDB) userByID(id uuid.UUID) *store.UserInfo {
@@ -323,32 +372,42 @@ func (f *fakeDB) MonthlyLoginStats(_ context.Context, _ int) ([]store.LoginMonth
 	return f.loginMonths, nil
 }
 
-func (f *fakeDB) ListSites(_ context.Context) ([]store.SiteInfo, error) { return f.sites, nil }
-func (f *fakeDB) ListAgents(_ context.Context) ([]store.AgentListInfo, error) {
+func (f *fakeDB) ListSites(_ context.Context, networks []uuid.UUID) ([]store.SiteInfo, error) {
+	f.recordScope("ListSites", networks)
+	return f.sites, nil
+}
+func (f *fakeDB) ListAgents(_ context.Context, networks []uuid.UUID) ([]store.AgentListInfo, error) {
+	f.recordScope("ListAgents", networks)
 	return f.agents, nil
 }
-func (f *fakeDB) AgentHealthSeries(_ context.Context, _, _ time.Duration, excludeProbeType int16) ([]store.AgentHealthBucket, error) {
+func (f *fakeDB) AgentHealthSeries(_ context.Context, _, _ time.Duration, excludeProbeType int16, networks []uuid.UUID) ([]store.AgentHealthBucket, error) {
+	f.recordScope("AgentHealthSeries", networks)
 	f.lastHealthExclude = excludeProbeType
 	return f.agentHealth, nil
 }
-func (f *fakeDB) AgentProbeHealth(_ context.Context, agentID uuid.UUID, _, _ time.Duration) ([]store.AgentProbeHealthRow, error) {
+func (f *fakeDB) AgentProbeHealth(_ context.Context, agentID uuid.UUID, _, _ time.Duration, networks []uuid.UUID) ([]store.AgentProbeHealthRow, error) {
+	f.recordScope("AgentProbeHealth", networks)
 	f.lastProbeHealthAgent = agentID
 	return f.probeHealth, nil
 }
-func (f *fakeDB) AgentBucketFailures(_ context.Context, agentID uuid.UUID, bucketStart time.Time, _ time.Duration, probeID *uuid.UUID, excludeProbeType int16) ([]store.AgentBucketFailureGroup, error) {
+func (f *fakeDB) AgentBucketFailures(_ context.Context, agentID uuid.UUID, bucketStart time.Time, _ time.Duration, probeID *uuid.UUID, excludeProbeType int16, networks []uuid.UUID) ([]store.AgentBucketFailureGroup, error) {
+	f.recordScope("AgentBucketFailures", networks)
 	f.lastBucketAgent = agentID
 	f.lastBucketStart = bucketStart
 	f.lastBucketProbe = probeID
 	f.lastBucketExclude = excludeProbeType
 	return f.bucketFailures, nil
 }
-func (f *fakeDB) MatrixLatest(_ context.Context, _ time.Duration) ([]store.MatrixRow, error) {
+func (f *fakeDB) MatrixLatest(_ context.Context, _ time.Duration, networks []uuid.UUID) ([]store.MatrixRow, error) {
+	f.recordScope("MatrixLatest", networks)
 	return f.matrixRows, nil
 }
-func (f *fakeDB) ExpectedPairs(_ context.Context) ([]store.NetworkPair, error) {
+func (f *fakeDB) ExpectedPairs(_ context.Context, networks []uuid.UUID) ([]store.NetworkPair, error) {
+	f.recordScope("ExpectedPairs", networks)
 	return f.expectedPairs, nil
 }
-func (f *fakeDB) SiteEndpoints(_ context.Context, name string) (*store.SiteEndpoints, error) {
+func (f *fakeDB) SiteEndpoints(_ context.Context, name string, networks []uuid.UUID) (*store.SiteEndpoints, error) {
+	f.recordScope("SiteEndpoints", networks)
 	return f.endpoints[name], nil
 }
 func (f *fakeDB) PairSeries(_ context.Context, _, _ []uuid.UUID, _, _ time.Duration, source store.Source, latencySource string) ([]store.SeriesBucket, error) {
@@ -373,7 +432,8 @@ func (f *fakeDB) PairLatencySource(_ context.Context, srcAgents, _ []uuid.UUID, 
 func (f *fakeDB) DirectionLatest(_ context.Context, _, _ []uuid.UUID, _ time.Duration) ([]store.MatrixRow, error) {
 	return f.directionLatest, nil
 }
-func (f *fakeDB) TargetEndpoints(_ context.Context, targetID uuid.UUID) (*store.TargetEndpoints, error) {
+func (f *fakeDB) TargetEndpoints(_ context.Context, targetID uuid.UUID, networks []uuid.UUID) (*store.TargetEndpoints, error) {
+	f.recordScope("TargetEndpoints", networks)
 	return f.targetEndpoints[targetID], nil
 }
 func (f *fakeDB) TargetStageSeries(_ context.Context, srcAgents []uuid.UUID, targetID uuid.UUID, _, _ time.Duration, source store.Source) ([]store.StageBucket, error) {
@@ -382,7 +442,8 @@ func (f *fakeDB) TargetStageSeries(_ context.Context, srcAgents []uuid.UUID, tar
 	f.lastStageTarget = targetID
 	return f.stageBuckets, nil
 }
-func (f *fakeDB) TargetProbeHealth(_ context.Context, targetID uuid.UUID, _, _ time.Duration) ([]store.TargetProbeHealthRow, error) {
+func (f *fakeDB) TargetProbeHealth(_ context.Context, targetID uuid.UUID, _, _ time.Duration, networks []uuid.UUID) ([]store.TargetProbeHealthRow, error) {
+	f.recordScope("TargetProbeHealth", networks)
 	f.lastTargetHealth = targetID
 	return f.targetHealth, nil
 }
@@ -413,10 +474,12 @@ func (f *fakeDB) UpdateBannerSettings(_ context.Context, b store.BannerSettings)
 	f.banner = &b
 	return f.banner, nil
 }
-func (f *fakeDB) ListOutages(_ context.Context, _ time.Duration) ([]store.OutageInfo, error) {
+func (f *fakeDB) ListOutages(_ context.Context, _ time.Duration, networks []uuid.UUID) ([]store.OutageInfo, error) {
+	f.recordScope("ListOutages", networks)
 	return f.outages, nil
 }
-func (f *fakeDB) ListPathEvents(_ context.Context, _ time.Duration) ([]store.PathEventInfo, error) {
+func (f *fakeDB) ListPathEvents(_ context.Context, _ time.Duration, networks []uuid.UUID) ([]store.PathEventInfo, error) {
+	f.recordScope("ListPathEvents", networks)
 	return f.pathEvents, nil
 }
 func (f *fakeDB) CurrentPaths(_ context.Context, srcAgents, _ []uuid.UUID) ([]store.CurrentPath, error) {
@@ -455,19 +518,41 @@ func (f *fakeDB) GetOIDCSettings(_ context.Context) (*store.OIDCSettings, error)
 	return f.oidcSettings, nil
 }
 
-func (f *fakeDB) UpdateOIDCSettings(ctx context.Context, o store.OIDCSettings, keepSecret bool) (*store.OIDCSettings, int64, error) {
+func (f *fakeDB) UpdateOIDCSettings(ctx context.Context, o store.OIDCSettings, keepSecret, keepRoleRules, keepUnmatchedRole bool) (*store.OIDCSettings, int64, error) {
 	if f.beforeUpdateOIDCSettings != nil {
 		f.beforeUpdateOIDCSettings()
 	}
-	// Mirrors the store: the provider-change decision is made against the
-	// CURRENT stored row, never a caller-supplied snapshot.
+	// Mirrors the store: the provider-change decision AND the keep-stored
+	// resolutions are made against the CURRENT stored row, never a
+	// caller-supplied snapshot, and an authorization-policy change
+	// (role_claim, admin_values, role_rules, unmatched_role) revokes
+	// federated sessions like a provider switch.
 	cur, _ := f.GetOIDCSettings(ctx)
+	if keepRoleRules {
+		o.RoleRules = cur.RoleRules
+	}
+	if keepUnmatchedRole {
+		o.UnmatchedRole = cur.UnmatchedRole
+	}
 	providerChanged := cur.Issuer != o.Issuer || cur.ClientID != o.ClientID
+	rulesEqual := len(cur.RoleRules) == len(o.RoleRules)
+	if rulesEqual {
+		for i := range cur.RoleRules {
+			a, b := cur.RoleRules[i], o.RoleRules[i]
+			if a.Value != b.Value || a.Role != b.Role || !slices.Equal(a.Networks, b.Networks) {
+				rulesEqual = false
+				break
+			}
+		}
+	}
+	policyChanged := cur.RoleClaim != o.RoleClaim ||
+		!slices.Equal(cur.AdminValues, o.AdminValues) ||
+		!rulesEqual || cur.UnmatchedRole != o.UnmatchedRole
 	if providerChanged && keepSecret && cur.ClientSecret != "" {
 		return nil, 0, store.ErrConcurrentProviderChange
 	}
 	var revoked int64
-	if providerChanged {
+	if providerChanged || policyChanged {
 		for k, s := range f.sessions {
 			for _, u := range f.oidcUsers {
 				if u.ID == s.UserID {
@@ -500,7 +585,14 @@ func (f *fakeDB) addOIDCUser(issuer, subject, username, role string, disabled bo
 	return u
 }
 
-func (f *fakeDB) UpsertOIDCUser(_ context.Context, issuer, subject, username, role string) (*store.UserInfo, error) {
+func (f *fakeDB) UpsertOIDCUser(ctx context.Context, issuer, subject, username, role string, networks []uuid.UUID, policyUpdatedAt time.Time) (*store.UserInfo, error) {
+	// Mirrors the store: the write is bound to the settings revision the
+	// claims were mapped under.
+	cur, _ := f.GetOIDCSettings(ctx)
+	if !cur.UpdatedAt.Equal(policyUpdatedAt) {
+		return nil, store.ErrOIDCPolicyChanged
+	}
+	f.lastUserNetworks = networks
 	if u := f.oidcUsers[oidcKey(issuer, subject)]; u != nil {
 		// Username/role track the IdP; disabled survives (revocation lever).
 		u.Username, u.Role = username, role
@@ -510,10 +602,13 @@ func (f *fakeDB) UpsertOIDCUser(_ context.Context, issuer, subject, username, ro
 	return u, nil
 }
 
-func (f *fakeDB) CreateOIDCSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrf string, expiresAt time.Time, issuer, clientID string) error {
+func (f *fakeDB) CreateOIDCSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrf string, expiresAt time.Time, issuer, clientID string, policyUpdatedAt time.Time) error {
 	cur, _ := f.GetOIDCSettings(ctx)
 	if !cur.Enabled || cur.Issuer != issuer || cur.ClientID != clientID {
 		return store.ErrProviderChanged
+	}
+	if !cur.UpdatedAt.Equal(policyUpdatedAt) {
+		return store.ErrOIDCPolicyChanged
 	}
 	return f.CreateSession(ctx, userID, tokenHash, csrf, expiresAt)
 }

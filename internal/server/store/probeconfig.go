@@ -152,11 +152,26 @@ func (s *Store) UpsertExternalTarget(ctx context.Context, name, address string, 
 
 // ListTargets returns all targets, agents included, each with the number of
 // probe configs referencing it (the UI blocks deletes while in use).
-func (s *Store) ListTargets(ctx context.Context) ([]TargetInfo, error) {
+// networks is the caller's network scope (nil = unfiltered): agent-kind
+// targets are kept only when the owning agent sits on an allowed plane;
+// external targets are visible to every scope (operator-published probe
+// destinations carry no plane yet). The probe count is scoped too — an
+// external target shared by several tenants would otherwise report the
+// server-wide count, leaking other tenants' probe activity and
+// contradicting the caller's own scoped probe list. Only DIRECT rows
+// reference a target (the probe_configs CHECK keeps mesh templates'
+// target_id NULL), and those always carry their own network_id, so the
+// predicate needs no mesh join.
+func (s *Store) ListTargets(ctx context.Context, networks []uuid.UUID) ([]TargetInfo, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, kind, name, agent_id, address, port, url, created_at,
-		       (SELECT count(*) FROM probe_configs pc WHERE pc.target_id = targets.id)
-		FROM targets ORDER BY kind, name`)
+		       (SELECT count(*) FROM probe_configs pc
+		         WHERE pc.target_id = targets.id
+		           AND ($1::uuid[] IS NULL OR pc.network_id = ANY($1)))
+		FROM targets
+		WHERE $1::uuid[] IS NULL OR agent_id IS NULL
+		   OR EXISTS (SELECT 1 FROM agents a WHERE a.id = targets.agent_id AND a.network_id = ANY($1))
+		ORDER BY kind, name`, networks)
 	if err != nil {
 		return nil, fmt.Errorf("list targets: %w", err)
 	}
@@ -408,8 +423,8 @@ func (s *Store) RemoveMeshMember(ctx context.Context, meshName, siteName string)
 
 // ListMeshGroups returns all mesh groups with their member site names and
 // the number of probe templates on each (the UI surfaces delete blast
-// radius).
-func (s *Store) ListMeshGroups(ctx context.Context) ([]MeshGroupInfo, error) {
+// radius). networks is the caller's network scope (nil = unfiltered).
+func (s *Store) ListMeshGroups(ctx context.Context, networks []uuid.UUID) ([]MeshGroupInfo, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT g.id, g.name, n.name, COALESCE(array_agg(s.name ORDER BY s.name) FILTER (WHERE s.name IS NOT NULL), '{}'),
 		       (SELECT count(*) FROM probe_configs pc WHERE pc.mesh_id = g.id)
@@ -417,7 +432,8 @@ func (s *Store) ListMeshGroups(ctx context.Context) ([]MeshGroupInfo, error) {
 		JOIN networks n ON n.id = g.network_id
 		LEFT JOIN mesh_members m ON m.mesh_id = g.id
 		LEFT JOIN sites s ON s.id = m.site_id
-		GROUP BY g.id, g.name, n.name ORDER BY g.name`)
+		WHERE $1::uuid[] IS NULL OR g.network_id = ANY($1)
+		GROUP BY g.id, g.name, n.name ORDER BY g.name`, networks)
 	if err != nil {
 		return nil, fmt.Errorf("list mesh groups: %w", err)
 	}
@@ -601,9 +617,13 @@ func scanProbeConfig(row pgx.Row) (ProbeConfigInfo, error) {
 	return p, nil
 }
 
-// ListProbeConfigs returns every probe config with names resolved.
-func (s *Store) ListProbeConfigs(ctx context.Context) ([]ProbeConfigInfo, error) {
-	rows, err := s.pool.Query(ctx, probeConfigSelect+` ORDER BY pc.created_at`)
+// ListProbeConfigs returns every probe config with names resolved. networks
+// is the caller's network scope (nil = unfiltered): direct rows filter on
+// their own plane, mesh templates on the owning mesh's.
+func (s *Store) ListProbeConfigs(ctx context.Context, networks []uuid.UUID) ([]ProbeConfigInfo, error) {
+	rows, err := s.pool.Query(ctx, probeConfigSelect+`
+	WHERE $1::uuid[] IS NULL OR COALESCE(pc.network_id, g.network_id) = ANY($1)
+	ORDER BY pc.created_at`, networks)
 	if err != nil {
 		return nil, fmt.Errorf("list probe configs: %w", err)
 	}

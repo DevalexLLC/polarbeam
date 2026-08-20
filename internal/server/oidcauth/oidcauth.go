@@ -26,14 +26,19 @@ const discoveryTimeout = 10 * time.Second
 var ErrDisabled = errors.New("oidc is disabled")
 
 // Claims is the dashboard identity extracted from a verified ID token. Role
-// is already mapped to admin|viewer — handlers never see raw IdP claims.
-// Issuer is the verified iss of the token that produced these claims:
-// subjects are unique only within an issuer, so identities are scoped to it.
+// is already mapped to a dashboard role — handlers never see raw IdP
+// claims. Networks is set only for the network-scoped roles: the mapped
+// network NAMES from the matching role rules, still unresolved (the
+// callback resolves them against the networks table and fails the login
+// loudly when none survive). Issuer is the verified iss of the token that
+// produced these claims: subjects are unique only within an issuer, so
+// identities are scoped to it.
 type Claims struct {
 	Issuer   string
 	Subject  string
 	Username string
 	Role     string
+	Networks []string
 }
 
 // Provider is the handler-facing boundary of a discovered IdP; httpapi

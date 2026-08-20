@@ -13,7 +13,9 @@ import (
 )
 
 // UserInfo is a users row. PasswordHash is "" for federated (OIDC) users —
-// their password_hash column is NULL by CHECK constraint.
+// their password_hash column is NULL by CHECK constraint. Networks holds
+// the user's allowed network names for the scoped roles and stays nil for
+// global roles (see SessionInfo for the semantics).
 type UserInfo struct {
 	ID           uuid.UUID
 	Username     string
@@ -22,10 +24,19 @@ type UserInfo struct {
 	Disabled     bool
 	CreatedAt    time.Time
 	AuthSource   string // "local" or "oidc"
+	Networks     []string
+}
+
+// NetworkRef names one network a scoped user may see.
+type NetworkRef struct {
+	ID   uuid.UUID
+	Name string
 }
 
 // SessionInfo is a sessions row joined with its user, as needed by the
-// session middleware.
+// session middleware. Networks is nil for the global roles (no filtering);
+// for the network-scoped roles it holds the user's allowed planes, where a
+// non-nil empty set means "sees nothing" — scope always fails closed.
 type SessionInfo struct {
 	ID         uuid.UUID
 	UserID     uuid.UUID
@@ -35,13 +46,49 @@ type SessionInfo struct {
 	CSRFToken  string
 	ExpiresAt  time.Time
 	LastUsedAt time.Time
+	Networks   []NetworkRef
+}
+
+// NetworkScope returns (nil, false) for global roles — no filtering — and
+// (allowed planes, true) for the scoped roles. Every read-path enforcement
+// point resolves the session's visibility through this one helper.
+func (s *SessionInfo) NetworkScope() ([]NetworkRef, bool) {
+	if !RoleIsNetworkScoped(s.Role) {
+		return nil, false
+	}
+	// Non-nil even when empty: callers pass the result to `= ANY($n)`
+	// predicates, where the empty set matches nothing (fails closed) while
+	// nil means unfiltered.
+	if s.Networks == nil {
+		return []NetworkRef{}, true
+	}
+	return s.Networks, true
 }
 
 // CreateUser inserts a dashboard user and returns its ID. The password hash
-// is produced by the caller (internal/server/auth); role is admin|viewer.
-func (s *Store) CreateUser(ctx context.Context, username, passwordHash, role string) (uuid.UUID, error) {
+// is produced by the caller (internal/server/auth). networks is the scope
+// for the network-scoped roles (required non-empty — a scoped user with no
+// planes sees nothing and is always a mistake at create time) and must be
+// empty for global roles; callers resolve names to IDs first, so unknown
+// networks fail loudly before this runs.
+func (s *Store) CreateUser(ctx context.Context, username, passwordHash, role string, networks []uuid.UUID) (uuid.UUID, error) {
+	if !ValidRole(role) {
+		return uuid.Nil, invalidf("role %q is not a valid role", role)
+	}
+	if RoleIsNetworkScoped(role) && len(networks) == 0 {
+		return uuid.Nil, invalidf("role %s requires at least one network", role)
+	}
+	if !RoleIsNetworkScoped(role) && len(networks) > 0 {
+		return uuid.Nil, invalidf("role %s is global and cannot be limited to networks", role)
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("create user: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
 	var id uuid.UUID
-	err := s.pool.QueryRow(ctx,
+	err = tx.QueryRow(ctx,
 		`INSERT INTO users (username, password_hash, role) VALUES ($1, $2, $3) RETURNING id`,
 		username, passwordHash, role).Scan(&id)
 	var pgErr *pgconn.PgError
@@ -51,7 +98,70 @@ func (s *Store) CreateUser(ctx context.Context, username, passwordHash, role str
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("create user: %w", err)
 	}
+	if len(networks) > 0 {
+		if err := insertUserNetworks(ctx, tx, id, networks); err != nil {
+			return uuid.Nil, fmt.Errorf("create user: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, fmt.Errorf("create user: %w", err)
+	}
 	return id, nil
+}
+
+// insertUserNetworks writes a user's scope rows. A deleted network surfaces
+// as a typed 404 (the caller resolved the ID moments ago), never an opaque
+// FK 500.
+func insertUserNetworks(ctx context.Context, tx pgx.Tx, userID uuid.UUID, networks []uuid.UUID) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO user_networks (user_id, network_id)
+		SELECT $1, unnest($2::uuid[])
+		ON CONFLICT DO NOTHING`, userID, networks)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+		return notFoundf("a referenced network no longer exists")
+	}
+	return err
+}
+
+// SetUserNetworks replaces a user's network scope. Only local users with a
+// network-scoped role qualify: global roles have no scope by definition,
+// and a federated user's scope is derived from the IdP's claims on every
+// login — editing it here would be silently overwritten at the next
+// sign-in, so it is refused instead.
+func (s *Store) SetUserNetworks(ctx context.Context, id uuid.UUID, networks []uuid.UUID) error {
+	if len(networks) == 0 {
+		return invalidf("at least one network is required")
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("set user networks %s: %w", id, err)
+	}
+	defer tx.Rollback(ctx)
+
+	var role, authSource string
+	err = tx.QueryRow(ctx,
+		`SELECT role, auth_source FROM users WHERE id = $1 FOR UPDATE`, id).
+		Scan(&role, &authSource)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return notFoundf("user %s does not exist", id)
+	}
+	if err != nil {
+		return fmt.Errorf("set user networks %s: %w", id, err)
+	}
+	if !RoleIsNetworkScoped(role) {
+		return conflictf("role %s is global and cannot be limited to networks", role)
+	}
+	if authSource != "local" {
+		return conflictf("federated accounts derive their networks from the identity provider on every login")
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM user_networks WHERE user_id = $1`, id); err != nil {
+		return fmt.Errorf("set user networks %s: %w", id, err)
+	}
+	if err := insertUserNetworks(ctx, tx, id, networks); err != nil {
+		return fmt.Errorf("set user networks %s: %w", id, err)
+	}
+	return tx.Commit(ctx)
 }
 
 // lockUserAndActiveAdmins locks the target row AND every enabled admin row
@@ -146,21 +256,43 @@ func (s *Store) DeleteUser(ctx context.Context, id uuid.UUID) error {
 	return tx.Commit(ctx)
 }
 
+// userNetworkNames is the subquery loading a user's scope as sorted network
+// names ('{}' when none). Cheap for the global roles (an empty index probe)
+// and always consistent with the row it rides along with.
+const userNetworkNames = `COALESCE((SELECT array_agg(n.name ORDER BY n.name)
+	FROM user_networks un JOIN networks n ON n.id = un.network_id
+	WHERE un.user_id = users.id), '{}')`
+
+// scopeNames normalizes a loaded name array against the role: global roles
+// carry nil (unfiltered), scoped roles keep the loaded set (possibly empty
+// — which fails closed to "sees nothing").
+func scopeNames(role string, names []string) []string {
+	if !RoleIsNetworkScoped(role) {
+		return nil
+	}
+	if names == nil {
+		return []string{}
+	}
+	return names
+}
+
 // GetUserByUsername returns the user or (nil, nil) when the username is
 // unknown, so login can burn a dummy hash verification without branching on
 // an error.
 func (s *Store) GetUserByUsername(ctx context.Context, username string) (*UserInfo, error) {
 	var u UserInfo
+	var networks []string
 	err := s.pool.QueryRow(ctx,
-		`SELECT id, username, COALESCE(password_hash, ''), role, disabled, created_at, auth_source
+		`SELECT id, username, COALESCE(password_hash, ''), role, disabled, created_at, auth_source, `+userNetworkNames+`
 		   FROM users WHERE username = $1`, username).
-		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Disabled, &u.CreatedAt, &u.AuthSource)
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Disabled, &u.CreatedAt, &u.AuthSource, &networks)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get user: %w", err)
 	}
+	u.Networks = scopeNames(u.Role, networks)
 	return &u, nil
 }
 
@@ -169,16 +301,18 @@ func (s *Store) GetUserByUsername(ctx context.Context, username string) (*UserIn
 // caller's current hash.
 func (s *Store) GetUserByID(ctx context.Context, id uuid.UUID) (*UserInfo, error) {
 	var u UserInfo
+	var networks []string
 	err := s.pool.QueryRow(ctx,
-		`SELECT id, username, COALESCE(password_hash, ''), role, disabled, created_at, auth_source
+		`SELECT id, username, COALESCE(password_hash, ''), role, disabled, created_at, auth_source, `+userNetworkNames+`
 		   FROM users WHERE id = $1`, id).
-		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Disabled, &u.CreatedAt, &u.AuthSource)
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Disabled, &u.CreatedAt, &u.AuthSource, &networks)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get user: %w", err)
 	}
+	u.Networks = scopeNames(u.Role, networks)
 	return &u, nil
 }
 
@@ -292,20 +426,38 @@ func (s *Store) CreateLocalSession(ctx context.Context, userID uuid.UUID, tokenH
 }
 
 // GetSessionByTokenHash returns the live session for a token hash, or
-// (nil, nil) when it is unknown, expired, or its user is disabled.
+// (nil, nil) when it is unknown, expired, or its user is disabled. Role AND
+// network scope are joined live from users/user_networks on every request,
+// so a role or scope edit takes effect on the victim's next request with no
+// session invalidation.
 func (s *Store) GetSessionByTokenHash(ctx context.Context, tokenHash []byte) (*SessionInfo, error) {
 	var si SessionInfo
+	var netIDs []uuid.UUID
+	var netNames []string
 	err := s.pool.QueryRow(ctx,
-		`SELECT s.id, s.user_id, u.username, u.role, u.auth_source, s.csrf_token, s.expires_at, s.last_used_at
+		`SELECT s.id, s.user_id, u.username, u.role, u.auth_source, s.csrf_token, s.expires_at, s.last_used_at,
+		        COALESCE((SELECT array_agg(n.id ORDER BY n.name)
+		                    FROM user_networks un JOIN networks n ON n.id = un.network_id
+		                   WHERE un.user_id = u.id), '{}'),
+		        COALESCE((SELECT array_agg(n.name ORDER BY n.name)
+		                    FROM user_networks un JOIN networks n ON n.id = un.network_id
+		                   WHERE un.user_id = u.id), '{}')
 		   FROM sessions s JOIN users u ON u.id = s.user_id
 		  WHERE s.token_hash = $1 AND s.expires_at > now() AND NOT u.disabled`,
 		tokenHash).
-		Scan(&si.ID, &si.UserID, &si.Username, &si.Role, &si.AuthSource, &si.CSRFToken, &si.ExpiresAt, &si.LastUsedAt)
+		Scan(&si.ID, &si.UserID, &si.Username, &si.Role, &si.AuthSource, &si.CSRFToken, &si.ExpiresAt, &si.LastUsedAt,
+			&netIDs, &netNames)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get session: %w", err)
+	}
+	if RoleIsNetworkScoped(si.Role) {
+		si.Networks = make([]NetworkRef, len(netIDs))
+		for i := range netIDs {
+			si.Networks[i] = NetworkRef{ID: netIDs[i], Name: netNames[i]}
+		}
 	}
 	return &si, nil
 }
@@ -377,13 +529,16 @@ type UserAccountInfo struct {
 	CreatedAt   *time.Time // nil for deleted identities (not snapshotted)
 	LoginCount  int64
 	LastLoginAt *time.Time // nil = never logged in
+	// Networks is the scope of a live network-scoped account; nil for
+	// global roles and for deleted identities (scope rows cascade away).
+	Networks []string
 }
 
 // UserAccountFilter narrows and pages ListUserAccounts. Empty string means
 // "any"; values are validated by the HTTP layer.
 type UserAccountFilter struct {
 	Query  string // case-insensitive username substring
-	Role   string // "admin" | "viewer"
+	Role   string // one of Roles
 	Status string // "active" | "disabled" | "deleted"
 	Source string // "local" | "oidc"
 	Limit  int
@@ -408,7 +563,10 @@ func (s *Store) ListUserAccounts(ctx context.Context, f UserAccountFilter) ([]Us
 			SELECT u.id, u.username, u.role, u.auth_source,
 			       CASE WHEN u.disabled THEN 'disabled' ELSE 'active' END AS status,
 			       u.created_at::timestamptz AS created_at,
-			       count(e.id) AS login_count, max(e.occurred_at) AS last_login_at
+			       count(e.id) AS login_count, max(e.occurred_at) AS last_login_at,
+			       COALESCE((SELECT array_agg(n.name ORDER BY n.name)
+			                   FROM user_networks un JOIN networks n ON n.id = un.network_id
+			                  WHERE un.user_id = u.id), '{}') AS networks
 			  FROM users u
 			  LEFT JOIN login_events e ON e.user_id = u.id
 			 GROUP BY u.id
@@ -418,13 +576,13 @@ func (s *Store) ListUserAccounts(ctx context.Context, f UserAccountFilter) ([]Us
 			       (array_agg(e.role ORDER BY e.occurred_at DESC))[1],
 			       (array_agg(e.auth_source ORDER BY e.occurred_at DESC))[1],
 			       'deleted', NULL,
-			       count(*), max(e.occurred_at)
+			       count(*), max(e.occurred_at), '{}'
 			  FROM login_events e
 			 WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = e.user_id)
 			 GROUP BY e.user_id
 		)
 		SELECT id, username, role, auth_source, status, created_at,
-		       login_count, last_login_at, count(*) OVER ()
+		       login_count, last_login_at, networks, count(*) OVER ()
 		  FROM accounts
 		 WHERE ($1 = '' OR username ILIKE '%' || $1 || '%')
 		   AND ($2 = '' OR role = $2)
@@ -442,9 +600,13 @@ func (s *Store) ListUserAccounts(ctx context.Context, f UserAccountFilter) ([]Us
 	var total int64
 	for rows.Next() {
 		var a UserAccountInfo
+		var networks []string
 		if err := rows.Scan(&a.ID, &a.Username, &a.Role, &a.AuthSource, &a.Status,
-			&a.CreatedAt, &a.LoginCount, &a.LastLoginAt, &total); err != nil {
+			&a.CreatedAt, &a.LoginCount, &a.LastLoginAt, &networks, &total); err != nil {
 			return nil, 0, fmt.Errorf("list user accounts: %w", err)
+		}
+		if a.Status != "deleted" {
+			a.Networks = scopeNames(a.Role, networks)
 		}
 		accounts = append(accounts, a)
 	}

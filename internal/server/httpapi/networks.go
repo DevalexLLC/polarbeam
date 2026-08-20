@@ -36,7 +36,7 @@ func toNetworkConfigJSON(ni store.NetworkAdminInfo) networkConfigJSON {
 }
 
 func (a *api) handleNetworksGet(w http.ResponseWriter, r *http.Request) {
-	networks, err := a.db.ListNetworksConfig(r.Context())
+	networks, err := a.db.ListNetworksConfig(r.Context(), scopeIDs(r.Context()))
 	if err != nil {
 		internalError(w, "list networks config", err)
 		return
