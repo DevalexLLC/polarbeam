@@ -8,6 +8,7 @@ package store_test
 
 import (
 	"context"
+	"errors"
 	"math/big"
 	"strings"
 	"sync/atomic"
@@ -43,25 +44,23 @@ func networkIDByName(t *testing.T, ctx context.Context, s *store.Store, name str
 	return id
 }
 
-// enrollNetAgent enrolls an agent through the real token flow. A non-nil
-// network moves the token onto that network first via SQL — deliberately the
-// only way to mint a non-default token until a --network surface exists.
+// enrollNetAgent enrolls an agent through the real token flow, minting the
+// token on the given network (nil = the default network).
 func enrollNetAgent(t *testing.T, ctx context.Context, s *store.Store, siteName, hostname string, network *uuid.UUID) uuid.UUID {
 	t.Helper()
 	siteID, err := s.EnsureSite(ctx, siteName)
 	if err != nil {
 		t.Fatalf("EnsureSite %q: %v", siteName, err)
 	}
-	token, err := s.CreateJoinToken(ctx, siteID, "test", time.Hour)
+	netID := uuid.Nil
+	if network != nil {
+		netID = *network
+	} else {
+		netID = networkIDByName(t, ctx, s, "default")
+	}
+	token, err := s.CreateJoinToken(ctx, siteID, netID, "test", time.Hour)
 	if err != nil {
 		t.Fatalf("CreateJoinToken: %v", err)
-	}
-	if network != nil {
-		tokenID, _, _ := strings.Cut(token, ".")
-		if _, err := s.Pool().Exec(ctx,
-			`UPDATE join_tokens SET network_id = $2 WHERE id = $1`, tokenID, *network); err != nil {
-			t.Fatalf("move token to network: %v", err)
-		}
 	}
 	agentID, _, err := s.EnrollAgent(ctx, token, hostname, hostname+":9443", "v0", []byte(hostname),
 		func(uuid.UUID) (store.IssuedCert, error) {
@@ -125,7 +124,7 @@ func buildNetFixture(t *testing.T, ctx context.Context, s *store.Store) netFixtu
 		t.Fatalf("SiteIDByName: %v", err)
 	}
 
-	if _, err := s.UpsertMeshGroup(ctx, "m1"); err != nil {
+	if _, err := s.UpsertMeshGroup(ctx, "m1", nil); err != nil {
 		t.Fatalf("UpsertMeshGroup: %v", err)
 	}
 	for _, site := range []string{"site-a", "site-b"} {
@@ -140,7 +139,7 @@ func buildNetFixture(t *testing.T, ctx context.Context, s *store.Store) netFixtu
 	if _, err := s.UpsertExternalTarget(ctx, "svc", "203.0.113.7", 443, ""); err != nil {
 		t.Fatalf("UpsertExternalTarget: %v", err)
 	}
-	if f.directID, err = s.AddDirectProbe(ctx, "site-a", "svc", netProbeSettings, true, "test"); err != nil {
+	if f.directID, err = s.AddDirectProbe(ctx, "site-a", "svc", f.defaultNet, netProbeSettings, true, "test"); err != nil {
 		t.Fatalf("AddDirectProbe: %v", err)
 	}
 	return f
@@ -185,12 +184,13 @@ func TestEnrollAgentInheritsTokenNetwork(t *testing.T) {
 		return id
 	}
 
-	// Freshly minted tokens land on the default network.
+	// Tokens record the network they were minted for, and the list
+	// surfaces it by name.
 	siteID, err := s.EnsureSite(ctx, "site-a")
 	if err != nil {
 		t.Fatalf("EnsureSite: %v", err)
 	}
-	token, err := s.CreateJoinToken(ctx, siteID, "test", time.Hour)
+	token, err := s.CreateJoinToken(ctx, siteID, mgmt, "test", time.Hour)
 	if err != nil {
 		t.Fatalf("CreateJoinToken: %v", err)
 	}
@@ -200,8 +200,15 @@ func TestEnrollAgentInheritsTokenNetwork(t *testing.T) {
 		`SELECT network_id FROM join_tokens WHERE id = $1`, tokenID).Scan(&tokenNet); err != nil {
 		t.Fatalf("token network: %v", err)
 	}
-	if tokenNet != defaultNet {
-		t.Errorf("new token network = %s, want default %s", tokenNet, defaultNet)
+	if tokenNet != mgmt {
+		t.Errorf("token network = %s, want mgmt %s", tokenNet, mgmt)
+	}
+	listed, err := s.ListJoinTokens(ctx)
+	if err != nil {
+		t.Fatalf("ListJoinTokens: %v", err)
+	}
+	if len(listed) != 1 || listed[0].Network != "mgmt" {
+		t.Errorf("ListJoinTokens = %+v, want one token on mgmt", listed)
 	}
 
 	if got := networkOf(enrollNetAgent(t, ctx, s, "site-a", "a1", nil)); got != defaultNet {
@@ -427,16 +434,18 @@ func TestRemoveMeshMemberRetiresOnNetworkSeries(t *testing.T) {
 func TestUpsertMeshGroupKeepsExistingNetwork(t *testing.T) {
 	ctx, s := newStore(t)
 	mgmt := createNetwork(t, ctx, s, "mgmt")
+	defaultNet := networkIDByName(t, ctx, s, "default")
 
-	first, err := s.UpsertMeshGroup(ctx, "m1")
+	// An explicit network binds a new mesh.
+	first, err := s.UpsertMeshGroup(ctx, "m1", &mgmt)
 	if err != nil {
 		t.Fatalf("UpsertMeshGroup: %v", err)
 	}
-	moveMeshToNetwork(t, ctx, s, "m1", mgmt)
 
-	again, err := s.UpsertMeshGroup(ctx, "m1")
+	// nil = no opinion: the existing mesh keeps its network.
+	again, err := s.UpsertMeshGroup(ctx, "m1", nil)
 	if err != nil {
-		t.Fatalf("UpsertMeshGroup again: %v", err)
+		t.Fatalf("UpsertMeshGroup nil re-upsert: %v", err)
 	}
 	if first != again {
 		t.Errorf("upsert returned %s then %s for the same mesh", first, again)
@@ -447,6 +456,181 @@ func TestUpsertMeshGroupKeepsExistingNetwork(t *testing.T) {
 		t.Fatalf("mesh network: %v", err)
 	}
 	if net != mgmt {
-		t.Errorf("re-upsert moved mesh to %s, want it kept on mgmt %s", net, mgmt)
+		t.Errorf("nil re-upsert moved mesh to %s, want it kept on mgmt %s", net, mgmt)
+	}
+
+	// An explicit matching network is an idempotent no-op.
+	if same, err := s.UpsertMeshGroup(ctx, "m1", &mgmt); err != nil || same != first {
+		t.Errorf("same-network re-upsert = %s, %v, want %s, nil", same, err, first)
+	}
+
+	// An explicit different network is a refusal — a mesh's network is
+	// immutable — and the mesh stays where it was.
+	if _, err := s.UpsertMeshGroup(ctx, "m1", &defaultNet); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("cross-network re-upsert: err = %v, want ErrConflict", err)
+	}
+	if err := s.Pool().QueryRow(ctx,
+		`SELECT network_id FROM mesh_groups WHERE name = 'm1'`).Scan(&net); err != nil {
+		t.Fatalf("mesh network: %v", err)
+	}
+	if net != mgmt {
+		t.Errorf("refused re-upsert moved mesh to %s, want mgmt %s", net, mgmt)
+	}
+
+	// New meshes with no opinion land on default.
+	if _, err := s.UpsertMeshGroup(ctx, "m2", nil); err != nil {
+		t.Fatalf("UpsertMeshGroup m2: %v", err)
+	}
+	if err := s.Pool().QueryRow(ctx,
+		`SELECT network_id FROM mesh_groups WHERE name = 'm2'`).Scan(&net); err != nil {
+		t.Fatalf("mesh network: %v", err)
+	}
+	if net != defaultNet {
+		t.Errorf("nil-network mesh landed on %s, want default %s", net, defaultNet)
+	}
+}
+
+func TestNetworkCRUD(t *testing.T) {
+	ctx, s := newStore(t)
+
+	id, err := s.CreateNetwork(ctx, "mgmt", "Management")
+	if err != nil {
+		t.Fatalf("CreateNetwork: %v", err)
+	}
+	if got, err := s.NetworkIDByName(ctx, "mgmt"); err != nil || got != id {
+		t.Errorf("NetworkIDByName(mgmt) = %s, %v, want %s", got, err, id)
+	}
+	if _, err := s.CreateNetwork(ctx, "mgmt", ""); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("duplicate create: err = %v, want ErrConflict", err)
+	}
+	if _, err := s.CreateNetwork(ctx, "default", ""); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("re-create 'default': err = %v, want ErrConflict", err)
+	}
+	if _, err := s.NetworkIDByName(ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("NetworkIDByName(nope): err = %v, want ErrNotFound", err)
+	}
+
+	if err := s.UpdateNetwork(ctx, "mgmt", "Management plane"); err != nil {
+		t.Fatalf("UpdateNetwork: %v", err)
+	}
+	if err := s.UpdateNetwork(ctx, "nope", "x"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("UpdateNetwork(nope): err = %v, want ErrNotFound", err)
+	}
+
+	nets, err := s.ListNetworksConfig(ctx)
+	if err != nil {
+		t.Fatalf("ListNetworksConfig: %v", err)
+	}
+	// Sorted by name: default, mgmt.
+	if len(nets) != 2 || nets[0].Name != "default" || nets[1].Name != "mgmt" ||
+		nets[1].DisplayName != "Management plane" || nets[1].ID != id {
+		t.Errorf("ListNetworksConfig = %+v, want default + updated mgmt", nets)
+	}
+}
+
+func TestListNetworksConfigCounts(t *testing.T) {
+	ctx, s := newStore(t)
+	buildNetFixture(t, ctx, s)
+
+	nets, err := s.ListNetworksConfig(ctx)
+	if err != nil {
+		t.Fatalf("ListNetworksConfig: %v", err)
+	}
+	byName := map[string]store.NetworkAdminInfo{}
+	for _, n := range nets {
+		byName[n.Name] = n
+	}
+	// Fixture: 2 default agents + 2 mgmt agents, all via consumed tokens;
+	// mesh m1 and the direct probe live on default.
+	def, mgmt := byName["default"], byName["mgmt"]
+	if def.AgentCount != 2 || def.TokenCount != 2 || def.MeshCount != 1 || def.ProbeCount != 1 {
+		t.Errorf("default counts = %+v, want 2 agents, 2 tokens, 1 mesh, 1 probe", def)
+	}
+	if mgmt.AgentCount != 2 || mgmt.TokenCount != 2 || mgmt.MeshCount != 0 || mgmt.ProbeCount != 0 {
+		t.Errorf("mgmt counts = %+v, want 2 agents, 2 tokens, 0 meshes, 0 probes", mgmt)
+	}
+}
+
+func TestDeleteNetwork(t *testing.T) {
+	ctx, s := newStore(t)
+
+	// Unreferenced network deletes cleanly.
+	if _, err := s.CreateNetwork(ctx, "empty", ""); err != nil {
+		t.Fatalf("CreateNetwork: %v", err)
+	}
+	if n, err := s.DeleteNetwork(ctx, "empty"); err != nil || n != 0 {
+		t.Errorf("delete empty network = %d, %v, want 0, nil", n, err)
+	}
+
+	// Unused tokens are swept with the network.
+	tok := createNetwork(t, ctx, s, "tok")
+	siteID, err := s.EnsureSite(ctx, "site-a")
+	if err != nil {
+		t.Fatalf("EnsureSite: %v", err)
+	}
+	token, err := s.CreateJoinToken(ctx, siteID, tok, "test", time.Hour)
+	if err != nil {
+		t.Fatalf("CreateJoinToken: %v", err)
+	}
+	tokenID, _, _ := strings.Cut(token, ".")
+	if n, err := s.DeleteNetwork(ctx, "tok"); err != nil || n != 1 {
+		t.Errorf("delete network with unused token = %d, %v, want 1, nil", n, err)
+	}
+	var tokensLeft int
+	if err := s.Pool().QueryRow(ctx,
+		`SELECT count(*) FROM join_tokens WHERE id = $1`, tokenID).Scan(&tokensLeft); err != nil {
+		t.Fatalf("count tokens: %v", err)
+	}
+	if tokensLeft != 0 {
+		t.Errorf("swept token still present after delete")
+	}
+
+	// The seeded fallback is never deletable.
+	if _, err := s.DeleteNetwork(ctx, "default"); !errors.Is(err, store.ErrInvalid) {
+		t.Errorf("delete 'default': err = %v, want ErrInvalid", err)
+	}
+	if _, err := s.DeleteNetwork(ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("delete unknown: err = %v, want ErrNotFound", err)
+	}
+
+	// An enrolled agent blocks the delete, and the refusal rolls back the
+	// unused-token sweep.
+	used := createNetwork(t, ctx, s, "used")
+	enrollNetAgent(t, ctx, s, "site-a", "u1", &used)
+	spare, err := s.CreateJoinToken(ctx, siteID, used, "test", time.Hour)
+	if err != nil {
+		t.Fatalf("CreateJoinToken: %v", err)
+	}
+	spareID, _, _ := strings.Cut(spare, ".")
+	if _, err := s.DeleteNetwork(ctx, "used"); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("delete network with agent: err = %v, want ErrConflict", err)
+	}
+	if err := s.Pool().QueryRow(ctx,
+		`SELECT count(*) FROM join_tokens WHERE id = $1`, spareID).Scan(&tokensLeft); err != nil {
+		t.Fatalf("count tokens: %v", err)
+	}
+	if tokensLeft != 1 {
+		t.Errorf("refused delete did not roll back the unused-token sweep")
+	}
+
+	// A mesh group blocks the delete.
+	meshNet := createNetwork(t, ctx, s, "meshnet")
+	if _, err := s.UpsertMeshGroup(ctx, "m-del", &meshNet); err != nil {
+		t.Fatalf("UpsertMeshGroup: %v", err)
+	}
+	if _, err := s.DeleteNetwork(ctx, "meshnet"); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("delete network with mesh: err = %v, want ErrConflict", err)
+	}
+
+	// A direct probe config blocks the delete.
+	probeNet := createNetwork(t, ctx, s, "probenet")
+	if _, err := s.UpsertExternalTarget(ctx, "svc-del", "203.0.113.9", 443, ""); err != nil {
+		t.Fatalf("UpsertExternalTarget: %v", err)
+	}
+	if _, err := s.AddDirectProbe(ctx, "site-a", "svc-del", probeNet, netProbeSettings, true, "test"); err != nil {
+		t.Fatalf("AddDirectProbe: %v", err)
+	}
+	if _, err := s.DeleteNetwork(ctx, "probenet"); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("delete network with probe config: err = %v, want ErrConflict", err)
 	}
 }

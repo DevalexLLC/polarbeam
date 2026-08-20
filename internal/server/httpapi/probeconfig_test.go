@@ -53,13 +53,27 @@ func (f *fakeDB) ListMeshGroups(_ context.Context) ([]store.MeshGroupInfo, error
 	return f.meshes, nil
 }
 
-func (f *fakeDB) UpsertMeshGroup(_ context.Context, name string) (uuid.UUID, error) {
+func (f *fakeDB) UpsertMeshGroup(_ context.Context, name string, networkID *uuid.UUID) (uuid.UUID, error) {
+	// Mirror the store: nil = no opinion (create on default, keep existing);
+	// explicit mismatch with an existing mesh is a conflict.
+	network := "default"
+	if networkID != nil {
+		network = ""
+		for _, n := range f.networks {
+			if n.ID == *networkID {
+				network = n.Name
+			}
+		}
+	}
 	for _, m := range f.meshes {
 		if m.Name == name {
+			if networkID != nil && m.Network != network {
+				return uuid.Nil, fmt.Errorf("mesh %q already exists on another network (a mesh's network cannot be changed; delete and re-create it)%w", name, store.ErrConflict)
+			}
 			return m.ID, nil
 		}
 	}
-	m := store.MeshGroupInfo{ID: uuid.New(), Name: name}
+	m := store.MeshGroupInfo{ID: uuid.New(), Name: name, Network: network}
 	f.meshes = append(f.meshes, m)
 	return m.ID, nil
 }
@@ -114,15 +128,21 @@ func (f *fakeDB) GetProbeConfig(_ context.Context, id uuid.UUID) (*store.ProbeCo
 	return nil, fmt.Errorf("probe config %s does not exist%w", id, store.ErrNotFound)
 }
 
-func (f *fakeDB) AddDirectProbe(_ context.Context, siteName, targetName string, ps store.ProbeSettings, enabled bool, updatedBy string) (uuid.UUID, error) {
+func (f *fakeDB) AddDirectProbe(_ context.Context, siteName, targetName string, networkID uuid.UUID, ps store.ProbeSettings, enabled bool, updatedBy string) (uuid.UUID, error) {
 	// Mirror the store's rule: agent-kind targets cannot take direct probes.
 	for _, t := range f.targets {
 		if t.Name == targetName && t.Kind == "agent" {
 			return uuid.Nil, fmt.Errorf("target %q is an enrollment-managed agent target: direct probes need an external target (mesh probes cover agent peers)%w", targetName, store.ErrInvalid)
 		}
 	}
+	network := ""
+	for _, n := range f.networks {
+		if n.ID == networkID {
+			network = n.Name
+		}
+	}
 	p := store.ProbeConfigInfo{
-		ID: uuid.New(), Site: siteName, Target: targetName, ProbeType: ps.ProbeType,
+		ID: uuid.New(), Site: siteName, Target: targetName, Network: network, ProbeType: ps.ProbeType,
 		Interval: ps.Interval, Timeout: ps.Timeout, TrainCount: ps.TrainCount,
 		TrainSpacing: ps.TrainSpacing, Params: ps.Params, Enabled: enabled, UpdatedBy: updatedBy,
 	}
@@ -754,5 +774,79 @@ func TestConfigProbePostDisabledSuppressesWarning(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "dns.resolver") {
 		t.Errorf("enabled create of a warned config must warn: %s", w.Body)
+	}
+}
+
+func TestConfigMeshAndProbeNetwork(t *testing.T) {
+	f := newFakeDB()
+	h := newTestAPI(t, f)
+	cookie, csrf := configLogin(t, h, f, "admin")
+	f.networks = append(f.networks, store.NetworkAdminInfo{ID: uuid.New(), Name: "mgmt"})
+
+	// A mesh binds its network at creation; re-upserting with a different
+	// one is refused (immutable), with no opinion it keeps the binding, and
+	// a typo'd network is a 404.
+	if w := doConfig(t, h, "POST", "/api/v1/config/meshes", `{"name":"m1","network":"mgmt"}`, cookie, csrf); w.Code != http.StatusOK {
+		t.Fatalf("POST mesh on mgmt = %d: %s", w.Code, w.Body)
+	}
+	if w := doConfig(t, h, "POST", "/api/v1/config/meshes", `{"name":"m1","network":"default"}`, cookie, csrf); w.Code != http.StatusConflict {
+		t.Errorf("cross-network mesh re-post = %d, want 409", w.Code)
+	}
+	if w := doConfig(t, h, "POST", "/api/v1/config/meshes", `{"name":"m1"}`, cookie, csrf); w.Code != http.StatusOK {
+		t.Errorf("no-opinion mesh re-post = %d, want 200 (keeps mgmt)", w.Code)
+	}
+	if w := doConfig(t, h, "POST", "/api/v1/config/meshes", `{"name":"m2","network":"typo"}`, cookie, csrf); w.Code != http.StatusNotFound {
+		t.Errorf("mesh on unknown network = %d, want 404", w.Code)
+	}
+	var meshList struct {
+		Meshes []struct {
+			Name    string `json:"name"`
+			Network string `json:"network"`
+		} `json:"meshes"`
+	}
+	w := doConfig(t, h, "GET", "/api/v1/config/meshes", "", cookie, "")
+	if err := json.Unmarshal(w.Body.Bytes(), &meshList); err != nil ||
+		len(meshList.Meshes) != 1 || meshList.Meshes[0].Network != "mgmt" {
+		t.Errorf("mesh list %q (err %v), want m1 on mgmt", w.Body, err)
+	}
+
+	// Direct probes carry their own network; mesh probes inherit and refuse
+	// an explicit one; a typo'd network is a 404.
+	w = doConfig(t, h, "POST", "/api/v1/config/probes",
+		`{"site":"site-a","target":"svc","network":"mgmt","type":"icmp","interval_ms":30000,"timeout_ms":5000}`, cookie, csrf)
+	if w.Code != http.StatusOK {
+		t.Fatalf("direct probe on mgmt = %d: %s", w.Code, w.Body)
+	}
+	if len(f.probes) != 1 || f.probes[0].Network != "mgmt" {
+		t.Errorf("stored probe = %+v, want network mgmt", f.probes)
+	}
+	w = doConfig(t, h, "POST", "/api/v1/config/probes",
+		`{"mesh":"m1","network":"mgmt","type":"icmp","interval_ms":30000,"timeout_ms":5000}`, cookie, csrf)
+	if w.Code != http.StatusBadRequest || !strings.Contains(errBody(t, w), "inherit") {
+		t.Errorf("mesh probe with network = %d %q, want 400 naming inheritance", w.Code, w.Body)
+	}
+	w = doConfig(t, h, "POST", "/api/v1/config/probes",
+		`{"site":"site-a","target":"svc","network":"typo","type":"icmp","interval_ms":30000,"timeout_ms":5000}`, cookie, csrf)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("direct probe on unknown network = %d, want 404", w.Code)
+	}
+
+	// The list surfaces the network, and PUT treats it as immutable
+	// identity.
+	var probeList struct {
+		Probes []struct {
+			ID      string `json:"id"`
+			Network string `json:"network"`
+		} `json:"probes"`
+	}
+	w = doConfig(t, h, "GET", "/api/v1/config/probes", "", cookie, "")
+	if err := json.Unmarshal(w.Body.Bytes(), &probeList); err != nil ||
+		len(probeList.Probes) != 1 || probeList.Probes[0].Network != "mgmt" {
+		t.Fatalf("probe list %q (err %v), want one probe on mgmt", w.Body, err)
+	}
+	w = doConfig(t, h, "PUT", "/api/v1/config/probes/"+probeList.Probes[0].ID,
+		`{"network":"default","interval_ms":30000,"timeout_ms":5000}`, cookie, csrf)
+	if w.Code != http.StatusBadRequest || !strings.Contains(errBody(t, w), "network cannot be changed in place") {
+		t.Errorf("PUT network change = %d %q, want 400", w.Code, w.Body)
 	}
 }

@@ -164,6 +164,7 @@ func (a *api) handleTargetDelete(w http.ResponseWriter, r *http.Request) {
 type meshJSON struct {
 	ID         string   `json:"id"`
 	Name       string   `json:"name"`
+	Network    string   `json:"network"`
 	Sites      []string `json:"sites"`
 	ProbeCount int64    `json:"probe_count"`
 }
@@ -180,14 +181,15 @@ func (a *api) handleMeshesGet(w http.ResponseWriter, r *http.Request) {
 		if sites == nil {
 			sites = []string{}
 		}
-		out = append(out, meshJSON{ID: m.ID.String(), Name: m.Name, Sites: sites, ProbeCount: m.ProbeCount})
+		out = append(out, meshJSON{ID: m.ID.String(), Name: m.Name, Network: m.Network, Sites: sites, ProbeCount: m.ProbeCount})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"meshes": out})
 }
 
 func (a *api) handleMeshPost(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Name string `json:"name"`
+		Name    string `json:"name"`
+		Network string `json:"network"`
 	}
 	if !decodeStrict(w, r, &in) {
 		return
@@ -196,7 +198,19 @@ func (a *api) handleMeshPost(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	id, err := a.db.UpsertMeshGroup(r.Context(), in.Name)
+	// An omitted network expresses no opinion (new meshes land on default,
+	// existing ones keep theirs); a named one must exist and must match an
+	// existing mesh's binding — the store refuses a mismatch.
+	var networkID *uuid.UUID
+	if in.Network != "" {
+		id, err := a.db.NetworkIDByName(r.Context(), in.Network)
+		if err != nil {
+			writeStoreError(w, "resolve network", err)
+			return
+		}
+		networkID = &id
+	}
+	id, err := a.db.UpsertMeshGroup(r.Context(), in.Name, networkID)
 	if err != nil {
 		writeStoreError(w, "upsert mesh", err)
 		return
@@ -238,6 +252,7 @@ type probeCfgJSON struct {
 	Site           string            `json:"site,omitempty"`
 	Target         string            `json:"target,omitempty"`
 	Mesh           string            `json:"mesh,omitempty"`
+	Network        string            `json:"network"`
 	Type           string            `json:"type"`
 	IntervalMS     int64             `json:"interval_ms"`
 	TimeoutMS      int64             `json:"timeout_ms"`
@@ -259,7 +274,7 @@ func toProbeCfgJSON(p store.ProbeConfigInfo) probeCfgJSON {
 		params = map[string]string{}
 	}
 	return probeCfgJSON{
-		ID: p.ID.String(), Site: p.Site, Target: p.Target, Mesh: p.Mesh,
+		ID: p.ID.String(), Site: p.Site, Target: p.Target, Mesh: p.Mesh, Network: p.Network,
 		Type:       probeadmin.TypeName(p.ProbeType),
 		IntervalMS: p.Interval.Milliseconds(), TimeoutMS: p.Timeout.Milliseconds(),
 		TrainCount: p.TrainCount, TrainSpacingMS: p.TrainSpacing.Milliseconds(),
@@ -285,6 +300,7 @@ type probeRequest struct {
 	Site           string            `json:"site"`
 	Target         string            `json:"target"`
 	Mesh           string            `json:"mesh"`
+	Network        string            `json:"network"`
 	Type           string            `json:"type"`
 	IntervalMS     int64             `json:"interval_ms"`
 	TimeoutMS      int64             `json:"timeout_ms"`
@@ -341,6 +357,10 @@ func (a *api) handleProbePost(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "site and target are both required for a direct probe")
 		return
 	}
+	if meshMode && in.Network != "" {
+		writeError(w, http.StatusBadRequest, "network cannot be combined with mesh (mesh probes inherit the mesh's network)")
+		return
+	}
 	if problems := validateProbeRequest(in, probeType, meshMode); len(problems) > 0 {
 		writeError(w, http.StatusBadRequest, strings.Join(problems, "; "))
 		return
@@ -352,7 +372,18 @@ func (a *api) handleProbePost(w http.ResponseWriter, r *http.Request) {
 	if meshMode {
 		id, err = a.db.AddMeshProbe(r.Context(), in.Mesh, in.settings(probeType), enabled, updatedBy)
 	} else {
-		id, err = a.db.AddDirectProbe(r.Context(), in.Site, in.Target, in.settings(probeType), enabled, updatedBy)
+		// Empty means the default network; anything else must already
+		// exist — a typo'd network is a 404, never silently defaulted.
+		netName := in.Network
+		if netName == "" {
+			netName = "default"
+		}
+		networkID, nerr := a.db.NetworkIDByName(r.Context(), netName)
+		if nerr != nil {
+			writeStoreError(w, "resolve network", nerr)
+			return
+		}
+		id, err = a.db.AddDirectProbe(r.Context(), in.Site, in.Target, networkID, in.settings(probeType), enabled, updatedBy)
 	}
 	if err != nil {
 		writeStoreError(w, "add probe", err)
@@ -403,6 +434,7 @@ func (a *api) handleProbePut(w http.ResponseWriter, r *http.Request) {
 	check("site", in.Site, current.Site)
 	check("target", in.Target, current.Target)
 	check("mesh", in.Mesh, current.Mesh)
+	check("network", in.Network, current.Network)
 	if len(problems) > 0 {
 		writeError(w, http.StatusBadRequest, strings.Join(problems, "; "))
 		return

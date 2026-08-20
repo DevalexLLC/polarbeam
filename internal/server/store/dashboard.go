@@ -111,6 +111,7 @@ type SiteInfo struct {
 type AgentListInfo struct {
 	ID           uuid.UUID
 	Site         string
+	Network      string
 	Hostname     string
 	ProbeAddress string
 	Version      string
@@ -410,13 +411,14 @@ func (s *Store) ListAgents(ctx context.Context) ([]AgentListInfo, error) {
 		return nil, fmt.Errorf("list agents: %w", err)
 	}
 	rows, err := s.pool.Query(ctx,
-		`SELECT a.id, s.name, a.hostname, a.probe_address, a.version, a.last_seen_at,
+		`SELECT a.id, s.name, n.name, a.hostname, a.probe_address, a.version, a.last_seen_at,
 		        a.created_at, a.current_config_hash, a.dropped_results, a.last_dropped_at,
 		        c.not_after, c.revoked_at,
 		        COALESCE(o.offline, false), COALESCE(o.failing, 0),
 		        COALESCE(ss.total, 0)
 		   FROM agents a
 		   JOIN sites s ON s.id = a.site_id
+		   JOIN networks n ON n.id = a.network_id
 		   LEFT JOIN LATERAL (
 		        SELECT not_after, revoked_at FROM certificates
 		         WHERE agent_id = a.id ORDER BY created_at DESC LIMIT 1
@@ -445,7 +447,7 @@ func (s *Store) ListAgents(ctx context.Context) ([]AgentListInfo, error) {
 	var out []AgentListInfo
 	for rows.Next() {
 		var ai AgentListInfo
-		if err := rows.Scan(&ai.ID, &ai.Site, &ai.Hostname, &ai.ProbeAddress, &ai.Version, &ai.LastSeenAt,
+		if err := rows.Scan(&ai.ID, &ai.Site, &ai.Network, &ai.Hostname, &ai.ProbeAddress, &ai.Version, &ai.LastSeenAt,
 			&ai.CreatedAt, &ai.ConfigHash, &ai.DroppedResults, &ai.LastDroppedAt,
 			&ai.CertNotAfter, &ai.CertRevokedAt,
 			&ai.Offline, &ai.ProbesFailing, &ai.ProbesTotal); err != nil {

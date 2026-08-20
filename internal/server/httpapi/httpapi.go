@@ -48,8 +48,13 @@ type DB interface {
 	DeleteSite(ctx context.Context, name string) (int64, error)
 	SiteIDByName(ctx context.Context, name string) (uuid.UUID, error)
 	ListJoinTokens(ctx context.Context) ([]store.JoinTokenInfo, error)
-	CreateJoinToken(ctx context.Context, siteID uuid.UUID, createdBy string, ttl time.Duration) (string, error)
+	CreateJoinToken(ctx context.Context, siteID, networkID uuid.UUID, createdBy string, ttl time.Duration) (string, error)
 	DeleteJoinToken(ctx context.Context, id uuid.UUID) error
+	NetworkIDByName(ctx context.Context, name string) (uuid.UUID, error)
+	ListNetworksConfig(ctx context.Context) ([]store.NetworkAdminInfo, error)
+	CreateNetwork(ctx context.Context, name, displayName string) (uuid.UUID, error)
+	UpdateNetwork(ctx context.Context, name, displayName string) error
+	DeleteNetwork(ctx context.Context, name string) (int64, error)
 	ListAgents(ctx context.Context) ([]store.AgentListInfo, error)
 	AgentHealthSeries(ctx context.Context, window, bucket time.Duration, excludeProbeType int16) ([]store.AgentHealthBucket, error)
 	AgentProbeHealth(ctx context.Context, agentID uuid.UUID, window, bucket time.Duration) ([]store.AgentProbeHealthRow, error)
@@ -75,13 +80,13 @@ type DB interface {
 	UpsertExternalTarget(ctx context.Context, name, address string, port int32, url string) (uuid.UUID, error)
 	DeleteTarget(ctx context.Context, name string) error
 	ListMeshGroups(ctx context.Context) ([]store.MeshGroupInfo, error)
-	UpsertMeshGroup(ctx context.Context, name string) (uuid.UUID, error)
+	UpsertMeshGroup(ctx context.Context, name string, networkID *uuid.UUID) (uuid.UUID, error)
 	DeleteMeshGroup(ctx context.Context, name string) (int64, error)
 	AddMeshMember(ctx context.Context, meshName, siteName string) error
 	RemoveMeshMember(ctx context.Context, meshName, siteName string) error
 	ListProbeConfigs(ctx context.Context) ([]store.ProbeConfigInfo, error)
 	GetProbeConfig(ctx context.Context, id uuid.UUID) (*store.ProbeConfigInfo, error)
-	AddDirectProbe(ctx context.Context, siteName, targetName string, ps store.ProbeSettings, enabled bool, updatedBy string) (uuid.UUID, error)
+	AddDirectProbe(ctx context.Context, siteName, targetName string, networkID uuid.UUID, ps store.ProbeSettings, enabled bool, updatedBy string) (uuid.UUID, error)
 	AddMeshProbe(ctx context.Context, meshName string, ps store.ProbeSettings, enabled bool, updatedBy string) (uuid.UUID, error)
 	UpdateProbeConfig(ctx context.Context, id uuid.UUID, ps store.ProbeSettings, enabled bool, updatedBy string) error
 	DeleteProbeConfig(ctx context.Context, id uuid.UUID) error
@@ -211,6 +216,10 @@ func newHandler(sdb DB, static fs.FS, providers OIDCProviders) http.Handler {
 	mux.Handle("POST /api/v1/config/probes", adminWrite(a.handleProbePost))
 	mux.Handle("PUT /api/v1/config/probes/{id}", adminWrite(a.handleProbePut))
 	mux.Handle("DELETE /api/v1/config/probes/{id}", adminWrite(a.handleProbeDelete))
+	mux.Handle("GET /api/v1/config/networks", a.withSession(a.handleNetworksGet))
+	mux.Handle("POST /api/v1/config/networks", adminWrite(a.handleNetworkPost))
+	mux.Handle("PUT /api/v1/config/networks/{name}", adminWrite(a.handleNetworkPut))
+	mux.Handle("DELETE /api/v1/config/networks/{name}", adminWrite(a.handleNetworkDelete))
 	mux.Handle("GET /api/v1/config/sites", a.withSession(a.handleSitesConfigGet))
 	mux.Handle("POST /api/v1/config/sites", adminWrite(a.handleSiteConfigPost))
 	mux.Handle("PUT /api/v1/config/sites/{name}", adminWrite(a.handleSiteConfigPut))
