@@ -361,6 +361,7 @@ export default function App() {
               <Settings
                 tab={settingsTab}
                 caps={caps}
+                networks={networkNames}
                 username={user.username}
                 onAuthError={onAuthError}
                 onBannerSaved={setBanner}

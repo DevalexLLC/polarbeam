@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { apiGet } from '../api'
 import type { Caps } from '../caps'
+import { planeChoice } from '../plane'
 import { SETTINGS_TABS, visibleTabs } from '../settingsTabs'
 import type { SettingsTab } from '../settingsTabs'
 import BannerSettingsPanel from '../components/BannerSettingsPanel'
@@ -21,12 +22,14 @@ const POLL_MS = 30_000
 export default function Settings({
   tab,
   caps,
+  networks,
   username,
   onAuthError,
   onBannerSaved,
 }: {
   tab: SettingsTab
   caps: Caps
+  networks: string[]
   username: string
   onAuthError: (err: unknown) => void
   onBannerSaved: (b: UIBanner) => void
@@ -35,6 +38,13 @@ export default function Settings({
   const [error, setError] = useState('')
 
   const tabs = useMemo(() => visibleTabs(caps), [caps])
+
+  // Resolved once, so "which plane does this write name" has exactly one
+  // definition. The workload surfaces always belong to a plane; targets and
+  // the all-planes threshold override additionally have an operator-owned
+  // "no plane" row, which is what allowGlobal offers — to a global caller
+  // only, since those rows are adminWrite.
+  const workloadPlane = useMemo(() => planeChoice(caps, networks), [caps, networks])
 
   // Poll like every other view: a transient failure retries on the next
   // tick, and another admin's change converges here ≤30 s. The panel keeps
@@ -98,13 +108,13 @@ export default function Settings({
       ) : tab === 'sites' ? (
         <SitesPanel canWrite={caps.adminWrite} onAuthError={onAuthError} />
       ) : tab === 'enrollment' ? (
-        <EnrollmentPanel caps={caps} canWrite={caps.networkWrite} onAuthError={onAuthError} />
+        <EnrollmentPanel caps={caps} canWrite={caps.networkWrite} plane={workloadPlane} onAuthError={onAuthError} />
       ) : tab === 'targets' ? (
         <TargetsPanel canWrite={caps.networkWrite} onAuthError={onAuthError} />
       ) : tab === 'meshes' ? (
-        <MeshesPanel canWrite={caps.networkWrite} onAuthError={onAuthError} />
+        <MeshesPanel canWrite={caps.networkWrite} plane={workloadPlane} onAuthError={onAuthError} />
       ) : tab === 'probes' ? (
-        <ProbesPanel canWrite={caps.networkWrite} onAuthError={onAuthError} />
+        <ProbesPanel canWrite={caps.networkWrite} plane={workloadPlane} onAuthError={onAuthError} />
       ) : error && !settings ? (
         <div className="state-panel state-error">
           <h2>Settings unavailable</h2>

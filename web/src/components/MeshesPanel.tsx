@@ -1,24 +1,29 @@
 import { useEffect, useState } from 'react'
 import { apiDelete, apiGet, apiPost } from '../api'
-import type { MeshesConfigResponse, MeshConfig, NetworksConfigResponse, SitesResponse } from '../types'
+import type { PlaneChoice } from '../plane'
+import { initialPlane, networkField } from '../plane'
+import type { MeshesConfigResponse, MeshConfig, SitesResponse } from '../types'
 import ConfirmButton from './ConfirmButton'
+import PlaneField from './PlaneField'
 
 const POLL_MS = 30_000
 
 export default function MeshesPanel({
   canWrite,
+  plane,
   onAuthError,
 }: {
   canWrite: boolean
+  plane: PlaneChoice
   onAuthError: (err: unknown) => void
 }) {
   const [data, setData] = useState<MeshesConfigResponse | null>(null)
   const [sites, setSites] = useState<string[]>([])
-  const [networks, setNetworks] = useState<string[]>([])
   const [error, setError] = useState('')
   const [actionError, setActionError] = useState('')
   const [newName, setNewName] = useState('')
-  const [newNetwork, setNewNetwork] = useState('default')
+  const [newNetworkDraft, setNewNetwork] = useState<string | null>(null)
+  const newNetwork = newNetworkDraft ?? initialPlane(plane)
   // site picked in each mesh's add-member select, keyed by mesh id
   const [memberPick, setMemberPick] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
@@ -26,16 +31,11 @@ export default function MeshesPanel({
   useEffect(() => {
     let cancelled = false
     const load = () => {
-      Promise.all([
-        apiGet<MeshesConfigResponse>('/api/v1/config/meshes'),
-        apiGet<SitesResponse>('/api/v1/sites'),
-        apiGet<NetworksConfigResponse>('/api/v1/config/networks'),
-      ])
-        .then(([meshes, sitesRes, networksRes]) => {
+      Promise.all([apiGet<MeshesConfigResponse>('/api/v1/config/meshes'), apiGet<SitesResponse>('/api/v1/sites')])
+        .then(([meshes, sitesRes]) => {
           if (!cancelled) {
             setData(meshes)
             setSites(sitesRes.sites.map((s) => s.name))
-            setNetworks(networksRes.networks.map((n) => n.name))
             setError('')
           }
         })
@@ -87,7 +87,9 @@ export default function MeshesPanel({
   }
 
   const addable = (m: MeshConfig) => sites.filter((s) => !m.sites.includes(s))
-  const multiNetwork = networks.length > 1
+  // The plane is worth showing whenever it is not implied: a real choice,
+  // or a tenant pinned to a single plane that is not 'default'.
+  const multiNetwork = plane.kind !== 'implicit'
 
   return (
     <>
@@ -219,20 +221,7 @@ export default function MeshesPanel({
                   />
                 </span>
               </label>
-              {multiNetwork && (
-                <label className="threshold-field">
-                  <span className="eyebrow">Network</span>
-                  <span className="threshold-input">
-                    <select value={newNetwork} disabled={busy} onChange={(e) => setNewNetwork(e.target.value)}>
-                      {networks.map((n) => (
-                        <option key={n} value={n}>
-                          {n}
-                        </option>
-                      ))}
-                    </select>
-                  </span>
-                </label>
-              )}
+              <PlaneField choice={plane} value={newNetwork} onChange={setNewNetwork} disabled={busy} />
             </div>
             <div className="threshold-foot">
               <span className="hint">
@@ -245,16 +234,16 @@ export default function MeshesPanel({
                 disabled={busy || newName.trim() === ''}
                 onClick={() =>
                   // The mesh POST upserts by name with omitted network
-                  // meaning "keep an existing mesh's binding" — so once the
-                  // selector is shown, its choice must be sent explicitly
-                  // (even 'default') or an existing mesh on another plane
-                  // would be returned as a silent success instead of the
-                  // server's 409. Single-network installs (no selector)
-                  // keep the pre-networks request shape.
+                  // meaning "keep an existing mesh's binding", so the plane
+                  // must be stated whenever we have one — otherwise an
+                  // existing mesh on another plane comes back as a silent
+                  // success instead of the server's 409. Only a global
+                  // caller on a single-plane install omits it, keeping the
+                  // pre-networks request shape.
                   run(() =>
                     apiPost('/api/v1/config/meshes', {
                       name: newName.trim(),
-                      ...(multiNetwork ? { network: newNetwork } : {}),
+                      ...networkField(newNetwork),
                     }),
                   ).then(() => setNewName(''))
                 }
