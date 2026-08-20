@@ -14,6 +14,7 @@ type outageJSON struct {
 	ID        string     `json:"id"`
 	Kind      string     `json:"kind"`
 	Agent     string     `json:"agent"`
+	Network   string     `json:"network"` // "" once the agent row is deleted
 	SrcSite   string     `json:"src_site"`
 	DstSite   *string    `json:"dst_site"`
 	Target    *string    `json:"target"`
@@ -42,7 +43,7 @@ func (a *api) handleOutages(w http.ResponseWriter, r *http.Request) {
 			probeType = &name
 		}
 		out[i] = outageJSON{
-			ID: o.ID.String(), Kind: o.Kind, Agent: o.AgentHostname, SrcSite: o.SrcSite,
+			ID: o.ID.String(), Kind: o.Kind, Agent: o.AgentHostname, Network: o.Network, SrcSite: o.SrcSite,
 			DstSite: o.DstSite, Target: o.TargetName, ProbeType: probeType,
 			OpenedAt: o.OpenedAt, ClosedAt: o.ClosedAt, Error: o.Error,
 		}
@@ -61,6 +62,7 @@ type pathEventJSON struct {
 	ID          string          `json:"id"`
 	Time        time.Time       `json:"time"`
 	Agent       string          `json:"agent"`
+	Network     string          `json:"network"` // "" once the agent row is deleted
 	SrcSite     string          `json:"src_site"`
 	DstSite     *string         `json:"dst_site"`
 	Target      *string         `json:"target"`
@@ -90,7 +92,7 @@ func (a *api) handlePathEvents(w http.ResponseWriter, r *http.Request) {
 			targetID = &s
 		}
 		out[i] = pathEventJSON{
-			ID: e.ID.String(), Time: e.Time, Agent: e.AgentHostname, SrcSite: e.SrcSite,
+			ID: e.ID.String(), Time: e.Time, Agent: e.AgentHostname, Network: e.Network, SrcSite: e.SrcSite,
 			DstSite: e.DstSite, Target: e.TargetName, TargetID: targetID,
 			OldPathHash: hex.EncodeToString(e.OldPathHash),
 			NewPathHash: hex.EncodeToString(e.NewPathHash),

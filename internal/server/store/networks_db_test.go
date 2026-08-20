@@ -698,3 +698,66 @@ func TestDeleteNetwork(t *testing.T) {
 		t.Errorf("delete network with probe config: err = %v, want ErrConflict", err)
 	}
 }
+
+func TestEventListsCarryNetwork(t *testing.T) {
+	ctx, s := newStore(t)
+	mgmt := createNetwork(t, ctx, s, "mgmt")
+	aDef := enrollNetAgent(t, ctx, s, "site-a", "a-def", nil)
+	aMgmt := enrollNetAgent(t, ctx, s, "site-a", "a-mgmt", &mgmt)
+	tDef := agentTargetID(t, ctx, s, aDef)
+
+	// One event per plane, plus one whose agent row does not exist — events
+	// carry no FKs, so the LEFT JOIN must serve that plane (and hostname)
+	// as "" instead of dropping the row.
+	orphan := uuid.New()
+	for _, agent := range []uuid.UUID{aDef, aMgmt, orphan} {
+		if _, err := s.Pool().Exec(ctx,
+			`INSERT INTO outage_events (kind, agent_id, opened_at)
+			 VALUES ('agent_offline', $1, now())`, agent); err != nil {
+			t.Fatalf("insert outage: %v", err)
+		}
+		if _, err := s.Pool().Exec(ctx,
+			`INSERT INTO path_events (time, agent_id, probe_id, target_id,
+				old_path_hash, new_path_hash, old_hops, new_hops)
+			 VALUES (now(), $1, gen_random_uuid(), $2, '\x01', '\x02', '[]', '[]')`,
+			agent, tDef); err != nil {
+			t.Fatalf("insert path event: %v", err)
+		}
+	}
+
+	want := map[string]string{"a-def": "default", "a-mgmt": "mgmt", "": ""}
+
+	outages, err := s.ListOutages(ctx, 24*time.Hour)
+	if err != nil {
+		t.Fatalf("ListOutages: %v", err)
+	}
+	got := map[string]string{}
+	for _, o := range outages {
+		got[o.AgentHostname] = o.Network
+	}
+	if len(outages) != 3 {
+		t.Errorf("ListOutages returned %d events, want 3", len(outages))
+	}
+	for host, net := range want {
+		if got[host] != net {
+			t.Errorf("outage network for agent %q = %q, want %q", host, got[host], net)
+		}
+	}
+
+	events, err := s.ListPathEvents(ctx, 24*time.Hour)
+	if err != nil {
+		t.Fatalf("ListPathEvents: %v", err)
+	}
+	got = map[string]string{}
+	for _, e := range events {
+		got[e.AgentHostname] = e.Network
+	}
+	if len(events) != 3 {
+		t.Errorf("ListPathEvents returned %d events, want 3", len(events))
+	}
+	for host, net := range want {
+		if got[host] != net {
+			t.Errorf("path event network for agent %q = %q, want %q", host, got[host], net)
+		}
+	}
+}

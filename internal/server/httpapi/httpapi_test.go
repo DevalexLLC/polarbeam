@@ -1378,12 +1378,13 @@ func TestEventsEndpoints(t *testing.T) {
 	dst, target, ptype := "nyc", "nyc-agent", int16(1)
 	degradedErr := "latency at or above critical threshold (40ms)"
 	f.outages = []store.OutageInfo{
-		{ID: uuid.New(), Kind: "probe_failing", AgentHostname: "syd-1", SrcSite: "syd",
+		{ID: uuid.New(), Kind: "probe_failing", AgentHostname: "syd-1", Network: "corp", SrcSite: "syd",
 			DstSite: &dst, TargetName: &target, ProbeType: &ptype,
 			OpenedAt: closed.Add(-time.Hour)},
+		// No Network: the agent row is gone, the plane serves as "".
 		{ID: uuid.New(), Kind: "agent_offline", AgentHostname: "lon-1", SrcSite: "lon",
 			OpenedAt: closed.Add(-2 * time.Hour), ClosedAt: &closed},
-		{ID: uuid.New(), Kind: "probe_degraded", AgentHostname: "syd-1", SrcSite: "syd",
+		{ID: uuid.New(), Kind: "probe_degraded", AgentHostname: "syd-1", Network: "corp", SrcSite: "syd",
 			DstSite: &dst, TargetName: &target, ProbeType: &ptype,
 			OpenedAt: closed.Add(-30 * time.Minute), Error: &degradedErr},
 	}
@@ -1407,6 +1408,10 @@ func TestEventsEndpoints(t *testing.T) {
 	}
 	if !strings.Contains(body, `"kind":"probe_degraded"`) || !strings.Contains(body, degradedErr) {
 		t.Errorf("outages body missing probe_degraded passthrough: %s", body)
+	}
+	// The plane passes through, and a deleted agent's empty plane stays "".
+	if !strings.Contains(body, `"network":"corp"`) || !strings.Contains(body, `"network":""`) {
+		t.Errorf("outages body missing network passthrough: %s", body)
 	}
 
 	// Empty results serve well-formed shapes, not nulls that break the SPA.
@@ -1450,7 +1455,7 @@ func TestPathEventsTargetID(t *testing.T) {
 	when := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
 	f.pathEvents = []store.PathEventInfo{
 		// External target still present: the row links by id.
-		{ID: uuid.New(), Time: when, AgentHostname: "syd-1", SrcSite: "syd",
+		{ID: uuid.New(), Time: when, AgentHostname: "syd-1", Network: "corp", SrcSite: "syd",
 			TargetName: &name, TargetID: &tid,
 			OldPathHash: []byte{1}, NewPathHash: []byte{2},
 			OldHops: []byte("[]"), NewHops: []byte("[]")},
@@ -1475,6 +1480,10 @@ func TestPathEventsTargetID(t *testing.T) {
 	}
 	if !strings.Contains(body, `"target_id":null`) {
 		t.Errorf("path-events body missing null target_id for deleted target: %s", body)
+	}
+	// The plane passes through, and a deleted agent's empty plane stays "".
+	if !strings.Contains(body, `"network":"corp"`) || !strings.Contains(body, `"network":""`) {
+		t.Errorf("path-events body missing network passthrough: %s", body)
 	}
 }
 
