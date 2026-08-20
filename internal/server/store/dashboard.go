@@ -316,21 +316,46 @@ func (s *Store) enabledProbeIDs(ctx context.Context) ([]uuid.UUID, error) {
 	if err := mrows.Err(); err != nil {
 		return nil, fmt.Errorf("mesh members: %w", err)
 	}
-	// Site → agent-kind target IDs, mesh-independent (a site's agents are
-	// the same in every mesh); expansion looks up only member sites.
+	// Each mesh expands only over agents on its own network, matching
+	// LoadAgentConfigInputs — a broader set here would leave orphaned events
+	// the sweep can never close, a narrower one would close live events.
+	nrows, err := s.pool.Query(ctx, `SELECT id, network_id FROM mesh_groups`)
+	if err != nil {
+		return nil, fmt.Errorf("mesh networks: %w", err)
+	}
+	defer nrows.Close()
+	meshNet := make(map[uuid.UUID]uuid.UUID)
+	for nrows.Next() {
+		var meshID, networkID uuid.UUID
+		if err := nrows.Scan(&meshID, &networkID); err != nil {
+			return nil, fmt.Errorf("mesh networks: %w", err)
+		}
+		meshNet[meshID] = networkID
+	}
+	if err := nrows.Err(); err != nil {
+		return nil, fmt.Errorf("mesh networks: %w", err)
+	}
+	// Network → site → agent-kind target IDs, mesh-independent (a site's
+	// on-network agents are the same in every mesh on that network);
+	// expansion looks up only member sites.
 	trows, err := s.pool.Query(ctx, `
-		SELECT a.site_id, t.id FROM agents a JOIN targets t ON t.agent_id = a.id`)
+		SELECT a.network_id, a.site_id, t.id FROM agents a JOIN targets t ON t.agent_id = a.id`)
 	if err != nil {
 		return nil, fmt.Errorf("agent targets: %w", err)
 	}
 	defer trows.Close()
-	siteTargets := make(map[uuid.UUID][]uuid.UUID)
+	siteTargetsByNet := make(map[uuid.UUID]map[uuid.UUID][]uuid.UUID)
 	for trows.Next() {
-		var siteID, targetID uuid.UUID
-		if err := trows.Scan(&siteID, &targetID); err != nil {
+		var networkID, siteID, targetID uuid.UUID
+		if err := trows.Scan(&networkID, &siteID, &targetID); err != nil {
 			return nil, fmt.Errorf("agent targets: %w", err)
 		}
-		siteTargets[siteID] = append(siteTargets[siteID], targetID)
+		st := siteTargetsByNet[networkID]
+		if st == nil {
+			st = make(map[uuid.UUID][]uuid.UUID)
+			siteTargetsByNet[networkID] = st
+		}
+		st[siteID] = append(st[siteID], targetID)
 	}
 	if err := trows.Err(); err != nil {
 		return nil, fmt.Errorf("agent targets: %w", err)
@@ -348,7 +373,7 @@ func (s *Store) enabledProbeIDs(ctx context.Context) ([]uuid.UUID, error) {
 		}
 	}
 	for meshID, templates := range meshTemplates {
-		for _, id := range expandMeshProbeIDs(templates, members[meshID], siteTargets) {
+		for _, id := range expandMeshProbeIDs(templates, members[meshID], siteTargetsByNet[meshNet[meshID]]) {
 			if !seen[id] {
 				seen[id] = true
 				unique = append(unique, id)
@@ -621,15 +646,26 @@ func (s *Store) MatrixLatest(ctx context.Context, horizon time.Duration) ([]Matr
 // should be producing results for — mesh templates expanded over member
 // pairs plus direct probes whose target is an agent. Pairs present here but
 // absent from MatrixLatest render as stale.
+//
+// Network scoping is deliberately conservative: a member site only drops
+// out of a pair when it has agents but none on the probe's network (real
+// cross-plane unreachability). A member site with no agents at all keeps
+// its pairs — rendering stale for an unstaffed member is today's behavior
+// and stays, so the matrix is bit-identical across the networks upgrade.
 func (s *Store) ExpectedPairs(ctx context.Context) ([]SitePair, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT DISTINCT s1.name, s2.name
 		   FROM probe_configs pc
+		   JOIN mesh_groups mg ON mg.id = pc.mesh_id
 		   JOIN mesh_members m1 ON m1.mesh_id = pc.mesh_id
 		   JOIN mesh_members m2 ON m2.mesh_id = pc.mesh_id AND m2.site_id <> m1.site_id
 		   JOIN sites s1 ON s1.id = m1.site_id
 		   JOIN sites s2 ON s2.id = m2.site_id
 		  WHERE pc.enabled
+		    AND (EXISTS (SELECT 1 FROM agents a WHERE a.site_id = m1.site_id AND a.network_id = mg.network_id)
+		         OR NOT EXISTS (SELECT 1 FROM agents a WHERE a.site_id = m1.site_id))
+		    AND (EXISTS (SELECT 1 FROM agents a WHERE a.site_id = m2.site_id AND a.network_id = mg.network_id)
+		         OR NOT EXISTS (SELECT 1 FROM agents a WHERE a.site_id = m2.site_id))
 		 UNION
 		 SELECT DISTINCT s1.name, s2.name
 		   FROM probe_configs pc
@@ -637,7 +673,9 @@ func (s *Store) ExpectedPairs(ctx context.Context) ([]SitePair, error) {
 		   JOIN targets t ON t.id = pc.target_id AND t.agent_id IS NOT NULL
 		   JOIN agents da ON da.id = t.agent_id
 		   JOIN sites s2 ON s2.id = da.site_id
-		  WHERE pc.enabled AND s1.id <> s2.id`)
+		  WHERE pc.enabled AND s1.id <> s2.id
+		    AND (EXISTS (SELECT 1 FROM agents a WHERE a.site_id = pc.site_id AND a.network_id = pc.network_id)
+		         OR NOT EXISTS (SELECT 1 FROM agents a WHERE a.site_id = pc.site_id))`)
 	if err != nil {
 		return nil, fmt.Errorf("expected pairs: %w", err)
 	}

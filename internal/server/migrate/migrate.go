@@ -16,6 +16,7 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -77,6 +78,14 @@ func embeddedNames() ([]string, error) {
 // Apply runs all pending migrations. It is safe to call on every startup
 // in dev; production runs it as an explicit step.
 func Apply(ctx context.Context, conn *pgx.Conn) error {
+	return apply(ctx, conn, "")
+}
+
+// apply runs pending migrations in order, stopping after stopAfter when it
+// is non-empty ("" applies everything). The partial form exists only for
+// upgrade-path tests (via export_test.go), which seed old-shape rows between
+// two migration points; production code always applies all.
+func apply(ctx context.Context, conn *pgx.Conn, stopAfter string) error {
 	if _, err := conn.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			filename text PRIMARY KEY,
@@ -88,6 +97,13 @@ func Apply(ctx context.Context, conn *pgx.Conn) error {
 	names, err := embeddedNames()
 	if err != nil {
 		return err
+	}
+	if stopAfter != "" {
+		i := slices.Index(names, stopAfter)
+		if i < 0 {
+			return fmt.Errorf("migrate: no embedded migration %q to stop after", stopAfter)
+		}
+		names = names[:i+1]
 	}
 
 	for _, name := range names {
