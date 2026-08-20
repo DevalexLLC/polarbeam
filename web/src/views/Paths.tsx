@@ -179,10 +179,14 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
     }
   }, [win, onAuthError])
 
+  // The global top-bar network filter narrows first (the header count reads
+  // this subset too), then the search narrows the listed rows.
+  const events = useMemo(
+    () => (data?.events ?? []).filter((e) => matchesNetworkFilter(network, e.network)),
+    [data, network],
+  )
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase()
-    // The global top-bar network filter narrows first, then the search.
-    const events = (data?.events ?? []).filter((e) => matchesNetworkFilter(network, e.network))
     if (!needle) return events
     // "src -> dst" filters by direction; either side may be empty ("lon ->",
     // "-> ny"). "→" is accepted so a copied row header works as a query.
@@ -203,7 +207,7 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(needle)),
     )
-  }, [data, query, network])
+  }, [events, query])
 
   useEffect(() => setVisibleLimit(ROUTE_PAGE), [query, win, network])
 
@@ -232,7 +236,7 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
         </div>
         <div className="chips">
           <span className="chip">
-            in window <span className="mono">{data.events.length}</span>
+            in window <span className="mono">{events.length}</span>
           </span>
         </div>
       </div>

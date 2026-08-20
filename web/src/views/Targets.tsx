@@ -99,12 +99,17 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
   const scoped = useMemo(() => {
     if (!feeds) return null
     const probeSites = new Map<string, string[]>() // target name -> distinct probing sites
+    // target name -> direct-config count on the plane; replaces the
+    // server-wide probe_count under a filter (same semantics: disabled
+    // configs count, only the plane changes).
+    const probeCounts = new Map<string, number>()
     for (const p of feeds.probes) {
       // Direct probes carry a target name; mesh templates carry a mesh.
-      // Disabled configs are not probing anyone — skip them, and under a
-      // filter only the plane's own probes count.
-      if (!p.target || !p.site || !p.enabled) continue
-      if (!matchesNetworkFilter(network, p.network)) continue
+      if (!p.target || !matchesNetworkFilter(network, p.network)) continue
+      probeCounts.set(p.target, (probeCounts.get(p.target) ?? 0) + 1)
+      // Disabled configs are not probing anyone — they count above but
+      // contribute no probing site.
+      if (!p.site || !p.enabled) continue
       const sites = probeSites.get(p.target) ?? []
       if (!sites.includes(p.site)) sites.push(p.site)
       probeSites.set(p.target, sites)
@@ -125,7 +130,7 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
       const agent = agentIDOf(t) ? feeds.agentByID.get(agentIDOf(t) as string) : undefined
       return agent == null || matchesNetworkFilter(network, agent.network)
     })
-    return { probeSites, troubled, externals, sites }
+    return { probeSites, probeCounts, troubled, externals, sites }
   }, [feeds, network])
   const visible = useMemo(() => {
     if (!feeds || !scoped) return { externals: [], sites: [] }
@@ -244,7 +249,7 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
                     <td data-label="Endpoint" className="mono">
                       {t.url ? t.url : t.port ? `${t.address}:${t.port}` : t.address}
                     </td>
-                    <td data-label="Probes">{t.probe_count}</td>
+                    <td data-label="Probes">{scoped.probeCounts.get(t.name) ?? 0}</td>
                     <td data-label="Probed from" className="mono">
                       {(scoped.probeSites.get(t.name) ?? []).join(', ') || '—'}
                     </td>
