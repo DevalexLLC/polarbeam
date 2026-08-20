@@ -3,6 +3,7 @@ import uPlot from 'uplot'
 import { apiGet } from '../api'
 import Chart from '../components/Chart'
 import PathGraph, { isWidePath } from '../components/PathGraph'
+import { useNetworkFilter } from '../networkFilter'
 import { useTheme } from '../theme'
 import { useTimezone } from '../timezone'
 import {
@@ -236,9 +237,10 @@ export default function PairDetail({
 }) {
   const [win, setWin] = useState<Window>('24h')
   const [metric, setMetric] = useState<Metric>('latency')
-  // '' = all planes (the pre-networks fold). The selector renders only when
-  // the pair actually spans more than one network.
-  const [net, setNet] = useState('')
+  // The global top-bar filter; '' = all planes (the pre-networks fold). A
+  // filtered plane the pair does not span renders honestly stale/empty —
+  // same as the matrix — rather than silently falling back to the fold.
+  const { network: net } = useNetworkFilter()
   const { resolved } = useTheme()
   // Also covers the fmtTime tooltips below; mode reaches the charts through
   // mkOptions so axis ticks and the live-legend readout follow the toggle.
@@ -447,19 +449,6 @@ export default function PairDetail({
       </div>
 
       <div className="controls">
-        {pair.networks.length > 1 && (
-          <label className="pair-network" aria-label="Network">
-            <span className="sr-only">Network</span>
-            <select value={net} onChange={(e) => setNet(e.target.value)}>
-              <option value="">All networks</option>
-              {pair.networks.map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
         <div className="control-group" role="group" aria-label="Metric">
           {(['latency', 'loss'] as const).map((m) => (
             <button

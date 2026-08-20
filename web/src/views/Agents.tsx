@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { apiGet } from '../api'
 import HealthStrip, { stripStats, UptimeValue } from '../components/HealthStrip'
 import { fmtAgo, fmtTime } from '../format'
+import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
 import { useTimezone } from '../timezone'
 import type {
   AgentBucketFailuresResponse,
@@ -378,9 +379,16 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
     document.getElementById('agent-' + expanded)?.scrollIntoView({ block: 'nearest' })
   }, [expanded, data])
 
+  // The global top-bar network filter scopes the whole view: rows, header
+  // chips, and the health-filter button counts all derive from this subset.
+  const { network } = useNetworkFilter()
+  const fleet = useMemo(
+    () => (data?.agents ?? []).filter((a) => matchesNetworkFilter(network, a.network)),
+    [data, network],
+  )
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase()
-    return (data?.agents ?? []).filter((row) => {
+    return fleet.filter((row) => {
       // The two filters partition the fleet on needsAttention — including
       // never-seen (stale) agents and recent spool drops — so the button
       // counts always match the rows they reveal.
@@ -391,7 +399,7 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
         value.toLowerCase().includes(needle),
       )
     })
-  }, [data, filter, query])
+  }, [fleet, filter, query])
 
   if (error && !data)
     return (
@@ -408,15 +416,17 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
       </div>
     )
 
-  // Column appears only when the fleet actually spans networks, so
-  // single-network installs keep the exact pre-networks table.
+  // Column appears only when the fleet actually spans networks — derived
+  // from the whole fleet, not the filtered subset, so the table shape stays
+  // stable as the global filter changes; single-network installs keep the
+  // exact pre-networks table.
   const multiNetwork = new Set(data.agents.map((a) => a.network)).size > 1
 
-  const down = data.agents.filter((a) => health(a).status === 'down').length
-  const degraded = data.agents.filter((a) => health(a).status === 'degraded').length
-  const dropsTotal = data.agents.reduce((sum, a) => sum + a.dropped_results, 0)
-  const attention = data.agents.filter(needsAttention).length
-  const healthy = data.agents.length - attention
+  const down = fleet.filter((a) => health(a).status === 'down').length
+  const degraded = fleet.filter((a) => health(a).status === 'degraded').length
+  const dropsTotal = fleet.reduce((sum, a) => sum + a.dropped_results, 0)
+  const attention = fleet.filter(needsAttention).length
+  const healthy = fleet.length - attention
 
   return (
     <>
@@ -428,7 +438,7 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
         </div>
         <div className="chips">
           <span className="chip">
-            enrolled <span className="mono">{data.agents.length}</span>
+            enrolled <span className="mono">{fleet.length}</span>
           </span>
           <span className="chip">
             {down > 0 && <span className="dot swatch status-down" />}
@@ -457,7 +467,7 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
             aria-pressed={filter === 'all'}
             onClick={() => setFilter('all')}
           >
-            All {data.agents.length}
+            All {fleet.length}
           </button>
           <button
             className={filter === 'attention' ? 'active' : ''}
@@ -502,7 +512,7 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
             <span>
               {data.agents.length === 0
                 ? 'Enroll an agent to begin monitoring a site.'
-                : 'Change the health filter or search query.'}
+                : 'Change the health filter, search query, or top-bar network filter.'}
             </span>
           </div>
         ) : (

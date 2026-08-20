@@ -4,6 +4,7 @@ import { apiGet } from '../api'
 import Chart from '../components/Chart'
 import HealthStrip, { stripStats, UptimeValue } from '../components/HealthStrip'
 import PathGraph, { isWidePath } from '../components/PathGraph'
+import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
 import { useTheme } from '../theme'
 import { useTimezone } from '../timezone'
 import {
@@ -272,6 +273,10 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
   // Also covers the fmtTime tooltips below; mode reaches the charts through
   // the options factories so axis ticks and legends follow the toggle.
   const { mode } = useTimezone()
+  // The global top-bar filter narrows every source-keyed section client-side
+  // (each already carries its network). The stages chart cannot follow — the
+  // server folds it across planes — so it is annotated instead.
+  const { network } = useNetworkFilter()
   const [summary, setSummary] = useState<TargetSummaryResponse | null>(null)
   const [series, setSeries] = useState<TargetSeriesResponse | null>(null)
   const [stages, setStages] = useState<TargetStagesResponse | null>(null)
@@ -472,10 +477,14 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
   // Network qualifiers appear only when the sources actually span planes,
   // so single-network installs render the exact pre-networks labels.
   const multiNetwork = new Set(summary.sources.map((s) => s.network)).size > 1
-  const srcLabel = (site: string, network: string) => (multiNetwork ? `${site} · ${network}` : site)
+  const srcLabel = (site: string, net: string) => (multiNetwork ? `${site} · ${net}` : site)
+  const shownSources = summary.sources.filter((s) => matchesNetworkFilter(network, s.network))
+  const shownSeriesSources = series.sources.filter((s) => matchesNetworkFilter(network, s.network))
+  const shownHealthProbes = (health?.probes ?? []).filter((p) => matchesNetworkFilter(network, p.network))
+  const shownPathSources = (paths?.sources ?? []).filter((s) => matchesNetworkFilter(network, s.network))
   const addressLabel = target.url ? target.url : target.port ? `${target.address}:${target.port}` : target.address
   const withPctl = metric === 'latency' && series.source !== 'raw'
-  const lossCeiling = lossScaleCeiling(series.sources.map((s) => s.points))
+  const lossCeiling = lossScaleCeiling(shownSeriesSources.map((s) => s.points))
   const sourceLabel = series.source === 'raw' ? 'raw' : `${series.source} aggregate`
   const bucketLabel =
     (series.resolution_s >= 3600
@@ -527,17 +536,26 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
         </div>
       </div>
 
-      {summary.sources.length === 0 ? (
+      {shownSources.length === 0 ? (
         <div className="card">
           <div className="empty-state">
-            <strong>No probes target this yet</strong>
-            <span>Assign one in Settings → Probes and results will appear within a probe interval.</span>
+            {summary.sources.length === 0 ? (
+              <>
+                <strong>No probes target this yet</strong>
+                <span>Assign one in Settings → Probes and results will appear within a probe interval.</span>
+              </>
+            ) : (
+              <>
+                <strong>No probing sources on the selected network</strong>
+                <span>Clear the top-bar network filter to see this target's other planes.</span>
+              </>
+            )}
           </div>
         </div>
       ) : (
         <>
           <div className="pair-cards">
-            {summary.sources.map((s) => (
+            {shownSources.map((s) => (
               <SourceCard
                 key={srcKey(s.site, s.network)}
                 s={s}
@@ -556,8 +574,8 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
               <span className="eyebrow">Probe health</span>
               <span className="hint">per probe series, last 24 h — click a slot for its failures</span>
             </div>
-            {health && health.probes.length > 0 ? (
-              <StripRows probes={health.probes} bucketS={health.bucket_s || 1800} multiNetwork={multiNetwork} />
+            {health && shownHealthProbes.length > 0 ? (
+              <StripRows probes={shownHealthProbes} bucketS={health.bucket_s || 1800} multiNetwork={multiNetwork} />
             ) : (
               <div className="empty-state">
                 <strong>No probe series yet</strong>
@@ -566,14 +584,14 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
             )}
           </div>
 
-          {(paths?.sources.some((s) => s.paths.length > 0) ?? false) && (
+          {shownPathSources.some((s) => s.paths.length > 0) && (
             <div className="card">
               <div className="card-head">
                 <span className="eyebrow">Current path</span>
                 <span className="hint">latest complete traceroute per probing site</span>
               </div>
               <div className="path-pair">
-                {paths?.sources
+                {shownPathSources
                   .filter((s) => s.paths.length > 0)
                   .map((s) => (
                     <div
@@ -623,7 +641,7 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
             </div>
           )}
 
-          {series.sources.map((src) => {
+          {shownSeriesSources.map((src) => {
             const points = densify(src.points, series.resolution_s)
             const axisLabel = metric === 'loss' ? 'Loss (%)' : latencyAxisLabel(src.latency_source)
             return (
@@ -661,7 +679,12 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
           <div className="card chart-card">
             <h3>
               Stage timings
-              <span className="metric-source">all probing sites</span>
+              {/* The stages endpoint folds across planes server-side, so
+                  under an active filter this chart alone stays fleet-wide —
+                  say so rather than silently disagreeing with the rest. */}
+              <span className="metric-source">
+                {network !== '' && multiNetwork ? 'all probing sites · all networks' : 'all probing sites'}
+              </span>
             </h3>
             {stageData ? (
               <Chart options={stageOptions} data={toStageChartData(stagePoints)} />
