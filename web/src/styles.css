@@ -2501,6 +2501,45 @@ button.primary:disabled {
   text-transform: uppercase;
 }
 
+/* One ordered claim-to-role mapping per row: value, role, the networks it
+   grants, and its remove button. Collapses to stacked blocks on narrow
+   screens, where the horizontal rhythm stops helping. */
+.oidc-role-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.4rem 0;
+}
+
+.oidc-role-rule {
+  display: grid;
+  align-items: center;
+  gap: 0.5rem;
+  grid-template-columns: minmax(8rem, 1fr) auto minmax(0, 2fr) auto;
+}
+
+.oidc-role-rule .chips {
+  gap: 0.3rem;
+  margin: 0;
+}
+
+.oidc-role-rule .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+}
+
+.oidc-role-rule .chip input {
+  margin: 0;
+}
+
+@media (max-width: 720px) {
+  .oidc-role-rule {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Checkbox chips for assigning a scoped account's networks. The chip class
    supplies the pill; this only has to seat the box beside its name. */
 .users-network-picker .chip {

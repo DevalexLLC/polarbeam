@@ -94,6 +94,12 @@ function validate(d: Draft, stored: OIDCSettings, forSave: boolean): { errors: s
   if (!scopes.includes('openid')) errors.push('scopes must include "openid"')
   if (d.usernameClaim.trim() === '') errors.push('username claim is required')
   if (d.roleClaim.trim() === '') errors.push('role claim is required')
+  // Mirrors validateOIDCSettings' per-rule checks so a half-filled rule is
+  // caught before the round trip.
+  d.roleRules.forEach((r, i) => {
+    if (r.value.trim() === '') errors.push(`role rule ${i + 1}: claim value is required`)
+    if (r.networks.length === 0) errors.push(`role rule ${i + 1}: at least one network is required`)
+  })
   if (
     forSave &&
     d.clientSecret === '' &&
@@ -122,7 +128,7 @@ function validate(d: Draft, stored: OIDCSettings, forSave: boolean): { errors: s
       username_claim: d.usernameClaim.trim(),
       role_claim: d.roleClaim.trim(),
       admin_values: splitLines(d.adminValues),
-      role_rules: d.roleRules,
+      role_rules: d.roleRules.map((r) => ({ ...r, value: r.value.trim() })),
       unmatched_role: d.unmatchedRole,
       ca_pem: d.caPem.trim() === '' ? '' : d.caPem,
     },
@@ -132,10 +138,13 @@ function validate(d: Draft, stored: OIDCSettings, forSave: boolean): { errors: s
 export default function OIDCSettingsPanel({
   caps,
   canWrite,
+  networks,
   onAuthError,
 }: {
   caps: Caps
   canWrite: boolean
+  // Every plane on the install; a rule may grant any of them.
+  networks: string[]
   onAuthError: (err: unknown) => void
 }) {
   const [data, setData] = useState<OIDCSettings | null>(null)
@@ -199,7 +208,16 @@ export default function OIDCSettingsPanel({
 
   const current = draft ?? draftFrom(data)
   const saved = draftFrom(data)
-  const dirty = (Object.keys(current) as (keyof Draft)[]).some((k) => current[k] !== saved[k])
+  // roleRules is the one structured field: draftFrom copies it, so a
+  // reference compare would report the form permanently dirty. Compare it by
+  // value and the rest identity-wise, as before.
+  const dirty = (Object.keys(current) as (keyof Draft)[]).some((k) =>
+    k === 'roleRules' ? JSON.stringify(current.roleRules) !== JSON.stringify(saved.roleRules) : current[k] !== saved[k],
+  )
+
+  const updateRule = (i: number, patch: Partial<OIDCRoleRule>) => {
+    update({ roleRules: current.roleRules.map((r, j) => (j === i ? { ...r, ...patch } : r)) })
+  }
 
   const update = (patch: Partial<Draft>) => {
     setSavedFlash(false)
@@ -372,7 +390,104 @@ export default function OIDCSettingsPanel({
               onChange={(e) => update({ adminValues: e.target.value })}
             />
             <span className="hint">
-              role-claim values granting admin, matched exactly (commas allowed); everyone else gets viewer
+              role-claim values granting global admin, matched exactly (commas allowed); this list always wins
+            </span>
+          </label>
+          <div className="threshold-field" role="group" aria-label="Network role rules">
+            <span className="eyebrow">Network role rules</span>
+            <span className="hint">
+              Ordered mappings from the same role claim to a network-scoped role. Every matching rule contributes: the
+              strongest role wins and its networks are unioned, so one user in two tenants' admin groups administers
+              both. Only the scoped roles are mappable — admin has its list above, and a rule granting global viewer
+              would be the unmatched fallback in disguise.
+            </span>
+            {current.roleRules.length === 0 ? (
+              <span className="hint">No rules — every non-admin falls through to the setting below.</span>
+            ) : (
+              <div className="oidc-role-rules">
+                {current.roleRules.map((rule, i) => (
+                  // Index-keyed on purpose: rules are an ordered list with no
+                  // identity of their own, and two rules may legitimately
+                  // share a value while being edited.
+                  // oxlint-disable-next-line react/no-array-index-key
+                  <div className="oidc-role-rule" key={i}>
+                    <input
+                      type="text"
+                      value={rule.value}
+                      placeholder="tenant-a-admins"
+                      spellCheck={false}
+                      disabled={saving}
+                      aria-label={`Rule ${i + 1} claim value`}
+                      onChange={(e) => updateRule(i, { value: e.target.value })}
+                    />
+                    <select
+                      value={rule.role}
+                      disabled={saving}
+                      aria-label={`Rule ${i + 1} role`}
+                      onChange={(e) => updateRule(i, { role: e.target.value as OIDCRoleRule['role'] })}
+                    >
+                      <option value="network_admin">network admin</option>
+                      <option value="network_viewer">network viewer</option>
+                    </select>
+                    <div className="chips" role="group" aria-label={`Rule ${i + 1} networks`}>
+                      {networks.map((n) => (
+                        <label key={n} className="chip">
+                          <input
+                            type="checkbox"
+                            checked={rule.networks.includes(n)}
+                            disabled={saving}
+                            onChange={(e) =>
+                              updateRule(i, {
+                                networks: e.target.checked
+                                  ? [...rule.networks, n]
+                                  : rule.networks.filter((v) => v !== n),
+                              })
+                            }
+                          />
+                          {n}
+                        </label>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      disabled={saving}
+                      onClick={() => update({ roleRules: current.roleRules.filter((_, j) => j !== i) })}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={saving}
+              onClick={() =>
+                update({
+                  roleRules: [...current.roleRules, { value: '', role: 'network_admin', networks: [] }],
+                })
+              }
+            >
+              Add rule
+            </button>
+          </div>
+          <label className="threshold-field">
+            <span className="eyebrow">Unmatched users</span>
+            <span className="threshold-input">
+              <select
+                value={current.unmatchedRole}
+                disabled={saving}
+                onChange={(e) => update({ unmatchedRole: e.target.value as UnmatchedRole })}
+              >
+                <option value="viewer">become global viewers</option>
+                <option value="deny">are denied sign-in</option>
+              </select>
+            </span>
+            <span className="hint">
+              What happens to a user the provider authenticates who matches no admin value and no rule. A global viewer
+              sees every network, so any install carrying more than one tenant must deny.
             </span>
           </label>
           <label className="threshold-field oidc-capem">

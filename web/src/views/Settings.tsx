@@ -99,7 +99,7 @@ export default function Settings({
         glance. adminWrite and networkWrite are the server's own wrapper
         names; a panel never sees `caps` and so cannot pick the wrong one. */}
       {tab === 'authentication' ? (
-        <OIDCSettingsPanel caps={caps} canWrite={caps.adminWrite} onAuthError={onAuthError} />
+        <OIDCSettingsPanel caps={caps} canWrite={caps.adminWrite} networks={networks} onAuthError={onAuthError} />
       ) : tab === 'banner' ? (
         <BannerSettingsPanel caps={caps} canWrite={caps.adminWrite} onAuthError={onAuthError} onSaved={onBannerSaved} />
       ) : tab === 'users' ? (
