@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { apiGet, apiPost, apiPut } from '../api'
 import { fmtAgo } from '../format'
-import type { OIDCDiscoveryInfo, OIDCSettings, OIDCSettingsPut } from '../types'
+import type { OIDCDiscoveryInfo, OIDCRoleRule, OIDCSettings, OIDCSettingsPut, UnmatchedRole } from '../types'
 
 const POLL_MS = 30_000
 const CALLBACK_PATH = '/api/v1/auth/oidc/callback'
@@ -16,8 +16,19 @@ interface Draft {
   usernameClaim: string
   roleClaim: string
   adminValues: string
+  // The tenant policy. Both are sent explicitly on every save: the server
+  // treats an omitted field as "keep stored", so a form that could edit them
+  // but stayed silent would make an unrelated save look like a no-op while
+  // quietly preserving a mapping the operator just changed.
+  roleRules: OIDCRoleRule[]
+  unmatchedRole: UnmatchedRole
   caPem: string
 }
+
+// textField drives the plain string inputs only; Draft also carries the
+// boolean toggle and the structured tenant policy, which have their own
+// editors.
+type StringKeys<T> = { [K in keyof T]: T[K] extends string ? K : never }[keyof T]
 
 function draftFrom(s: OIDCSettings): Draft {
   return {
@@ -30,6 +41,8 @@ function draftFrom(s: OIDCSettings): Draft {
     usernameClaim: s.username_claim,
     roleClaim: s.role_claim,
     adminValues: s.admin_values.join('\n'),
+    roleRules: s.role_rules.map((r) => ({ ...r, networks: [...r.networks] })),
+    unmatchedRole: s.unmatched_role,
     caPem: s.ca_pem,
   }
 }
@@ -107,6 +120,8 @@ function validate(d: Draft, stored: OIDCSettings, forSave: boolean): { errors: s
       username_claim: d.usernameClaim.trim(),
       role_claim: d.roleClaim.trim(),
       admin_values: splitLines(d.adminValues),
+      role_rules: d.roleRules,
+      unmatched_role: d.unmatchedRole,
       ca_pem: d.caPem.trim() === '' ? '' : d.caPem,
     },
   }
@@ -248,7 +263,7 @@ export default function OIDCSettingsPanel({
 
   const textField = (
     label: string,
-    key: keyof Omit<Draft, 'enabled'>,
+    key: StringKeys<Draft>,
     placeholder: string,
     opts: { type?: string; hint?: string } = {},
   ) => (
