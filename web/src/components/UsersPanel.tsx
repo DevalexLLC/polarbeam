@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
-import type { Caps } from '../caps'
-import RoleWall from './RoleWall'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { apiDelete, apiGet, apiPost, apiPut } from '../api'
+import type { Caps } from '../caps'
+import { roleLabel } from '../caps'
 import { fmtAgo, fmtTime } from '../format'
 import { useTimezone } from '../timezone'
-import type { LoginMonth, UserAccount, UserCreateResponse, UsersResponse } from '../types'
+import type { LoginMonth, Role, UserAccount, UserCreateResponse, UsersResponse } from '../types'
 import ConfirmButton from './ConfirmButton'
+import RoleWall from './RoleWall'
 
 const POLL_MS = 30_000
 
@@ -123,7 +124,51 @@ function LoginBars({ months }: { months: LoginMonth[] }) {
 
 const PAGE_SIZE = 50
 
-type RoleFilter = '' | 'admin' | 'viewer'
+// Mirrors store.RoleIsNetworkScoped: these two carry a network set, the
+// other two are global and the server refuses the field for them.
+const SCOPED_ROLES: ReadonlySet<Role> = new Set<Role>(['network_admin', 'network_viewer'])
+const ALL_ROLES: Role[] = ['admin', 'viewer', 'network_admin', 'network_viewer']
+
+// Only a local, scoped account has an editable scope: the server refuses the
+// field for a global role, and a federated account's networks are re-derived
+// from the IdP mapping on every login.
+const scopeEditable = (u: UserAccount) => u.status !== 'deleted' && u.auth_source === 'local' && u.networks !== null
+
+// A checkbox list rather than a multi-select: scope is a small set the
+// operator must be able to read back at a glance, and <select multiple> is
+// notoriously easy to clear by accident.
+function NetworkPicker({
+  all,
+  value,
+  disabled,
+  onChange,
+}: {
+  all: string[]
+  value: string[]
+  disabled?: boolean
+  onChange: (next: string[]) => void
+}) {
+  if (all.length === 0) {
+    return <span className="hint">no networks exist yet — create one under Settings → Networks</span>
+  }
+  return (
+    <div className="chips users-network-picker">
+      {all.map((n) => (
+        <label key={n} className="chip">
+          <input
+            type="checkbox"
+            checked={value.includes(n)}
+            disabled={disabled}
+            onChange={(e) => onChange(e.target.checked ? [...value, n] : value.filter((v) => v !== n))}
+          />
+          {n}
+        </label>
+      ))}
+    </div>
+  )
+}
+
+type RoleFilter = '' | Role
 type StatusFilter = '' | 'active' | 'disabled' | 'deleted'
 type SourceFilter = '' | 'local' | 'oidc'
 
@@ -159,11 +204,15 @@ function FilterGroup<T extends string>({
 export default function UsersPanel({
   caps,
   canWrite,
+  networks,
   currentUsername,
   onAuthError,
 }: {
   caps: Caps
   canWrite: boolean
+  // Every plane on the install: this panel is admin-only, so the list is
+  // unfiltered and any of them may be assigned.
+  networks: string[]
   currentUsername: string
   onAuthError: (err: unknown) => void
 }) {
@@ -180,7 +229,12 @@ export default function UsersPanel({
   const [actionError, setActionError] = useState('') // row disable/delete failures
   const [createError, setCreateError] = useState('') // shown inside the dialog
   const [newUsername, setNewUsername] = useState('')
-  const [newRole, setNewRole] = useState<'viewer' | 'admin'>('viewer')
+  const [newRole, setNewRole] = useState<Role>('viewer')
+  // Only meaningful for the two scoped roles: the server requires at least
+  // one network for them and rejects the field outright for the global ones.
+  const [newNetworks, setNewNetworks] = useState<string[]>([])
+  // Which row's scope is being edited, by user id.
+  const [scopeEdit, setScopeEdit] = useState<{ id: string; networks: string[] } | null>(null)
   const [creating, setCreating] = useState(false)
   // The generated password lives in its own state so the 30 s poll can
   // never clear it — it is shown exactly once and cannot be recovered. The
@@ -257,8 +311,25 @@ export default function UsersPanel({
     }
   }, [canWrite, onAuthError, q, role, status, source, offset, refresh])
 
+  // Only a local, scoped account has an editable scope: the server refuses
+  // the field for a global role, and a federated account's networks are
+  // re-derived from the IdP mapping on every login.
+
+  const saveScope = async (u: UserAccount, next: string[]) => {
+    setActionError('')
+    try {
+      await apiPut('/api/v1/users/' + encodeURIComponent(u.id), { networks: next })
+      setScopeEdit(null)
+      setRefresh((r) => r + 1)
+    } catch (err) {
+      onAuthError(err)
+      setActionError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   const openCreate = () => {
     setCreateError('')
+    setNewNetworks([])
     dialogRef.current?.showModal()
   }
 
@@ -268,13 +339,17 @@ export default function UsersPanel({
     setCreateError('')
     setCopied(false)
     try {
+      // The server requires networks for a scoped role and refuses the
+      // field for a global one, so send it exactly when it applies.
       const res = await apiPost<UserCreateResponse>('/api/v1/users', {
         username: newUsername.trim(),
         role: newRole,
+        ...(SCOPED_ROLES.has(newRole) ? { networks: newNetworks } : {}),
       })
       setMinted({ kind: 'created', res })
       setNewUsername('')
       setNewRole('viewer')
+      setNewNetworks([])
       setRefresh((r) => r + 1)
     } catch (err) {
       onAuthError(err)
@@ -455,17 +530,29 @@ export default function UsersPanel({
                 <label className="threshold-field">
                   <span className="eyebrow">Role</span>
                   <span className="threshold-input">
-                    <select
-                      value={newRole}
-                      disabled={creating}
-                      onChange={(e) => setNewRole(e.target.value === 'admin' ? 'admin' : 'viewer')}
-                    >
-                      <option value="viewer">viewer</option>
-                      <option value="admin">admin</option>
+                    <select value={newRole} disabled={creating} onChange={(e) => setNewRole(e.target.value as Role)}>
+                      {ALL_ROLES.map((r) => (
+                        <option key={r} value={r}>
+                          {roleLabel(r)}
+                        </option>
+                      ))}
                     </select>
+                    <span className="hint">
+                      {SCOPED_ROLES.has(newRole)
+                        ? 'limited to the networks below; sees nothing outside them'
+                        : 'sees every network'}
+                    </span>
                   </span>
                 </label>
               </div>
+              {/* The role cannot be changed afterwards — only the scope of a
+                scoped account can — so this choice is the durable one. */}
+              {SCOPED_ROLES.has(newRole) && (
+                <div className="threshold-field" role="group" aria-label="Networks">
+                  <span className="eyebrow">Networks</span>
+                  <NetworkPicker all={networks} value={newNetworks} disabled={creating} onChange={setNewNetworks} />
+                </div>
+              )}
               {createError && (
                 <ul className="error threshold-errors">
                   <li>{createError}</li>
@@ -480,7 +567,11 @@ export default function UsersPanel({
                 >
                   Cancel
                 </button>
-                <button type="submit" className="primary" disabled={creating || !newUsername.trim()}>
+                <button
+                  type="submit"
+                  className="primary"
+                  disabled={creating || !newUsername.trim() || (SCOPED_ROLES.has(newRole) && newNetworks.length === 0)}
+                >
                   {creating ? 'Creating…' : 'Create user'}
                 </button>
               </div>
@@ -506,11 +597,7 @@ export default function UsersPanel({
             label="Role"
             value={role}
             onChange={applyFilter(setRole)}
-            options={[
-              { value: '', label: 'All roles' },
-              { value: 'admin', label: 'Admin' },
-              { value: 'viewer', label: 'Viewer' },
-            ]}
+            options={[{ value: '', label: 'All roles' }, ...ALL_ROLES.map((r) => ({ value: r, label: roleLabel(r) }))]}
           />
           <FilterGroup<StatusFilter>
             label="Status"
@@ -558,6 +645,7 @@ export default function UsersPanel({
                   <tr>
                     <th>Username</th>
                     <th>Role</th>
+                    <th>Networks</th>
                     <th>Source</th>
                     <th>Status</th>
                     <th>Sign-ins</th>
@@ -570,76 +658,135 @@ export default function UsersPanel({
                 </thead>
                 <tbody>
                   {data.users.map((u) => (
-                    <tr key={u.id}>
-                      <td data-label="Username" className="mono">
-                        {u.username}
-                      </td>
-                      <td data-label="Role">{u.role === 'admin' ? 'Admin' : 'Viewer'}</td>
-                      <td data-label="Source">{u.auth_source === 'oidc' ? 'SSO' : 'Local'}</td>
-                      <td data-label="Status">
-                        {u.status === 'disabled' ? (
-                          <span className="status-text-down">Disabled</span>
-                        ) : u.status === 'deleted' ? (
-                          <span className="muted">Deleted</span>
-                        ) : (
-                          'Active'
-                        )}
-                      </td>
-                      <td data-label="Sign-ins">{u.login_count}</td>
-                      <td data-label="Last sign-in" title={u.last_login_at ? fmtTime(u.last_login_at) : undefined}>
-                        {fmtAgo(u.last_login_at)}
-                      </td>
-                      <td data-label="Created" title={u.created_at ? fmtTime(u.created_at) : undefined}>
-                        {u.created_at ? fmtAgo(u.created_at) : '—'}
-                      </td>
-                      <td data-label="Actions" className="users-actions">
-                        {u.status !== 'deleted' && (
-                          <>
-                            {/* Hidden (not disabled) for SSO accounts: they
+                    <Fragment key={u.id}>
+                      <tr>
+                        <td data-label="Username" className="mono">
+                          {u.username}
+                        </td>
+                        {/* Was `role === 'admin' ? 'Admin' : 'Viewer'`, which
+                        labelled every scoped role "Viewer" — including a
+                        network admin. */}
+                        <td data-label="Role">{roleLabel(u.role)}</td>
+                        <td data-label="Networks">
+                          {u.networks === null ? (
+                            <span className="hint">all</span>
+                          ) : u.networks.length === 0 ? (
+                            // Assignable but unassigned: this account can see
+                            // nothing until an operator gives it a plane.
+                            <span className="status-text-down">none</span>
+                          ) : (
+                            u.networks.join(', ')
+                          )}
+                        </td>
+                        <td data-label="Source">{u.auth_source === 'oidc' ? 'SSO' : 'Local'}</td>
+                        <td data-label="Status">
+                          {u.status === 'disabled' ? (
+                            <span className="status-text-down">Disabled</span>
+                          ) : u.status === 'deleted' ? (
+                            <span className="muted">Deleted</span>
+                          ) : (
+                            'Active'
+                          )}
+                        </td>
+                        <td data-label="Sign-ins">{u.login_count}</td>
+                        <td data-label="Last sign-in" title={u.last_login_at ? fmtTime(u.last_login_at) : undefined}>
+                          {fmtAgo(u.last_login_at)}
+                        </td>
+                        <td data-label="Created" title={u.created_at ? fmtTime(u.created_at) : undefined}>
+                          {u.created_at ? fmtAgo(u.created_at) : '—'}
+                        </td>
+                        <td data-label="Actions" className="users-actions">
+                          {u.status !== 'deleted' && (
+                            <>
+                              {scopeEditable(u) && (
+                                <button
+                                  type="button"
+                                  className="secondary-button"
+                                  aria-expanded={scopeEdit?.id === u.id}
+                                  onClick={() =>
+                                    setScopeEdit(
+                                      scopeEdit?.id === u.id ? null : { id: u.id, networks: [...(u.networks ?? [])] },
+                                    )
+                                  }
+                                >
+                                  {scopeEdit?.id === u.id ? 'Close' : 'Networks'}
+                                </button>
+                              )}
+                              {/* Hidden (not disabled) for SSO accounts: they
                                 have no password to reset, per the schema. */}
-                            {u.auth_source !== 'oidc' && (
+                              {u.auth_source !== 'oidc' && (
+                                <ConfirmButton
+                                  label="Reset password"
+                                  confirmLabel="Confirm? Signs them out"
+                                  disabled={u.username === currentUsername || resetting}
+                                  title={
+                                    u.username === currentUsername
+                                      ? 'Change your own password from the user menu'
+                                      : 'Generates a new password shown once and signs out all of their sessions'
+                                  }
+                                  onConfirm={() => resetPassword(u)}
+                                />
+                              )}
                               <ConfirmButton
-                                label="Reset password"
-                                confirmLabel="Confirm? Signs them out"
-                                disabled={u.username === currentUsername || resetting}
+                                label={u.status === 'disabled' ? 'Enable' : 'Disable'}
+                                confirmLabel={u.status === 'disabled' ? 'Confirm enable?' : 'Confirm disable?'}
+                                disabled={u.username === currentUsername}
                                 title={
                                   u.username === currentUsername
-                                    ? 'Change your own password from the user menu'
-                                    : 'Generates a new password shown once and signs out all of their sessions'
+                                    ? 'You cannot disable your own account'
+                                    : u.auth_source === 'oidc'
+                                      ? 'Blocks sign-in even if the IdP still authorizes this user'
+                                      : undefined
                                 }
-                                onConfirm={() => resetPassword(u)}
+                                onConfirm={() => setDisabled(u, u.status !== 'disabled')}
                               />
-                            )}
-                            <ConfirmButton
-                              label={u.status === 'disabled' ? 'Enable' : 'Disable'}
-                              confirmLabel={u.status === 'disabled' ? 'Confirm enable?' : 'Confirm disable?'}
-                              disabled={u.username === currentUsername}
-                              title={
-                                u.username === currentUsername
-                                  ? 'You cannot disable your own account'
-                                  : u.auth_source === 'oidc'
-                                    ? 'Blocks sign-in even if the IdP still authorizes this user'
-                                    : undefined
-                              }
-                              onConfirm={() => setDisabled(u, u.status !== 'disabled')}
-                            />
-                            <ConfirmButton
-                              label="Delete"
-                              confirmLabel={u.auth_source === 'oidc' ? 'Confirm? SSO can re-enroll' : 'Confirm delete?'}
-                              disabled={u.username === currentUsername}
-                              title={
-                                u.username === currentUsername
-                                  ? 'You cannot delete your own account'
-                                  : u.auth_source === 'oidc'
-                                    ? 'Deleting does not revoke IdP access — a still-authorized user is re-provisioned on next SSO login. Disable to revoke.'
-                                    : undefined
-                              }
-                              onConfirm={() => remove(u)}
-                            />
-                          </>
-                        )}
-                      </td>
-                    </tr>
+                              <ConfirmButton
+                                label="Delete"
+                                confirmLabel={
+                                  u.auth_source === 'oidc' ? 'Confirm? SSO can re-enroll' : 'Confirm delete?'
+                                }
+                                disabled={u.username === currentUsername}
+                                title={
+                                  u.username === currentUsername
+                                    ? 'You cannot delete your own account'
+                                    : u.auth_source === 'oidc'
+                                      ? 'Deleting does not revoke IdP access — a still-authorized user is re-provisioned on next SSO login. Disable to revoke.'
+                                      : undefined
+                                }
+                                onConfirm={() => remove(u)}
+                              />
+                            </>
+                          )}
+                        </td>
+                      </tr>
+                      {scopeEdit?.id === u.id && (
+                        <tr className="config-edit-row">
+                          <td colSpan={9}>
+                            <div className="config-form">
+                              <h3 className="eyebrow">Networks · {u.username}</h3>
+                              <NetworkPicker
+                                all={networks}
+                                value={scopeEdit.networks}
+                                onChange={(next) => setScopeEdit({ id: u.id, networks: next })}
+                              />
+                              <div className="threshold-foot">
+                                <span className="hint">
+                                  A scoped account needs at least one network; removing the last one is refused.
+                                </span>
+                                <button
+                                  className="primary"
+                                  type="button"
+                                  disabled={scopeEdit.networks.length === 0}
+                                  onClick={() => void saveScope(u, scopeEdit.networks)}
+                                >
+                                  Save
+                                </button>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>

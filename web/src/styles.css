@@ -2501,6 +2501,19 @@ button.primary:disabled {
   text-transform: uppercase;
 }
 
+/* Checkbox chips for assigning a scoped account's networks. The chip class
+   supplies the pill; this only has to seat the box beside its name. */
+.users-network-picker .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+}
+
+.users-network-picker input {
+  margin: 0;
+}
+
 /* A scoped account's planes, under its role. Lower-case and unspaced: it
    is a list of names, not a label like the role above it, and a long list
    must wrap rather than push the popover wide. */

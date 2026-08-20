@@ -103,7 +103,13 @@ export default function Settings({
       ) : tab === 'banner' ? (
         <BannerSettingsPanel caps={caps} canWrite={caps.adminWrite} onAuthError={onAuthError} onSaved={onBannerSaved} />
       ) : tab === 'users' ? (
-        <UsersPanel caps={caps} canWrite={caps.adminWrite} currentUsername={username} onAuthError={onAuthError} />
+        <UsersPanel
+          caps={caps}
+          canWrite={caps.adminWrite}
+          networks={networks}
+          currentUsername={username}
+          onAuthError={onAuthError}
+        />
       ) : tab === 'networks' ? (
         <NetworksPanel canWrite={caps.adminWrite} onAuthError={onAuthError} />
       ) : tab === 'sites' ? (
