@@ -2536,6 +2536,107 @@ button.primary:disabled {
   background: var(--status-down-bg);
 }
 
+/* Global filter popover: the user-menu <details> pattern with the
+   theme-toggle's round summary. Absent entirely on single-network installs. */
+.topbar-filter {
+  position: relative;
+}
+
+.topbar-filter > summary {
+  position: relative;
+  display: grid;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  cursor: pointer;
+  list-style: none;
+  place-items: center;
+}
+
+.topbar-filter > summary::-webkit-details-marker {
+  display: none;
+}
+
+.topbar-filter > summary:hover,
+.topbar-filter > summary:focus-visible,
+.topbar-filter[open] > summary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.topbar-filter-icon {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+/* An active filter changes what every view shows, so its marker must read
+   at a glance even with the popover closed. */
+.filter-badge {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.topbar-filter-popover {
+  position: absolute;
+  top: calc(100% + 0.55rem);
+  right: 0;
+  z-index: 100;
+  min-width: 13rem;
+  padding: 0.4rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 14px 32px rgb(0 0 0 / 0.16);
+}
+
+.topbar-filter-heading {
+  display: block;
+  padding: 0.5rem 0.75rem 0.35rem;
+  color: var(--ink-3);
+  font-size: 0.65rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.topbar-filter-popover > button {
+  display: block;
+  width: 100%;
+  padding: 0.65rem 0.75rem;
+  border: 0;
+  border-radius: calc(var(--radius) - 2px);
+  color: var(--ink);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.85rem;
+  text-align: left;
+}
+
+.topbar-filter-popover > button:hover,
+.topbar-filter-popover > button:focus-visible {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+
+.topbar-filter-popover > button[aria-pressed='true'] {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
 .app main {
   width: 100%;
   max-width: 1440px;
@@ -2882,6 +2983,16 @@ table.fleet-table td strong {
   display: block;
   font-size: 0.83rem;
   font-weight: 650;
+}
+
+/* The plane chip on a fleet row (multi-network installs only): the shared
+   .chip scaled down to table density. inline-flex keeps the row-hover
+   underline off it. */
+table.fleet-table td strong .chip {
+  margin-left: 0.45rem;
+  padding: 0.05rem 0.5rem;
+  font-size: 0.68rem;
+  font-weight: 500;
 }
 
 table.fleet-table td small {
@@ -3912,10 +4023,8 @@ button.path-toggle:hover {
   border-radius: var(--radius);
 }
 
-/* Network plane selectors: the Overview connectivity header and the pair
-   detail controls row. Both render only when more than one network exists,
-   so single-network installs never see them. */
-.connectivity-network select,
+/* Network plane selector on the pair detail controls row. Renders only when
+   more than one network exists, so single-network installs never see it. */
 .pair-network select {
   min-height: 32px;
   padding: 0.3rem 0.55rem;
@@ -3928,7 +4037,6 @@ button.path-toggle:hover {
   border-radius: var(--radius);
 }
 
-.connectivity-network select:focus-visible,
 .pair-network select:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 1px;

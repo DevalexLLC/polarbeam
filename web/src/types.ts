@@ -356,6 +356,7 @@ export interface OutageEvent {
   id: string
   kind: 'probe_failing' | 'agent_offline' | 'probe_degraded'
   agent: string
+  network: string // '' once the agent row is deleted
   src_site: string
   dst_site: string | null
   target: string | null
@@ -384,6 +385,7 @@ export interface PathEvent {
   id: string
   time: string
   agent: string
+  network: string // '' once the agent row is deleted
   src_site: string
   dst_site: string | null
   target: string | null

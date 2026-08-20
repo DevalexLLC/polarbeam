@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ApiError, apiGet, apiPost, setCsrfToken } from './api'
-import type { AuthProviders, LoginResponse, UIBanner, User } from './types'
+import { reconcileNetworkFilter } from './networkFilter'
+import type { AuthProviders, LoginResponse, NetworksConfigResponse, UIBanner, User } from './types'
 import BannerFrame from './components/BannerFrame'
 import ChangePasswordDialog from './components/ChangePasswordDialog'
 import LogoMark from './components/LogoMark'
 import ThemeToggle from './components/ThemeToggle'
 import TimezoneToggle from './components/TimezoneToggle'
+import TopbarFilter from './components/TopbarFilter'
 import About from './views/About'
 import Agents from './views/Agents'
 import Login from './views/Login'
@@ -110,6 +112,7 @@ export default function App() {
   const [sso, setSso] = useState(false)
   const [banner, setBanner] = useState<UIBanner | null>(null)
   const [changingPassword, setChangingPassword] = useState(false)
+  const [networkNames, setNetworkNames] = useState<string[]>([])
   const [route, setRoute] = useState<Route>(() => parseHash(location.hash))
 
   useEffect(() => {
@@ -156,6 +159,31 @@ export default function App() {
           if (!cancelled) setBanner(b)
         })
         .catch((err) => console.warn('ui banner unavailable; keeping last known', err))
+    load()
+    const id = setInterval(load, 30_000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [user])
+
+  // The network list decides whether the top-bar filter renders at all
+  // (single-network installs never see it). Fetch on login and poll so an
+  // admin adding or deleting a plane converges everywhere within 30s; each
+  // fetch also reconciles a persisted filter that may have gone stale. A
+  // failure keeps the last known list — filtering must never block the app.
+  useEffect(() => {
+    if (!user) return
+    let cancelled = false
+    const load = () =>
+      apiGet<NetworksConfigResponse>('/api/v1/config/networks')
+        .then((res) => {
+          if (cancelled) return
+          const names = res.networks.map((n) => n.name)
+          setNetworkNames(names)
+          reconcileNetworkFilter(names)
+        })
+        .catch((err) => console.warn('networks unavailable; keeping last known', err))
     load()
     const id = setInterval(load, 30_000)
     return () => {
@@ -228,6 +256,7 @@ export default function App() {
             ))}
           </nav>
           <div className="topbar-right">
+            <TopbarFilter networks={networkNames} />
             <TimezoneToggle />
             <ThemeToggle />
             <details className={'user-menu' + (route.view === 'settings' ? ' user-menu-current' : '')}>

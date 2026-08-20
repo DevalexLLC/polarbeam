@@ -1,32 +1,27 @@
 import MatrixTable from './MatrixTable'
 import WorldMap from './WorldMap'
 import type { ThresholdResolver } from '../severity'
-import type { MatrixCell, MatrixResponse } from '../types'
+import type { MatrixCell, MatrixResponse, Site } from '../types'
 
 export type ConnectivityMode = 'map' | 'matrix'
 
 // The connectivity card owns the map/matrix switch in its own header (the
 // retired Connectivity page's toolbar, moved in-card). Mode is lifted to the
 // caller so other Overview elements — the "Healthy directions" tile — can
-// flip straight to the matrix. cells may be a network-filtered subset of
-// matrix.cells (the caller owns the filter state alongside the mode).
+// flip straight to the matrix. The global top-bar network filter scopes this
+// card through its props: sites and cells may be plane-filtered subsets of
+// the matrix response (the caller derives both).
 export default function ConnectivityCard({
   matrix,
+  sites,
   cells,
-  networks,
-  network,
-  onNetworkChange,
   thresholds,
   mode,
   onModeChange,
 }: {
   matrix: MatrixResponse
+  sites: Site[]
   cells: MatrixCell[]
-  // Network filter options; the selector renders only when more than one
-  // plane exists, so single-network installs keep the exact old header.
-  networks: string[]
-  network: string
-  onNetworkChange: (network: string) => void
   thresholds: ThresholdResolver
   mode: ConnectivityMode
   onModeChange: (mode: ConnectivityMode) => void
@@ -40,19 +35,6 @@ export default function ConnectivityCard({
         </div>
         <div className="card-head-actions">
           <span className="freshness">Latest {Math.round(matrix.horizon_s / 60)}-minute probe horizon</span>
-          {networks.length > 1 && (
-            <label className="connectivity-network">
-              <span className="sr-only">Network</span>
-              <select value={network} onChange={(e) => onNetworkChange(e.target.value)}>
-                <option value="">All networks</option>
-                {networks.map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
           <div className="control-group" role="group" aria-label="Connectivity view">
             <button
               className={mode === 'map' ? 'active' : ''}
@@ -72,9 +54,9 @@ export default function ConnectivityCard({
         </div>
       </div>
       {mode === 'map' ? (
-        <WorldMap sites={matrix.sites} cells={cells} thresholds={thresholds} />
+        <WorldMap sites={sites} cells={cells} thresholds={thresholds} />
       ) : (
-        <MatrixTable sites={matrix.sites} cells={cells} thresholds={thresholds} />
+        <MatrixTable sites={sites} cells={cells} thresholds={thresholds} />
       )}
     </section>
   )

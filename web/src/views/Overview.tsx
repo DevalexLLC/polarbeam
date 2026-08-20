@@ -3,13 +3,13 @@ import { apiGet } from '../api'
 import ConnectivityCard, { type ConnectivityMode } from '../components/ConnectivityCard'
 import FleetAgentsCard from '../components/FleetAgentsCard'
 import { fmtAgo } from '../format'
+import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
 import { buildThresholdResolver, directionSeverity } from '../severity'
 import type {
   AgentHealthResponse,
   AgentInfo,
   AgentsResponse,
   MatrixResponse,
-  NetworksConfigResponse,
   OutageEvent,
   OutagesResponse,
   SettingsResponse,
@@ -80,11 +80,10 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
   const [outages, setOutages] = useState<OutagesResponse | null>(null)
   const [settings, setSettings] = useState<SettingsResponse | null>(null)
   const [health, setHealth] = useState<AgentHealthResponse | null>(null)
-  const [networks, setNetworks] = useState<string[]>([])
   const [connMode, setConnMode] = useState<ConnectivityMode>('map')
-  // '' = all planes folded together — the pre-networks view. The filter
-  // scopes the Connectivity card only; the stat tiles stay fleet-wide.
-  const [netFilter, setNetFilter] = useState('')
+  // The global top-bar filter; '' = all planes folded together — the
+  // pre-networks view. Every stat tile and card on this page honors it.
+  const { network: netFilter } = useNetworkFilter()
   const [error, setError] = useState('')
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
   const [refreshing, setRefreshing] = useState(false)
@@ -97,15 +96,13 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
       apiGet<OutagesResponse>('/api/v1/outages?window=24h'),
       apiGet<SettingsResponse>('/api/v1/settings'),
       apiGet<AgentHealthResponse>('/api/v1/agents/health?window=24h'),
-      apiGet<NetworksConfigResponse>('/api/v1/config/networks'),
     ])
-      .then(([m, a, o, s, h, n]) => {
+      .then(([m, a, o, s, h]) => {
         setMatrix(m)
         setAgents(a)
         setOutages(o)
         setSettings(s)
         setHealth(h)
-        setNetworks(n.networks.map((net) => net.name))
         setUpdatedAt(new Date())
         setError('')
       })
@@ -141,7 +138,23 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
       return sub ? [{ ...cell, ...sub, src: cell.src, dst: cell.dst, networks: [sub] }] : []
     })
   }, [matrix, netFilter])
-  const active = useMemo(() => outages?.outages.filter((o) => o.closed_at == null) ?? [], [outages])
+  // Sites are network-agnostic rows; under a filter the card and the
+  // sites-available tile scope to sites staffed by at least one agent on
+  // the plane, so off-plane sites don't render as all-"not probed" noise.
+  const shownSites = useMemo(() => {
+    if (!matrix) return []
+    if (netFilter === '' || !agents) return matrix.sites
+    const staffed = new Set(agents.agents.filter((a) => a.network === netFilter).map((a) => a.site))
+    return matrix.sites.filter((s) => staffed.has(s.name))
+  }, [matrix, agents, netFilter])
+  const shownAgents = useMemo(
+    () => agents?.agents.filter((a) => matchesNetworkFilter(netFilter, a.network)) ?? [],
+    [agents, netFilter],
+  )
+  const active = useMemo(
+    () => outages?.outages.filter((o) => o.closed_at == null && matchesNetworkFilter(netFilter, o.network)) ?? [],
+    [outages, netFilter],
+  )
   const activeGroups = useMemo(() => {
     const groups = new Map<string, { key: string; cause: string; probe: string; events: OutageEvent[] }>()
     for (const event of active) {
@@ -155,22 +168,21 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
     return [...groups.values()]
   }, [active])
   const activeTargetCount = new Set(active.map(targetKey)).size
-  const attention = agents?.agents.filter((a) => attentionReason(a) != null) ?? []
-  const healthyDirections =
-    matrix?.cells.filter((cell) => directionSeverity(cell, resolveThresholds(cell.src, cell.dst)) === 'ok').length ?? 0
-  const totalDirections = matrix?.cells.length ?? 0
-  const availableSites = matrix
-    ? matrix.sites.filter((site) => {
-        const own = agents?.agents.filter((a) => a.site === site.name) ?? []
-        return own.some(
-          (a) =>
-            a.last_seen_at != null &&
-            !a.offline &&
-            !a.cert_revoked_at &&
-            (a.cert_not_after == null || Date.parse(a.cert_not_after) >= Date.now()),
-        )
-      }).length
-    : 0
+  const attention = shownAgents.filter((a) => attentionReason(a) != null)
+  const healthyDirections = shownCells.filter(
+    (cell) => directionSeverity(cell, resolveThresholds(cell.src, cell.dst)) === 'ok',
+  ).length
+  const totalDirections = shownCells.length
+  const availableSites = shownSites.filter((site) => {
+    const own = shownAgents.filter((a) => a.site === site.name)
+    return own.some(
+      (a) =>
+        a.last_seen_at != null &&
+        !a.offline &&
+        !a.cert_revoked_at &&
+        (a.cert_not_after == null || Date.parse(a.cert_not_after) >= Date.now()),
+    )
+  }).length
 
   if (error && !matrix)
     return (
@@ -211,19 +223,19 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
       )}
 
       <section className="stat-grid" aria-label="Network health summary">
-        <a className={'stat-card' + ratioStatus(availableSites, matrix.sites.length)} href="#/agents">
+        <a className={'stat-card' + ratioStatus(availableSites, shownSites.length)} href="#/agents">
           <span className="stat-label">Sites available</span>
           <strong>
             {availableSites}
-            <small> / {matrix.sites.length}</small>
+            <small> / {shownSites.length}</small>
           </strong>
           <span className="stat-context">
             <span className="stat-badge">
-              {matrix.sites.length === 0
+              {shownSites.length === 0
                 ? 'No sites'
-                : availableSites === matrix.sites.length
+                : availableSites === shownSites.length
                   ? 'All live'
-                  : `${matrix.sites.length - availableSites} unavailable`}
+                  : `${shownSites.length - availableSites} unavailable`}
             </span>
             Sites with a live agent
           </span>
@@ -275,15 +287,19 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
       <div className="overview-main-row">
         <ConnectivityCard
           matrix={matrix}
+          sites={shownSites}
           cells={shownCells}
-          networks={networks}
-          network={netFilter}
-          onNetworkChange={setNetFilter}
           thresholds={resolveThresholds}
           mode={connMode}
           onModeChange={setConnMode}
         />
-        <FleetAgentsCard agents={agents.agents} health={health} />
+        <FleetAgentsCard
+          agents={shownAgents}
+          health={health}
+          // Derived from the whole fleet, not the filtered subset, so the
+          // chips don't appear and disappear as the filter changes.
+          multiNetwork={new Set(agents.agents.map((a) => a.network)).size > 1}
+        />
       </div>
     </>
   )
