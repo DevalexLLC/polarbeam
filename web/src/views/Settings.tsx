@@ -9,6 +9,7 @@ import EnrollmentPanel from '../components/EnrollmentPanel'
 import MeshesPanel from '../components/MeshesPanel'
 import NetworksPanel from '../components/NetworksPanel'
 import OIDCSettingsPanel from '../components/OIDCSettingsPanel'
+import NetworkThresholdsPanel from '../components/NetworkThresholdsPanel'
 import PathThresholdsPanel from '../components/PathThresholdsPanel'
 import ProbesPanel from '../components/ProbesPanel'
 import SitesPanel from '../components/SitesPanel'
@@ -159,6 +160,17 @@ export default function Settings({
               variant="page"
             />
           </section>
+          {/* Ordered as the resolver folds them: global, then per-network,
+            then per-pair — most general first, so the page reads the way a
+            severity is actually decided. */}
+          <NetworkThresholdsPanel
+            settings={settings}
+            caps={caps}
+            canWrite={caps.networkWrite}
+            plane={ownedPlane}
+            onChanged={load}
+            onAuthError={onAuthError}
+          />
           <PathThresholdsPanel
             settings={settings}
             caps={caps}
