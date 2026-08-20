@@ -55,7 +55,7 @@ func TestTargetEndpoints(t *testing.T) {
 	a2 := seedAgent(t, ctx, s, "site-a", "a2")
 	b1 := seedAgent(t, ctx, s, "site-b", "b1")
 
-	ext, err := s.UpsertExternalTarget(ctx, "svc", "svc.example", 443, "https://svc.example/")
+	ext, err := s.UpsertExternalTarget(ctx, "svc", "svc.example", 443, "https://svc.example/", nil, nil)
 	if err != nil {
 		t.Fatalf("UpsertExternalTarget: %v", err)
 	}
@@ -214,22 +214,22 @@ func TestTargetProbeHealth(t *testing.T) {
 	a1 := seedAgent(t, ctx, s, "site-a", "a1")
 	b1 := seedAgent(t, ctx, s, "site-b", "b1")
 
-	target, err := s.UpsertExternalTarget(ctx, "svc", "svc.example", 443, "")
+	target, err := s.UpsertExternalTarget(ctx, "svc", "svc.example", 443, "", nil, nil)
 	if err != nil {
 		t.Fatalf("UpsertExternalTarget: %v", err)
 	}
 	settings := store.ProbeSettings{ProbeType: 2, Interval: time.Minute, Timeout: 5 * time.Second, Params: map[string]string{}}
 	defaultNet := networkIDByName(t, ctx, s, "default")
-	enabledProbe, err := s.AddDirectProbe(ctx, "site-a", "svc", defaultNet, settings, true, "test")
+	enabledProbe, err := s.AddDirectProbe(ctx, "site-a", "svc", defaultNet, settings, true, "test", nil)
 	if err != nil {
 		t.Fatalf("AddDirectProbe enabled: %v", err)
 	}
-	disabledProbe, err := s.AddDirectProbe(ctx, "site-b", "svc", defaultNet, settings, false, "test")
+	disabledProbe, err := s.AddDirectProbe(ctx, "site-b", "svc", defaultNet, settings, false, "test", nil)
 	if err != nil {
 		t.Fatalf("AddDirectProbe disabled: %v", err)
 	}
 	// site-b direct probe for the silent-series case, enabled but no results.
-	silentProbe, err := s.AddDirectProbe(ctx, "site-b", "svc", defaultNet, settings, true, "test")
+	silentProbe, err := s.AddDirectProbe(ctx, "site-b", "svc", defaultNet, settings, true, "test", nil)
 	if err != nil {
 		t.Fatalf("AddDirectProbe silent: %v", err)
 	}
@@ -332,12 +332,12 @@ func TestAgentProbeHealthTargetID(t *testing.T) {
 	ctx, s := newStore(t)
 	a1 := seedAgent(t, ctx, s, "site-a", "a1")
 
-	target, err := s.UpsertExternalTarget(ctx, "svc", "svc.example", 443, "")
+	target, err := s.UpsertExternalTarget(ctx, "svc", "svc.example", 443, "", nil, nil)
 	if err != nil {
 		t.Fatalf("UpsertExternalTarget: %v", err)
 	}
 	settings := store.ProbeSettings{ProbeType: 2, Interval: time.Minute, Timeout: 5 * time.Second, Params: map[string]string{}}
-	probeLive, err := s.AddDirectProbe(ctx, "site-a", "svc", networkIDByName(t, ctx, s, "default"), settings, true, "test")
+	probeLive, err := s.AddDirectProbe(ctx, "site-a", "svc", networkIDByName(t, ctx, s, "default"), settings, true, "test", nil)
 	if err != nil {
 		t.Fatalf("AddDirectProbe: %v", err)
 	}

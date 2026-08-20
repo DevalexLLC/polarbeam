@@ -1,0 +1,79 @@
+{
+  "_comment": [
+    "Shared case table for the four-layer threshold merge, read by BOTH",
+    "resolvers so they cannot drift: internal/server/thresholds (Go, via",
+    "merge_parity_test.go) and web/src/severity.ts (TypeScript, via",
+    "web/tools/check-threshold-merge.ts, run by `make web` and the web-lint",
+    "CI job).",
+    "",
+    "Layers are named for the schema level they come from and are applied",
+    "most specific first: pair_network -> pair_all -> network -> global.",
+    "null for a whole layer means the row does not exist; null for one",
+    "metric means that field inherits the next layer out. Add a case here",
+    "and BOTH sides must satisfy it — that is the point of the file."
+  ],
+  "global": {
+    "latency_warn_us": 100000,
+    "latency_crit_us": 250000,
+    "loss_warn_pct": 1,
+    "loss_crit_pct": 5
+  },
+  "cases": [
+    {
+      "name": "no layers at all resolves to the global row",
+      "pair_network": null,
+      "pair_all": null,
+      "network": null,
+      "expect": { "latency_warn_us": 100000, "latency_crit_us": 250000, "loss_warn_pct": 1, "loss_crit_pct": 5 }
+    },
+    {
+      "name": "network default alone overlays the global row",
+      "pair_network": null,
+      "pair_all": null,
+      "network": { "latency_warn_us": 200000, "latency_crit_us": 400000, "loss_warn_pct": null, "loss_crit_pct": null },
+      "expect": { "latency_warn_us": 200000, "latency_crit_us": 400000, "loss_warn_pct": 1, "loss_crit_pct": 5 }
+    },
+    {
+      "name": "all-planes pair row beats the network default",
+      "pair_network": null,
+      "pair_all": { "latency_warn_us": 50000, "latency_crit_us": null, "loss_warn_pct": null, "loss_crit_pct": null },
+      "network": { "latency_warn_us": 200000, "latency_crit_us": 400000, "loss_warn_pct": null, "loss_crit_pct": null },
+      "expect": { "latency_warn_us": 50000, "latency_crit_us": 400000, "loss_warn_pct": 1, "loss_crit_pct": 5 }
+    },
+    {
+      "name": "plane-qualified pair row beats every other layer",
+      "pair_network": { "latency_warn_us": 10000, "latency_crit_us": null, "loss_warn_pct": null, "loss_crit_pct": null },
+      "pair_all": { "latency_warn_us": 50000, "latency_crit_us": 60000, "loss_warn_pct": null, "loss_crit_pct": null },
+      "network": { "latency_warn_us": 200000, "latency_crit_us": 400000, "loss_warn_pct": 2, "loss_crit_pct": null },
+      "expect": { "latency_warn_us": 10000, "latency_crit_us": 60000, "loss_warn_pct": 2, "loss_crit_pct": 5 }
+    },
+    {
+      "name": "every metric resolves from a different layer",
+      "pair_network": { "latency_warn_us": 1000, "latency_crit_us": null, "loss_warn_pct": null, "loss_crit_pct": null },
+      "pair_all": { "latency_warn_us": null, "latency_crit_us": 2000, "loss_warn_pct": null, "loss_crit_pct": null },
+      "network": { "latency_warn_us": null, "latency_crit_us": null, "loss_warn_pct": 3, "loss_crit_pct": null },
+      "expect": { "latency_warn_us": 1000, "latency_crit_us": 2000, "loss_warn_pct": 3, "loss_crit_pct": 5 }
+    },
+    {
+      "name": "a lower layer never overwrites a higher one that set the field",
+      "pair_network": { "latency_warn_us": 1000, "latency_crit_us": 2000, "loss_warn_pct": 3, "loss_crit_pct": 4 },
+      "pair_all": { "latency_warn_us": 9000, "latency_crit_us": 9000, "loss_warn_pct": 9, "loss_crit_pct": 9 },
+      "network": { "latency_warn_us": 8000, "latency_crit_us": 8000, "loss_warn_pct": 8, "loss_crit_pct": 8 },
+      "expect": { "latency_warn_us": 1000, "latency_crit_us": 2000, "loss_warn_pct": 3, "loss_crit_pct": 4 }
+    },
+    {
+      "name": "zero is a real value, not an absent one",
+      "pair_network": null,
+      "pair_all": { "latency_warn_us": null, "latency_crit_us": null, "loss_warn_pct": 0, "loss_crit_pct": null },
+      "network": { "latency_warn_us": null, "latency_crit_us": null, "loss_warn_pct": 7, "loss_crit_pct": null },
+      "expect": { "latency_warn_us": 100000, "latency_crit_us": 250000, "loss_warn_pct": 0, "loss_crit_pct": 5 }
+    },
+    {
+      "name": "external target: no pair layers, plane default still applies",
+      "pair_network": null,
+      "pair_all": null,
+      "network": { "latency_warn_us": null, "latency_crit_us": 900000, "loss_warn_pct": null, "loss_crit_pct": 20 },
+      "expect": { "latency_warn_us": 100000, "latency_crit_us": 900000, "loss_warn_pct": 1, "loss_crit_pct": 20 }
+    }
+  ]
+}

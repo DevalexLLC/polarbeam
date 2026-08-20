@@ -294,10 +294,15 @@ export default function PairDetail({
     return () => clearInterval(id)
   }, [load])
 
-  // Effective thresholds for this pair (override merged over global) —
-  // they only surface here as the charts' warn/crit reference lines;
-  // viewing and editing overrides lives on Settings → Thresholds.
-  const effective = useMemo(() => buildThresholdResolver(settings)(a, b), [settings, a, b])
+  // Effective thresholds for this pair, resolved on the plane in view: the
+  // top-bar filter when one is set, otherwise the pair's own plane when it
+  // has exactly one. A pair spanning planes with no filter has no single
+  // answer, so it falls back to the all-planes and global layers — the same
+  // fold the charts above it already are. These only surface as the charts'
+  // warn/crit reference lines; editing overrides lives on Settings →
+  // Thresholds.
+  const plane = net !== '' ? net : pair?.networks.length === 1 ? pair.networks[0] : ''
+  const effective = useMemo(() => buildThresholdResolver(settings)(a, b, plane), [settings, a, b, plane])
 
   // Kept current every render; the chart plugin reads it at draw time.
   const thresholdLevels = useRef<ThresholdLevels>({ warn: null, crit: null, warnColor: '', critColor: '' })

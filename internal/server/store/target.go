@@ -105,28 +105,40 @@ func stageTable(source Source) string {
 // lets the hypertable and cagg scans hit the (agent_id, target_id, ...)
 // indexes with no joins — the SiteEndpoints design. networks is the
 // caller's network scope (nil = unfiltered): sources are filtered to
-// allowed planes, and an agent-kind target whose owning agent sits on a
-// foreign plane resolves to (nil, nil) — byte-identical to an unknown id.
-// External targets stay visible to every scope (operator-published probe
-// destinations carry no plane yet).
+// allowed planes, and a target the caller may not see resolves to
+// (nil, nil) — byte-identical to an unknown id, so httpapi's 404 cannot be
+// used to confirm that a guessed UUID exists.
+//
+// Both target kinds are checked, by different rules. An agent-kind target's
+// plane is its agent's. An external target's is its own network_id (0019),
+// where NULL means global — published by the operator for every plane to
+// probe, hence visible to all. Before 0019 external targets had no plane at
+// all and this scoped only the agent kind; leaving it that way would hand a
+// scoped user a co-tenant's target name, address, port, and URL for the
+// price of guessing its UUID.
 func (s *Store) TargetEndpoints(ctx context.Context, targetID uuid.UUID, networks []uuid.UUID) (*TargetEndpoints, error) {
 	var ep TargetEndpoints
-	var dstNetworkID *uuid.UUID
+	var dstNetworkID, ownNetworkID *uuid.UUID
 	err := s.pool.QueryRow(ctx,
-		`SELECT t.id, t.kind, t.name, t.address, t.port, t.url, t.agent_id, ds.name, da.network_id
+		`SELECT t.id, t.kind, t.name, t.address, t.port, t.url, t.agent_id, ds.name,
+		        da.network_id, t.network_id
 		   FROM targets t
 		   LEFT JOIN agents da ON da.id = t.agent_id
 		   LEFT JOIN sites ds ON ds.id = da.site_id
 		  WHERE t.id = $1`, targetID).
-		Scan(&ep.ID, &ep.Kind, &ep.Name, &ep.Address, &ep.Port, &ep.URL, &ep.AgentID, &ep.DstSite, &dstNetworkID)
+		Scan(&ep.ID, &ep.Kind, &ep.Name, &ep.Address, &ep.Port, &ep.URL, &ep.AgentID, &ep.DstSite,
+			&dstNetworkID, &ownNetworkID)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("target %s: %w", targetID, err)
 	}
-	if networks != nil && ep.AgentID != nil &&
-		(dstNetworkID == nil || !slices.Contains(networks, *dstNetworkID)) {
+	if ep.AgentID != nil {
+		if networks != nil && (dstNetworkID == nil || !slices.Contains(networks, *dstNetworkID)) {
+			return nil, nil
+		}
+	} else if !targetVisible(ownNetworkID, networks) {
 		return nil, nil
 	}
 	rows, err := s.pool.Query(ctx,

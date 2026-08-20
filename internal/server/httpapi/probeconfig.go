@@ -1,14 +1,19 @@
 // Probe-workload management: /api/v1/config/* — the HTTP face of the same
-// store mutations the admin CLI performs. Reads are any-session; writes are
-// admin-only. Changes propagate to agents without further action: the gRPC
-// StreamConfig tick rebuilds snapshots from the DB every ~30 s.
+// store mutations the admin CLI performs. Reads are any-session. Writes are
+// network-scoped: a global admin writes any plane, a network_admin only its
+// own, and every handler here proves the touched resource's plane before it
+// mutates (see requireNetworkScope in httpapi.go). Changes propagate to
+// agents without further action: the gRPC StreamConfig tick rebuilds
+// snapshots from the DB every ~30 s.
 package httpapi
 
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -97,12 +102,16 @@ func (a *api) handleProbeTypes(w http.ResponseWriter, r *http.Request) {
 // --- targets ---
 
 type targetJSON struct {
-	ID         string    `json:"id"`
-	Kind       string    `json:"kind"`
-	Name       string    `json:"name"`
-	Address    string    `json:"address,omitempty"`
-	Port       int32     `json:"port,omitempty"`
-	URL        string    `json:"url,omitempty"`
+	ID      string `json:"id"`
+	Kind    string `json:"kind"`
+	Name    string `json:"name"`
+	Address string `json:"address,omitempty"`
+	Port    int32  `json:"port,omitempty"`
+	URL     string `json:"url,omitempty"`
+	// Network is the owning plane, "" for a global (operator-owned) target
+	// every plane may probe. Always present so the SPA can tell "global,
+	// read-only to me" from "mine".
+	Network    string    `json:"network"`
 	ProbeCount int64     `json:"probe_count"`
 	CreatedAt  time.Time `json:"created_at"`
 }
@@ -117,7 +126,8 @@ func (a *api) handleTargetsGet(w http.ResponseWriter, r *http.Request) {
 	for _, t := range targets {
 		out = append(out, targetJSON{
 			ID: t.ID.String(), Kind: t.Kind, Name: t.Name, Address: t.Address,
-			Port: t.Port, URL: t.URL, ProbeCount: t.ProbeCount, CreatedAt: t.CreatedAt,
+			Port: t.Port, URL: t.URL, Network: t.Network,
+			ProbeCount: t.ProbeCount, CreatedAt: t.CreatedAt,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"targets": out})
@@ -131,6 +141,12 @@ type targetRequest struct {
 	Address string `json:"address"`
 	Port    int32  `json:"port"`
 	URL     string `json:"url"`
+	// Network claims the target for a plane. A global admin may omit it,
+	// which creates the operator-owned target every plane can probe; a
+	// tenant admin MUST name one of its own planes — it has no way to
+	// express "global", and silently defaulting would hand it a write on a
+	// row every other tenant reads.
+	Network string `json:"network"`
 }
 
 func (a *api) handleTargetPost(w http.ResponseWriter, r *http.Request) {
@@ -143,7 +159,21 @@ func (a *api) handleTargetPost(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, strings.Join(problems, "; "))
 		return
 	}
-	id, err := a.db.UpsertExternalTarget(r.Context(), in.Name, in.Address, in.Port, in.URL)
+	var networkID *uuid.UUID
+	switch {
+	case in.Network != "":
+		id, ok := a.requireNetworkScopeName(w, r, in.Network)
+		if !ok {
+			return
+		}
+		networkID = &id
+	case callerIsScoped(r.Context()):
+		writeError(w, http.StatusBadRequest,
+			"network is required: a network-scoped role cannot create the global targets that every plane shares")
+		return
+	}
+	id, err := a.db.UpsertExternalTarget(r.Context(), in.Name, in.Address, in.Port, in.URL,
+		networkID, scopeIDs(r.Context()))
 	if err != nil {
 		writeStoreError(w, "upsert target", err)
 		return
@@ -152,7 +182,9 @@ func (a *api) handleTargetPost(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) handleTargetDelete(w http.ResponseWriter, r *http.Request) {
-	if err := a.db.DeleteTarget(r.Context(), r.PathValue("name")); err != nil {
+	// The store refuses out-of-scope rows with ErrNotFound, so a tenant
+	// cannot tell a co-tenant's target from one that never existed.
+	if err := a.db.DeleteTarget(r.Context(), r.PathValue("name"), scopeIDs(r.Context())); err != nil {
 		writeStoreError(w, "delete target", err)
 		return
 	}
@@ -201,14 +233,24 @@ func (a *api) handleMeshPost(w http.ResponseWriter, r *http.Request) {
 	// An omitted network expresses no opinion (new meshes land on default,
 	// existing ones keep theirs); a named one must exist and must match an
 	// existing mesh's binding — the store refuses a mismatch.
+	//
+	// A scoped caller may not express "no opinion": the default it would
+	// land on is the operator's plane. It must name one of its own, and
+	// requireNetworkScopeName refuses anything else as a 404. That also
+	// covers the re-upsert path — a tenant naming its own plane on a mesh
+	// bound elsewhere gets the store's plain conflict, never a write.
 	var networkID *uuid.UUID
-	if in.Network != "" {
-		id, err := a.db.NetworkIDByName(r.Context(), in.Network)
-		if err != nil {
-			writeStoreError(w, "resolve network", err)
+	switch {
+	case in.Network != "":
+		id, ok := a.requireNetworkScopeName(w, r, in.Network)
+		if !ok {
 			return
 		}
 		networkID = &id
+	case callerIsScoped(r.Context()):
+		writeError(w, http.StatusBadRequest,
+			"network is required: a network-scoped role cannot create meshes on the default network")
+		return
 	}
 	id, err := a.db.UpsertMeshGroup(r.Context(), in.Name, networkID)
 	if err != nil {
@@ -218,8 +260,19 @@ func (a *api) handleMeshPost(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"id": id.String()})
 }
 
+// Mesh writes authorize inside the store, under the mesh row lock (see
+// lockMesh): mesh_groups.network_id is NOT NULL, so every mesh has exactly
+// one plane, and membership and deletion both authorize through it rather
+// than through the member sites, which are shared operator vocabulary.
+//
+// Deliberately NOT a handler-side name→network pre-check. Mesh names are
+// globally unique but reusable, so a check here could be invalidated by a
+// delete-and-recreate on another plane before the store re-resolved the
+// name. Passing the scope down means the row that gets mutated is the row
+// that got checked.
+
 func (a *api) handleMeshDelete(w http.ResponseWriter, r *http.Request) {
-	deleted, err := a.db.DeleteMeshGroup(r.Context(), r.PathValue("name"))
+	deleted, err := a.db.DeleteMeshGroup(r.Context(), r.PathValue("name"), scopeIDs(r.Context()))
 	if err != nil {
 		writeStoreError(w, "delete mesh", err)
 		return
@@ -230,7 +283,10 @@ func (a *api) handleMeshDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) handleMeshMemberPost(w http.ResponseWriter, r *http.Request) {
-	if err := a.db.AddMeshMember(r.Context(), r.PathValue("name"), r.PathValue("site")); err != nil {
+	// Authorization is the mesh's plane, not the site's: meshexpand pairs
+	// only same-plane agents, so adding a shared site to a tenant's mesh
+	// grants that tenant nothing it could not already measure.
+	if err := a.db.AddMeshMember(r.Context(), r.PathValue("name"), r.PathValue("site"), scopeIDs(r.Context())); err != nil {
 		writeStoreError(w, "add mesh member", err)
 		return
 	}
@@ -238,7 +294,7 @@ func (a *api) handleMeshMemberPost(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) handleMeshMemberDelete(w http.ResponseWriter, r *http.Request) {
-	if err := a.db.RemoveMeshMember(r.Context(), r.PathValue("name"), r.PathValue("site")); err != nil {
+	if err := a.db.RemoveMeshMember(r.Context(), r.PathValue("name"), r.PathValue("site"), scopeIDs(r.Context())); err != nil {
 		writeStoreError(w, "remove mesh member", err)
 		return
 	}
@@ -370,20 +426,34 @@ func (a *api) handleProbePost(w http.ResponseWriter, r *http.Request) {
 	updatedBy := sessionFrom(r.Context()).Username
 	var id uuid.UUID
 	if meshMode {
-		id, err = a.db.AddMeshProbe(r.Context(), in.Mesh, in.settings(probeType), enabled, updatedBy)
+		// A mesh probe inherits the mesh's plane, so the mesh IS the
+		// authorization subject — proved in the store under the row lock.
+		id, err = a.db.AddMeshProbe(r.Context(), in.Mesh, in.settings(probeType), enabled, updatedBy,
+			scopeIDs(r.Context()))
 	} else {
 		// Empty means the default network; anything else must already
 		// exist — a typo'd network is a 404, never silently defaulted.
+		// A scoped caller gets no default: 'default' is the operator's
+		// plane unless it happens to be in scope, so it must say which.
 		netName := in.Network
 		if netName == "" {
+			if callerIsScoped(r.Context()) {
+				writeError(w, http.StatusBadRequest,
+					"network is required: a network-scoped role cannot create probes on the default network")
+				return
+			}
 			netName = "default"
 		}
-		networkID, nerr := a.db.NetworkIDByName(r.Context(), netName)
-		if nerr != nil {
-			writeStoreError(w, "resolve network", nerr)
+		networkID, ok := a.requireNetworkScopeName(w, r, netName)
+		if !ok {
 			return
 		}
-		id, err = a.db.AddDirectProbe(r.Context(), in.Site, in.Target, networkID, in.settings(probeType), enabled, updatedBy)
+		// The target may be global (operator-published) or owned by a plane
+		// in scope — AddDirectProbe enforces that against the caller's
+		// scope, answering 404 for a co-tenant's target exactly as it does
+		// for a name that does not exist.
+		id, err = a.db.AddDirectProbe(r.Context(), in.Site, in.Target, networkID,
+			in.settings(probeType), enabled, updatedBy, scopeIDs(r.Context()))
 	}
 	if err != nil {
 		writeStoreError(w, "add probe", err)
@@ -417,6 +487,13 @@ func (a *api) handleProbePut(w http.ResponseWriter, r *http.Request) {
 	current, err := a.db.GetProbeConfig(r.Context(), id)
 	if err != nil {
 		writeStoreError(w, "get probe", err)
+		return
+	}
+	// GetProbeConfig is deliberately scope-blind (ingest and the CLI use it
+	// too), so the scope proof happens here, on the row it returned.
+	// ProbeConfigInfo.Network already resolves a mesh template's plane to
+	// the mesh's, so direct and mesh rows authorize identically.
+	if !a.probeInScope(w, r, current) {
 		return
 	}
 
@@ -474,10 +551,33 @@ func (a *api) handleProbePut(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// probeInScope proves the caller may write a probe row, answering the
+// request itself when not. The refusal is the same 404 an unknown probe id
+// produces, so a tenant cannot confirm that a UUID it guessed belongs to
+// someone else's plane.
+func (a *api) probeInScope(w http.ResponseWriter, r *http.Request, p *store.ProbeConfigInfo) bool {
+	names := scopeNames(r.Context())
+	if names == nil || slices.Contains(names, p.Network) {
+		return true
+	}
+	writeError(w, http.StatusNotFound, fmt.Sprintf("probe config %s does not exist", p.ID))
+	return false
+}
+
 func (a *api) handleProbeDelete(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "probe id must be a UUID")
+		return
+	}
+	// Delete had no pre-fetch before tenancy; it needs one now, because the
+	// row is the only place its plane is recorded.
+	current, err := a.db.GetProbeConfig(r.Context(), id)
+	if err != nil {
+		writeStoreError(w, "get probe", err)
+		return
+	}
+	if !a.probeInScope(w, r, current) {
 		return
 	}
 	if err := a.db.DeleteProbeConfig(r.Context(), id); err != nil {

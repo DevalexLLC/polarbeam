@@ -159,7 +159,7 @@ type joinTokenJSON struct {
 }
 
 func (a *api) handleTokensGet(w http.ResponseWriter, r *http.Request) {
-	tokens, err := a.db.ListJoinTokens(r.Context())
+	tokens, err := a.db.ListJoinTokens(r.Context(), scopeIDs(r.Context()))
 	if err != nil {
 		internalError(w, "list join tokens", err)
 		return
@@ -212,13 +212,22 @@ func (a *api) handleTokenPost(w http.ResponseWriter, r *http.Request) {
 	// Empty means the default network; anything else must already exist —
 	// a typo'd network is a 404, never silently defaulted (the enrolling
 	// agent's plane is a trust decision).
+	//
+	// A scoped caller has no default to fall back on: enrollment inherits
+	// the token's network, so minting one on 'default' would drop an agent
+	// onto the operator's plane. It must name a plane it owns, and
+	// requireNetworkScopeName refuses the rest as a 404.
 	netName := in.Network
 	if netName == "" {
+		if callerIsScoped(r.Context()) {
+			writeError(w, http.StatusBadRequest,
+				"network is required: a network-scoped role cannot mint tokens for the default network")
+			return
+		}
 		netName = "default"
 	}
-	networkID, err := a.db.NetworkIDByName(r.Context(), netName)
-	if err != nil {
-		writeStoreError(w, "resolve network", err)
+	networkID, ok := a.requireNetworkScopeName(w, r, netName)
+	if !ok {
 		return
 	}
 	ttl := time.Duration(in.TTLMS) * time.Millisecond
@@ -246,7 +255,9 @@ func (a *api) handleTokenDelete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "token id must be a UUID")
 		return
 	}
-	if err := a.db.DeleteJoinToken(r.Context(), id); err != nil {
+	// The store refuses out-of-scope tokens with ErrNotFound, so a
+	// co-tenant's pending enrollment is not discoverable by id.
+	if err := a.db.DeleteJoinToken(r.Context(), id, scopeIDs(r.Context())); err != nil {
 		writeStoreError(w, "delete join token", err)
 		return
 	}

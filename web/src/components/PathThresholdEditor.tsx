@@ -92,13 +92,19 @@ function validate(d: Draft, global: ThresholdSettings): { errors: string[]; body
   }
 }
 
-export function pathThresholdURL(a: string, b: string): string {
-  return `/api/v1/settings/path-thresholds/${encodeURIComponent(a)}/${encodeURIComponent(b)}`
+// The plane rides as ?network=; '' addresses the all-planes row that
+// predates tenancy. Omitting it on a plane-qualified row would silently
+// edit (or delete) the all-planes row instead — a different row that grades
+// every other tenant.
+export function pathThresholdURL(a: string, b: string, network = ''): string {
+  const base = `/api/v1/settings/path-thresholds/${encodeURIComponent(a)}/${encodeURIComponent(b)}`
+  return network === '' ? base : `${base}?network=${encodeURIComponent(network)}`
 }
 
 export default function PathThresholdEditor({
   a,
   b,
+  network = '',
   override,
   global,
   isAdmin,
@@ -107,6 +113,9 @@ export default function PathThresholdEditor({
 }: {
   a: string
   b: string
+  // The plane this row belongs to; '' is the all-planes row. The add flow
+  // leaves it empty, which is what a global admin has always created.
+  network?: string
   override: PathThresholdOverride | null
   global: ThresholdSettings
   isAdmin: boolean
@@ -129,7 +138,7 @@ export default function PathThresholdEditor({
     try {
       if (allEmpty) {
         // Every field cleared on an existing override = remove it.
-        await apiDelete(pathThresholdURL(a, b))
+        await apiDelete(pathThresholdURL(a, b, network))
       } else {
         const { errors: errs, body } = validate(current, global)
         setErrors(errs)
@@ -137,7 +146,7 @@ export default function PathThresholdEditor({
           setSaving(false)
           return
         }
-        await apiPut(pathThresholdURL(a, b), body)
+        await apiPut(pathThresholdURL(a, b, network), body)
       }
       setErrors([])
       // Clear the draft so the form resumes following server state (same

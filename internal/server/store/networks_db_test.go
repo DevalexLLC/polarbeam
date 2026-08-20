@@ -128,18 +128,18 @@ func buildNetFixture(t *testing.T, ctx context.Context, s *store.Store) netFixtu
 		t.Fatalf("UpsertMeshGroup: %v", err)
 	}
 	for _, site := range []string{"site-a", "site-b"} {
-		if err := s.AddMeshMember(ctx, "m1", site); err != nil {
+		if err := s.AddMeshMember(ctx, "m1", site, nil); err != nil {
 			t.Fatalf("AddMeshMember %s: %v", site, err)
 		}
 	}
-	if f.tmplID, err = s.AddMeshProbe(ctx, "m1", netProbeSettings, true, "test"); err != nil {
+	if f.tmplID, err = s.AddMeshProbe(ctx, "m1", netProbeSettings, true, "test", nil); err != nil {
 		t.Fatalf("AddMeshProbe: %v", err)
 	}
 
-	if _, err := s.UpsertExternalTarget(ctx, "svc", "203.0.113.7", 443, ""); err != nil {
+	if _, err := s.UpsertExternalTarget(ctx, "svc", "203.0.113.7", 443, "", nil, nil); err != nil {
 		t.Fatalf("UpsertExternalTarget: %v", err)
 	}
-	if f.directID, err = s.AddDirectProbe(ctx, "site-a", "svc", f.defaultNet, netProbeSettings, true, "test"); err != nil {
+	if f.directID, err = s.AddDirectProbe(ctx, "site-a", "svc", f.defaultNet, netProbeSettings, true, "test", nil); err != nil {
 		t.Fatalf("AddDirectProbe: %v", err)
 	}
 	return f
@@ -203,7 +203,7 @@ func TestEnrollAgentInheritsTokenNetwork(t *testing.T) {
 	if tokenNet != mgmt {
 		t.Errorf("token network = %s, want mgmt %s", tokenNet, mgmt)
 	}
-	listed, err := s.ListJoinTokens(ctx)
+	listed, err := s.ListJoinTokens(ctx, nil)
 	if err != nil {
 		t.Fatalf("ListJoinTokens: %v", err)
 	}
@@ -319,7 +319,7 @@ func TestExpectedPairsNetworkScoped(t *testing.T) {
 
 	// site-c has agents, but none on the mesh's network: its pairs vanish.
 	enrollNetAgent(t, ctx, s, "site-c", "c-mgmt", &f.mgmt)
-	if err := s.AddMeshMember(ctx, "m1", "site-c"); err != nil {
+	if err := s.AddMeshMember(ctx, "m1", "site-c", nil); err != nil {
 		t.Fatalf("AddMeshMember site-c: %v", err)
 	}
 	// site-d has no agents at all: today's stale-cell behavior is preserved,
@@ -327,7 +327,7 @@ func TestExpectedPairsNetworkScoped(t *testing.T) {
 	if _, err := s.EnsureSite(ctx, "site-d"); err != nil {
 		t.Fatalf("EnsureSite site-d: %v", err)
 	}
-	if err := s.AddMeshMember(ctx, "m1", "site-d"); err != nil {
+	if err := s.AddMeshMember(ctx, "m1", "site-d", nil); err != nil {
 		t.Fatalf("AddMeshMember site-d: %v", err)
 	}
 
@@ -446,7 +446,7 @@ func TestDeleteMeshGroupCleansOnNetworkSeries(t *testing.T) {
 	seedSeriesState(t, ctx, s, f.aDef, idAB, f.tBDef, 1)
 	seedSeriesState(t, ctx, s, f.bDef, idBA, f.tADef, 1)
 
-	if _, err := s.DeleteMeshGroup(ctx, "m1"); err != nil {
+	if _, err := s.DeleteMeshGroup(ctx, "m1", nil); err != nil {
 		t.Fatalf("DeleteMeshGroup: %v", err)
 	}
 	if seriesExists(t, ctx, s, idAB) || seriesExists(t, ctx, s, idBA) {
@@ -464,7 +464,7 @@ func TestRemoveMeshMemberRetiresOnNetworkSeries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SiteIDByName: %v", err)
 	}
-	if err := s.AddMeshMember(ctx, "m1", "site-c"); err != nil {
+	if err := s.AddMeshMember(ctx, "m1", "site-c", nil); err != nil {
 		t.Fatalf("AddMeshMember site-c: %v", err)
 	}
 
@@ -483,7 +483,7 @@ func TestRemoveMeshMemberRetiresOnNetworkSeries(t *testing.T) {
 		seedSeriesState(t, ctx, s, sr.agent, sr.probe, sr.target, 1)
 	}
 
-	if err := s.RemoveMeshMember(ctx, "m1", "site-b"); err != nil {
+	if err := s.RemoveMeshMember(ctx, "m1", "site-b", nil); err != nil {
 		t.Fatalf("RemoveMeshMember: %v", err)
 	}
 	// site-b's outbound and inbound series retire; a↔c survives.
@@ -688,10 +688,10 @@ func TestDeleteNetwork(t *testing.T) {
 
 	// A direct probe config blocks the delete.
 	probeNet := createNetwork(t, ctx, s, "probenet")
-	if _, err := s.UpsertExternalTarget(ctx, "svc-del", "203.0.113.9", 443, ""); err != nil {
+	if _, err := s.UpsertExternalTarget(ctx, "svc-del", "203.0.113.9", 443, "", nil, nil); err != nil {
 		t.Fatalf("UpsertExternalTarget: %v", err)
 	}
-	if _, err := s.AddDirectProbe(ctx, "site-a", "svc-del", probeNet, netProbeSettings, true, "test"); err != nil {
+	if _, err := s.AddDirectProbe(ctx, "site-a", "svc-del", probeNet, netProbeSettings, true, "test", nil); err != nil {
 		t.Fatalf("AddDirectProbe: %v", err)
 	}
 	if _, err := s.DeleteNetwork(ctx, "probenet"); !errors.Is(err, store.ErrConflict) {

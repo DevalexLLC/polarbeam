@@ -22,11 +22,14 @@ function validate(d: Draft): string[] {
 // Unused join tokens are swept with the network, so they never block a
 // delete — everything else must be detached first.
 function refCount(n: NetworkConfig): number {
-  return n.agent_count + n.mesh_count + n.probe_count
+  return n.agent_count + n.mesh_count + n.probe_count + n.target_count
 }
 
 function refSummary(n: NetworkConfig): string {
-  return `${n.agent_count} agent(s), ${n.mesh_count} mesh(es), ${n.probe_count} probe config(s)`
+  return (
+    `${n.agent_count} agent(s), ${n.mesh_count} mesh(es), ` +
+    `${n.probe_count} probe config(s), ${n.target_count} target(s)`
+  )
 }
 
 export default function NetworksPanel({

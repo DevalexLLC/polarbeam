@@ -185,15 +185,31 @@ export interface ThresholdSettings {
   loss_crit_pct: number
 }
 
-// One per-site-pair override row: the unordered pair a/b (lexically
-// sorted by the server), each field null = inherit the global value.
-export interface PathThresholdOverride {
-  a: string
-  b: string
+// The nullable metric tuple every override layer shares: null = inherit the
+// next layer out.
+export interface ThresholdOverrideFields {
   latency_warn_us: number | null
   latency_crit_us: number | null
   loss_warn_pct: number | null
   loss_crit_pct: number | null
+}
+
+// One per-site-pair override row: the unordered pair a/b (lexically sorted
+// by the server) on one network. `network` is '' for the all-planes row that
+// predates tenancy and still applies to every plane.
+export interface PathThresholdOverride extends ThresholdOverrideFields {
+  a: string
+  b: string
+  network: string
+  updated_at: string
+  updated_by: string
+}
+
+// One per-network default: the layer between the global row and the pair
+// overrides, so a tenant plane can state its own idea of "normal" without
+// touching the deployment-wide settings.
+export interface NetworkThreshold extends ThresholdOverrideFields {
+  network: string
   updated_at: string
   updated_by: string
 }
@@ -201,10 +217,11 @@ export interface PathThresholdOverride {
 export interface SettingsResponse {
   thresholds: ThresholdSettings
   overrides: PathThresholdOverride[]
+  network_defaults: NetworkThreshold[]
   updated_at: string
   updated_by: string
-  // Advisory, PUT only: overrides whose effective values the new globals
-  // left inconsistent (never blocks the write).
+  // Advisory, PUT only: layers whose effective values the new globals left
+  // inconsistent (never blocks the write).
   warnings?: string[]
 }
 
@@ -524,6 +541,10 @@ export interface NetworkConfig {
   token_count: number
   mesh_count: number
   probe_count: number
+  // Tenant-owned external targets. Like the other counts (token_count
+  // excepted — unused tokens are swept with the network), a non-zero value
+  // blocks DELETE.
+  target_count: number
 }
 
 export interface NetworksConfigResponse {

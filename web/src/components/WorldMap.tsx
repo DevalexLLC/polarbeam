@@ -3,7 +3,14 @@ import { MAP_DOTS, MAP_VIEW_H, MAP_VIEW_W } from '../assets/mapGeo'
 import { fmtLatency } from '../format'
 import { projectMap } from '../geo'
 import { bubbleRadius, declutter, type DeclutterNode } from '../mapLayout'
-import { directionSeverity, SEVERITY_LABEL, worst, type Severity, type ThresholdResolver } from '../severity'
+import {
+  cellSeverity,
+  directionSeverity,
+  SEVERITY_LABEL,
+  worst,
+  type Severity,
+  type ThresholdResolver,
+} from '../severity'
 import type { MatrixCell, Site } from '../types'
 
 // Site names are unrestricted text (spaces included); NUL cannot appear in
@@ -96,7 +103,7 @@ export default function WorldMap({
     const siteStats = new Map<string, SiteStats>()
     for (const site of sites) siteStats.set(site.name, newStats())
     for (const c of cells) {
-      const sev = directionSeverity(c, thresholds(c.src, c.dst))
+      const sev = cellSeverity(c, thresholds)
       for (const name of [c.src, c.dst]) {
         const prev = siteSeverity.get(name)
         siteSeverity.set(name, prev === undefined ? sev : worst(prev, sev))
@@ -110,7 +117,7 @@ export default function WorldMap({
       // sub-cell grades with the direction rule, so the breakdown can never
       // disagree with a filtered view of the same plane.
       for (const sub of c.networks) {
-        const subSev = directionSeverity({ ...c, ...sub }, thresholds(c.src, c.dst))
+        const subSev = directionSeverity({ ...c, ...sub }, thresholds(c.src, c.dst, sub.network))
         for (const name of [c.src, c.dst]) {
           const stats = siteStats.get(name)
           if (!stats) continue

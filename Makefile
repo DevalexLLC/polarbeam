@@ -95,6 +95,11 @@ proto:
 # web/THIRD-PARTY-LICENSES is one of its inputs — regenerating the bundle
 # without regenerating attribution is exactly the drift CI now rejects.
 web:
+	# The merge parity check runs FIRST and needs no node_modules: it reads
+	# the same fixture internal/server/thresholds does and fails if the two
+	# resolvers disagree, which would make the dashboard and the outage
+	# detector grade the same measurement differently.
+	node web/tools/check-threshold-merge.ts
 	cd web && pnpm install --frozen-lockfile && pnpm run lint && pnpm run fmt:check && pnpm run build \
 		&& node tools/gen-spa-licenses.mjs
 	$(MAKE) notices

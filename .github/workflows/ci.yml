@@ -138,6 +138,12 @@ jobs:
           key: pnpm-store-${{ runner.os }}-${{ hashFiles('web/pnpm-lock.yaml') }}
           restore-keys: pnpm-store-${{ runner.os }}-
       - run: pnpm install --frozen-lockfile
+      - name: Threshold merge parity (SPA vs internal/server/thresholds)
+        # Reads internal/server/thresholds/testdata/threshold-merge.json, the
+        # same table the Go test reads. Needs no node_modules — Node strips
+        # the types natively — so it also guards the case where the SPA
+        # resolver changes without the Go one, which no other job can see.
+        run: node tools/check-threshold-merge.ts
       - name: Lint
         run: pnpm run lint
       - name: Format check

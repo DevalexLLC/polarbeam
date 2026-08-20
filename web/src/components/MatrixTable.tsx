@@ -1,8 +1,8 @@
-import { directionSeverity, SEVERITY_LABEL, type Severity, type ThresholdResolver } from '../severity'
+import { cellSeverity, SEVERITY_LABEL, type Severity, type ThresholdResolver } from '../severity'
 import type { MatrixCell, Site } from '../types'
 import { fmtLatency } from '../format'
 
-// Matrix cells grade through the same directionSeverity fold as the map and
+// Matrix cells grade through the same cellSeverity fold as the map and
 // Overview — the raw API status alone would call a threshold-violating
 // direction "Healthy" while the other views show it Degraded. Severity →
 // cell visual class: warn and crit both render the shared "Degraded"
@@ -26,7 +26,7 @@ export const CLASS_LABEL: Record<CellClass, string> = {
 }
 
 function Cell({ cell, thresholds }: { cell: MatrixCell; thresholds: ThresholdResolver }) {
-  const cls = SEV_CLASS[directionSeverity(cell, thresholds(cell.src, cell.dst))]
+  const cls = SEV_CLASS[cellSeverity(cell, thresholds)]
   const failed = cell.probes.filter((p) => p.status !== 'ok').length
   const total = cell.probes.length
   const detail = cell.probes

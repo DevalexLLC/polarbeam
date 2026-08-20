@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -344,6 +345,27 @@ func requireRole(role string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s := sessionFrom(r.Context()); s == nil || s.Role != role {
 			writeError(w, http.StatusForbidden, "requires "+role+" role")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// requireRoles admits any of the listed roles. It exists so networkWrite can
+// let the tenant admin through WITHOUT touching requireRole, which stays a
+// single exact compare: that exactness is what denies the scoped roles every
+// global-admin endpoint — the ones mounted today and the ones someone mounts
+// behind adminWrite next year — with no code change. Never collapse the two
+// into a hierarchy.
+//
+// Admission is not authorization. A handler behind requireRoles has only
+// been told the caller MIGHT be allowed; it must still prove the touched
+// resource's network is in scope (requireNetworkScope) before mutating.
+func requireRoles(next http.Handler, roles ...string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s := sessionFrom(r.Context())
+		if s == nil || !slices.Contains(roles, s.Role) {
+			writeError(w, http.StatusForbidden, "requires "+strings.Join(roles, " or ")+" role")
 			return
 		}
 		next.ServeHTTP(w, r)

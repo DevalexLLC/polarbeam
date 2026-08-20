@@ -323,9 +323,10 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
     return () => clearInterval(pollId)
   }, [load])
 
-  // Effective thresholds per source site: agent-kind targets grade on the
-  // source↔destination site pair (override merged over global, matching
-  // ingest); external targets always grade on the globals.
+  // Effective thresholds per source row: agent-kind targets grade on the
+  // source↔destination site pair for that row's plane; external targets have
+  // no pair and grade on the plane default over the globals. Both match what
+  // ingest bakes into the assignment map.
   const resolveThresholds = useMemo(() => buildThresholdResolver(settings), [settings])
 
   // Kept current every render; the chart plugin reads the ref at draw
@@ -337,8 +338,8 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
     const levels: Record<string, ThresholdLevels> = {}
     for (const src of summary?.sources ?? []) {
       // Keyed by (site, network) — a site probing from two planes has two
-      // source rows; thresholds themselves stay per site pair.
-      const effective = dstSite ? resolveThresholds(src.site, dstSite) : (settings?.thresholds ?? null)
+      // source rows, and each resolves its own plane's thresholds.
+      const effective = resolveThresholds(src.site, dstSite, src.network)
       levels[srcKey(src.site, src.network)] =
         metric === 'loss'
           ? {

@@ -80,13 +80,17 @@ func (e InUseError) Error() string {
 
 // TargetInfo is a targets row as shown by the admin CLI.
 type TargetInfo struct {
-	ID         uuid.UUID
-	Kind       string
-	Name       string
-	AgentID    *uuid.UUID
-	Address    string
-	Port       int32
-	URL        string
+	ID      uuid.UUID
+	Kind    string
+	Name    string
+	AgentID *uuid.UUID
+	Address string
+	Port    int32
+	URL     string
+	// Network is the owning plane's name, "" for a global (operator-owned)
+	// external target. Agent targets never carry one — their plane is the
+	// agent's, and targets_network_external_check makes that structural.
+	Network    string
 	ProbeCount int64
 	CreatedAt  time.Time
 }
@@ -132,30 +136,95 @@ type ProbeSettings struct {
 
 // UpsertExternalTarget creates or updates an external target by name and
 // returns its ID. Idempotent so dev bootstrap can re-run safely.
-func (s *Store) UpsertExternalTarget(ctx context.Context, name, address string, port int32, url string) (uuid.UUID, error) {
+//
+// networkID is the owning plane: nil means global (operator-owned, readable
+// everywhere, writable only by a global admin), set means tenant-owned.
+// scope is the caller's network scope (nil = unscoped): a scoped caller may
+// only update rows already on one of its planes, so re-upserting a global
+// or a co-tenant's target is ErrNotFound, byte-identical to a name that
+// does not exist. Ownership itself is immutable — moving a target between
+// planes would retarget every probe pointing at it — so an upsert naming a
+// different network than the stored row conflicts.
+func (s *Store) UpsertExternalTarget(ctx context.Context, name, address string, port int32, url string, networkID *uuid.UUID, scope []uuid.UUID) (uuid.UUID, error) {
+	// One statement, so a concurrent create of the same name resolves in the
+	// index rather than between a SELECT and an INSERT. The DO UPDATE's WHERE
+	// carries the three rules an update must satisfy; when it rejects the
+	// row, RETURNING yields nothing and the row is re-read below to say WHICH
+	// rule it broke. (A read-modify-write here would 500 on the unique
+	// violation instead — the shape this replaced.)
 	var id uuid.UUID
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO targets (kind, name, address, port, url)
-		VALUES ('external', $1, $2, $3, $4)
+		INSERT INTO targets (kind, name, address, port, url, network_id)
+		VALUES ('external', $1, $2, $3, $4, $5)
 		ON CONFLICT (name) DO UPDATE
 			SET address = EXCLUDED.address, port = EXCLUDED.port, url = EXCLUDED.url
 			WHERE targets.kind = 'external'
-		RETURNING id`, name, address, port, url).Scan(&id)
+			  AND ($6::uuid[] IS NULL
+			       OR (targets.network_id IS NOT NULL AND targets.network_id = ANY($6)))
+			  AND ($5::uuid IS NULL OR targets.network_id = $5)
+		RETURNING id`, name, address, port, url, networkID, scope).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, fmt.Errorf("upsert target %q: %w", name, err)
+	}
+
+	// The conflicting row exists but the update was refused. Re-read it to
+	// name the reason; a row that vanished in between is reported as the
+	// conflict it was, not retried into a loop.
+	var (
+		kind    string
+		network *uuid.UUID
+	)
+	err = s.pool.QueryRow(ctx, `
+		SELECT kind, network_id FROM targets WHERE name = $1`, name).Scan(&kind, &network)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, conflictf("target %q already exists as an agent target", name)
+		return uuid.Nil, conflictf("target %q was created and removed concurrently; retry", name)
 	}
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("upsert target %q: %w", name, err)
 	}
-	return id, nil
+	switch {
+	case kind != "external":
+		return uuid.Nil, conflictf("target %q already exists as an agent target", name)
+	case !targetInScope(network, scope):
+		// A global target, or a co-tenant's: ErrNotFound, byte-identical to
+		// the name never having existed.
+		return uuid.Nil, notFoundf("external target %q does not exist", name)
+	default:
+		// In scope but bound to a different plane. Ownership is immutable —
+		// moving a target would retarget every probe pointing at it.
+		return uuid.Nil, conflictf("target %q already exists on a different network; delete and re-create it to move planes", name)
+	}
+}
+
+// targetInScope reports whether a caller with the given network scope may
+// WRITE a target owned by network (nil = global). Unscoped callers may
+// write anything; scoped callers may write only their own planes' rows —
+// global targets stay operator property.
+func targetInScope(network *uuid.UUID, scope []uuid.UUID) bool {
+	if scope == nil {
+		return true
+	}
+	return network != nil && slices.Contains(scope, *network)
+}
+
+// targetVisible reports whether a caller may SEE and point probes at a
+// target owned by network. Deliberately wider than targetInScope: a global
+// target is published for every plane to probe, it just cannot be edited by
+// them. Mirrors ListTargets' external-target predicate.
+func targetVisible(network *uuid.UUID, scope []uuid.UUID) bool {
+	return scope == nil || network == nil || slices.Contains(scope, *network)
 }
 
 // ListTargets returns all targets, agents included, each with the number of
 // probe configs referencing it (the UI blocks deletes while in use).
 // networks is the caller's network scope (nil = unfiltered): agent-kind
 // targets are kept only when the owning agent sits on an allowed plane;
-// external targets are visible to every scope (operator-published probe
-// destinations carry no plane yet). The probe count is scoped too — an
+// external targets are visible when they are global (network_id IS NULL —
+// operator-published destinations every plane may probe) or owned by an
+// allowed plane. The probe count is scoped too — an
 // external target shared by several tenants would otherwise report the
 // server-wide count, leaking other tenants' probe activity and
 // contradicting the caller's own scoped probe list. Only DIRECT rows
@@ -164,14 +233,19 @@ func (s *Store) UpsertExternalTarget(ctx context.Context, name, address string, 
 // predicate needs no mesh join.
 func (s *Store) ListTargets(ctx context.Context, networks []uuid.UUID) ([]TargetInfo, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, kind, name, agent_id, address, port, url, created_at,
+		SELECT targets.id, targets.kind, targets.name, targets.agent_id,
+		       targets.address, targets.port, targets.url, targets.created_at,
+		       coalesce(n.name, ''),
 		       (SELECT count(*) FROM probe_configs pc
 		         WHERE pc.target_id = targets.id
 		           AND ($1::uuid[] IS NULL OR pc.network_id = ANY($1)))
 		FROM targets
-		WHERE $1::uuid[] IS NULL OR agent_id IS NULL
+		LEFT JOIN networks n ON n.id = targets.network_id
+		WHERE $1::uuid[] IS NULL
+		   OR (targets.agent_id IS NULL
+		       AND (targets.network_id IS NULL OR targets.network_id = ANY($1)))
 		   OR EXISTS (SELECT 1 FROM agents a WHERE a.id = targets.agent_id AND a.network_id = ANY($1))
-		ORDER BY kind, name`, networks)
+		ORDER BY targets.kind, targets.name`, networks)
 	if err != nil {
 		return nil, fmt.Errorf("list targets: %w", err)
 	}
@@ -179,7 +253,8 @@ func (s *Store) ListTargets(ctx context.Context, networks []uuid.UUID) ([]Target
 	var out []TargetInfo
 	for rows.Next() {
 		var t TargetInfo
-		if err := rows.Scan(&t.ID, &t.Kind, &t.Name, &t.AgentID, &t.Address, &t.Port, &t.URL, &t.CreatedAt, &t.ProbeCount); err != nil {
+		if err := rows.Scan(&t.ID, &t.Kind, &t.Name, &t.AgentID, &t.Address, &t.Port, &t.URL,
+			&t.CreatedAt, &t.Network, &t.ProbeCount); err != nil {
 			return nil, fmt.Errorf("list targets: %w", err)
 		}
 		out = append(out, t)
@@ -192,21 +267,32 @@ func (s *Store) ListTargets(ctx context.Context, networks []uuid.UUID) ([]Target
 // configs returns InUseError naming the count. The FOR UPDATE lock blocks a
 // concurrent probe add from committing a new reference mid-delete (FK
 // checks take a key-share lock, which conflicts).
-func (s *Store) DeleteTarget(ctx context.Context, name string) error {
+//
+// scope is the caller's network scope (nil = unscoped). A scoped caller may
+// delete only its own planes' targets; a global target or a co-tenant's is
+// ErrNotFound, indistinguishable from a name that never existed.
+func (s *Store) DeleteTarget(ctx context.Context, name string, scope []uuid.UUID) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("delete target %q: %w", name, err)
 	}
 	defer tx.Rollback(ctx)
 
-	var id uuid.UUID
+	var (
+		id      uuid.UUID
+		network *uuid.UUID
+	)
 	err = tx.QueryRow(ctx, `
-		SELECT id FROM targets WHERE name = $1 AND kind = 'external' FOR UPDATE`, name).Scan(&id)
+		SELECT id, network_id FROM targets
+		 WHERE name = $1 AND kind = 'external' FOR UPDATE`, name).Scan(&id, &network)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return notFoundf("external target %q does not exist", name)
 	}
 	if err != nil {
 		return fmt.Errorf("delete target %q: %w", name, err)
+	}
+	if !targetInScope(network, scope) {
+		return notFoundf("external target %q does not exist", name)
 	}
 	var inUse int64
 	if err := tx.QueryRow(ctx, `
@@ -302,20 +388,37 @@ func (s *Store) meshIDByName(ctx context.Context, name string) (uuid.UUID, error
 // this transaction, so a mesh deleted in the gap is gone by the time the lock
 // is taken. That is a not-found, not an internal error — every caller must
 // answer 404 for it, exactly as an already-missing mesh does.
-func lockMesh(ctx context.Context, tx pgx.Tx, meshID uuid.UUID, name string) error {
-	var id uuid.UUID
-	err := tx.QueryRow(ctx, `SELECT id FROM mesh_groups WHERE id = $1 FOR NO KEY UPDATE`, meshID).Scan(&id)
+// lockMesh takes the mesh row lock and, for a scoped caller, proves the mesh
+// is on one of its planes. scope nil = unscoped.
+//
+// The scope check belongs HERE, under the lock, not in the handler. Mesh
+// names are globally unique but reusable: an httpapi-side name→network
+// lookup could be invalidated by a delete-and-recreate on another plane
+// before the store re-resolved the same name, and the scoped caller would
+// then mutate a mesh it never owned. Checking the locked row closes that
+// window by construction — after this returns, the row cannot change until
+// the transaction ends.
+//
+// Out of scope is ErrNotFound with the same wording a missing mesh gets, so
+// the two are indistinguishable.
+func lockMesh(ctx context.Context, tx pgx.Tx, meshID uuid.UUID, name string, scope []uuid.UUID) error {
+	var networkID uuid.UUID
+	err := tx.QueryRow(ctx,
+		`SELECT network_id FROM mesh_groups WHERE id = $1 FOR NO KEY UPDATE`, meshID).Scan(&networkID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return notFoundf("mesh group %q does not exist", name)
 	}
 	if err != nil {
 		return fmt.Errorf("lock mesh group %q: %w", name, err)
 	}
+	if scope != nil && !slices.Contains(scope, networkID) {
+		return notFoundf("mesh group %q does not exist", name)
+	}
 	return nil
 }
 
 // AddMeshMember adds a site to a mesh group. Idempotent.
-func (s *Store) AddMeshMember(ctx context.Context, meshName, siteName string) error {
+func (s *Store) AddMeshMember(ctx context.Context, meshName, siteName string, scope []uuid.UUID) error {
 	meshID, err := s.meshIDByName(ctx, meshName)
 	if err != nil {
 		return err
@@ -329,7 +432,7 @@ func (s *Store) AddMeshMember(ctx context.Context, meshName, siteName string) er
 		return fmt.Errorf("add %q to mesh %q: %w", siteName, meshName, err)
 	}
 	defer tx.Rollback(ctx)
-	if err := lockMesh(ctx, tx, meshID, meshName); err != nil {
+	if err := lockMesh(ctx, tx, meshID, meshName, scope); err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx, `
@@ -350,7 +453,7 @@ func (s *Store) AddMeshMember(ctx context.Context, meshName, siteName string) er
 // series of every expanded probe involving that site (both directions, per
 // template) — those series stop producing results, so their open incidents
 // would otherwise stay active forever.
-func (s *Store) RemoveMeshMember(ctx context.Context, meshName, siteName string) error {
+func (s *Store) RemoveMeshMember(ctx context.Context, meshName, siteName string, scope []uuid.UUID) error {
 	meshID, err := s.meshIDByName(ctx, meshName)
 	if err != nil {
 		return err
@@ -364,7 +467,7 @@ func (s *Store) RemoveMeshMember(ctx context.Context, meshName, siteName string)
 		return fmt.Errorf("remove %q from mesh %q: %w", siteName, meshName, err)
 	}
 	defer tx.Rollback(ctx)
-	if err := lockMesh(ctx, tx, meshID, meshName); err != nil {
+	if err := lockMesh(ctx, tx, meshID, meshName, scope); err != nil {
 		return err
 	}
 
@@ -453,7 +556,7 @@ func (s *Store) ListMeshGroups(ctx context.Context, networks []uuid.UUID) ([]Mes
 // probe templates. Every expanded series is cleaned up first so no open
 // incident outlives its probe. Returns how many probe templates went with
 // the mesh so callers can surface the blast radius.
-func (s *Store) DeleteMeshGroup(ctx context.Context, name string) (int64, error) {
+func (s *Store) DeleteMeshGroup(ctx context.Context, name string, scope []uuid.UUID) (int64, error) {
 	meshID, err := s.meshIDByName(ctx, name)
 	if err != nil {
 		return 0, err
@@ -466,7 +569,7 @@ func (s *Store) DeleteMeshGroup(ctx context.Context, name string) (int64, error)
 	// Before any series row, matching RemoveMeshMember and AddMeshProbe —
 	// cleaning up first and letting the DELETE take the mesh row last would
 	// invert the order and deadlock against them.
-	if err := lockMesh(ctx, tx, meshID, name); err != nil {
+	if err := lockMesh(ctx, tx, meshID, name, scope); err != nil {
 		return 0, err
 	}
 
@@ -500,21 +603,40 @@ func (s *Store) DeleteMeshGroup(ctx context.Context, name string) (int64, error)
 // agent-kind target row carries no address/port/URL (mesh expansion
 // resolves peers via probe_address), so a direct probe against one would
 // fail on an empty destination every run.
-func (s *Store) AddDirectProbe(ctx context.Context, siteName, targetName string, networkID uuid.UUID, ps ProbeSettings, enabled bool, updatedBy string) (uuid.UUID, error) {
+//
+// scope is the caller's network scope (nil = unscoped) and bounds which
+// TARGET may be pointed at — a separate question from which network the
+// probe lands on, which the caller proved before resolving networkID.
+// Global targets stay probeable by everyone (that is what publishing one
+// means); a co-tenant's is ErrNotFound, exactly as an unknown name is.
+//
+// Without this a tenant could attach a probe to another's target row. The
+// victim's own probe_count is scope-filtered, so the row would be invisible
+// to them while DeleteTarget's unscoped count still refused the delete —
+// one tenant pinning another's target undeletable, with no way to see why.
+func (s *Store) AddDirectProbe(ctx context.Context, siteName, targetName string, networkID uuid.UUID, ps ProbeSettings, enabled bool, updatedBy string, scope []uuid.UUID) (uuid.UUID, error) {
 	siteID, err := s.SiteIDByName(ctx, siteName)
 	if err != nil {
 		return uuid.Nil, err
 	}
 	var (
-		targetID   uuid.UUID
-		targetKind string
+		targetID      uuid.UUID
+		targetKind    string
+		targetNetwork *uuid.UUID
 	)
-	err = s.pool.QueryRow(ctx, `SELECT id, kind FROM targets WHERE name = $1`, targetName).Scan(&targetID, &targetKind)
+	err = s.pool.QueryRow(ctx,
+		`SELECT id, kind, network_id FROM targets WHERE name = $1`,
+		targetName).Scan(&targetID, &targetKind, &targetNetwork)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, notFoundf("target %q does not exist", targetName)
 	}
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("resolve target %q: %w", targetName, err)
+	}
+	if !targetVisible(targetNetwork, scope) {
+		// Same sentence a nonexistent name gets: the probe surface must not
+		// become an oracle for other tenants' target names.
+		return uuid.Nil, notFoundf("target %q does not exist", targetName)
 	}
 	if targetKind != "external" {
 		return uuid.Nil, invalidf("target %q is an enrollment-managed agent target: direct probes need an external target (mesh probes cover agent peers)", targetName)
@@ -542,7 +664,7 @@ func (s *Store) AddDirectProbe(ctx context.Context, siteName, targetName string,
 // derived probe ID) — useful for differing cadence or params, though the
 // matrix/pair views aggregate by (agent, target, probe_type) and so blend
 // same-type templates.
-func (s *Store) AddMeshProbe(ctx context.Context, meshName string, ps ProbeSettings, enabled bool, updatedBy string) (uuid.UUID, error) {
+func (s *Store) AddMeshProbe(ctx context.Context, meshName string, ps ProbeSettings, enabled bool, updatedBy string, scope []uuid.UUID) (uuid.UUID, error) {
 	meshID, err := s.meshIDByName(ctx, meshName)
 	if err != nil {
 		return uuid.Nil, err
@@ -555,7 +677,7 @@ func (s *Store) AddMeshProbe(ctx context.Context, meshName string, ps ProbeSetti
 		return uuid.Nil, fmt.Errorf("add mesh probe: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	if err := lockMesh(ctx, tx, meshID, meshName); err != nil {
+	if err := lockMesh(ctx, tx, meshID, meshName, scope); err != nil {
 		return uuid.Nil, err
 	}
 
@@ -919,9 +1041,13 @@ type PeerRow struct {
 type AgentConfigInputs struct {
 	AgentID uuid.UUID
 	SiteID  uuid.UUID
-	Direct  []DirectProbeRow
-	Mesh    []MeshProbeRow
-	Peers   []PeerRow
+	// NetworkID is the agent's plane. meshexpand never reads it — the SQL
+	// below already scopes every row — but ingest needs it to resolve the
+	// plane-qualified threshold layers for the pairs this agent measures.
+	NetworkID uuid.UUID
+	Direct    []DirectProbeRow
+	Mesh      []MeshProbeRow
+	Peers     []PeerRow
 }
 
 // LoadAgentConfigInputs gathers the agent's site, its site's direct probes,
@@ -934,7 +1060,7 @@ func (s *Store) LoadAgentConfigInputs(ctx context.Context, agentID uuid.UUID) (A
 	in := AgentConfigInputs{AgentID: agentID}
 
 	batch := &pgx.Batch{}
-	batch.Queue(`SELECT site_id FROM agents WHERE id = $1`, agentID)
+	batch.Queue(`SELECT site_id, network_id FROM agents WHERE id = $1`, agentID)
 	batch.Queue(`
 		SELECT pc.id, pc.probe_type, pc.interval_ms, pc.timeout_ms, pc.train_count, pc.train_spacing_ms, pc.params,
 		       t.id, t.kind, t.address, t.port, t.url, dta.site_id
@@ -966,7 +1092,7 @@ func (s *Store) LoadAgentConfigInputs(ctx context.Context, agentID uuid.UUID) (A
 	res := s.pool.SendBatch(ctx, batch)
 	defer res.Close()
 
-	if err := res.QueryRow().Scan(&in.SiteID); err != nil {
+	if err := res.QueryRow().Scan(&in.SiteID, &in.NetworkID); err != nil {
 		return in, fmt.Errorf("load config inputs: agent %s: %w", agentID, err)
 	}
 

@@ -49,7 +49,8 @@ type fakeDB struct {
 	settings          *store.ThresholdSettings
 	// key: lexically sorted site names joined with \x00 (the fake
 	// canonicalizes by name where the real store uses uuid order)
-	pathThresholds map[string]*store.PathThresholdOverride
+	pathThresholds    map[string]*store.PathThresholdOverride
+	networkThresholds map[string]*store.NetworkThreshold
 
 	paths    []store.CurrentPath
 	pathMTUs []store.CurrentPathMTU

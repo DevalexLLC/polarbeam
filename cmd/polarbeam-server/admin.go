@@ -169,6 +169,7 @@ func cmdTarget(args []string) error {
 		address := fs.String("address", "", "host or IP to probe")
 		port := fs.Int("port", 0, "port for tcp/tls probes")
 		url := fs.String("url", "", "full URL for http probes")
+		network := fs.String("network", "", "owning network (default: global — every network may probe it)")
 		cfg, err := loadConfig(fs, args[1:])
 		if err != nil {
 			return err
@@ -182,7 +183,21 @@ func cmdTarget(args []string) error {
 		}
 		defer cancel()
 		defer st.Close()
-		id, err := st.UpsertExternalTarget(ctx, *name, *address, int32(*port), *url)
+		// nil = global: an operator-owned target every plane may probe and
+		// only a global admin may edit. An explicit --network claims it for
+		// one plane, where that plane's network_admin can manage it. The
+		// binding is immutable (the store refuses a change), because moving
+		// a target between planes would retarget every probe on it.
+		var networkID *uuid.UUID
+		if *network != "" {
+			nid, err := st.NetworkIDByName(ctx, *network)
+			if err != nil {
+				return err
+			}
+			networkID = &nid
+		}
+		// nil scope: the CLI runs on the server host and is the operator.
+		id, err := st.UpsertExternalTarget(ctx, *name, *address, int32(*port), *url, networkID, nil)
 		if err != nil {
 			return err
 		}
@@ -209,7 +224,7 @@ func cmdTarget(args []string) error {
 			fmt.Println("no targets")
 			return nil
 		}
-		fmt.Printf("%-36s  %-8s  %-24s  %s\n", "ID", "KIND", "NAME", "ADDRESS")
+		fmt.Printf("%-36s  %-8s  %-24s  %-16s  %s\n", "ID", "KIND", "NAME", "NETWORK", "ADDRESS")
 		for _, t := range targets {
 			addr := t.Address
 			if t.Port > 0 {
@@ -218,7 +233,13 @@ func cmdTarget(args []string) error {
 			if t.URL != "" {
 				addr = t.URL
 			}
-			fmt.Printf("%-36s  %-8s  %-24s  %s\n", t.ID, t.Kind, t.Name, addr)
+			// Agent targets take their plane from the agent, so the column
+			// only ever names an external target's owner; "-" is global.
+			network := t.Network
+			if network == "" {
+				network = "-"
+			}
+			fmt.Printf("%-36s  %-8s  %-24s  %-16s  %s\n", t.ID, t.Kind, t.Name, network, addr)
 		}
 		return nil
 
@@ -238,7 +259,7 @@ func cmdTarget(args []string) error {
 		}
 		defer cancel()
 		defer st.Close()
-		if err := st.DeleteTarget(ctx, *name); err != nil {
+		if err := st.DeleteTarget(ctx, *name, nil); err != nil {
 			return err
 		}
 		fmt.Printf("target %q removed\n", *name)
@@ -309,7 +330,7 @@ func cmdProbe(args []string) error {
 		}
 		var id uuid.UUID
 		if meshMode {
-			id, err = st.AddMeshProbe(ctx, *mesh, ps, *enabled, cliUpdatedBy)
+			id, err = st.AddMeshProbe(ctx, *mesh, ps, *enabled, cliUpdatedBy, nil)
 		} else {
 			netName := *network
 			if netName == "" {
@@ -319,7 +340,8 @@ func cmdProbe(args []string) error {
 			if networkID, err = st.NetworkIDByName(ctx, netName); err != nil {
 				return err
 			}
-			id, err = st.AddDirectProbe(ctx, *site, *target, networkID, ps, *enabled, cliUpdatedBy)
+			// nil scope: the CLI runs on the server host and is the operator.
+			id, err = st.AddDirectProbe(ctx, *site, *target, networkID, ps, *enabled, cliUpdatedBy, nil)
 		}
 		if err != nil {
 			return err
@@ -414,7 +436,7 @@ func cmdMesh(args []string) error {
 		}
 		defer cancel()
 		defer st.Close()
-		deleted, err := st.DeleteMeshGroup(ctx, *name)
+		deleted, err := st.DeleteMeshGroup(ctx, *name, nil)
 		if err != nil {
 			return err
 		}
@@ -474,12 +496,12 @@ func cmdMesh(args []string) error {
 		defer cancel()
 		defer st.Close()
 		if args[0] == "add" {
-			if err := st.AddMeshMember(ctx, *name, *site); err != nil {
+			if err := st.AddMeshMember(ctx, *name, *site, nil); err != nil {
 				return err
 			}
 			fmt.Printf("site %q added to mesh %q\n", *site, *name)
 		} else {
-			if err := st.RemoveMeshMember(ctx, *name, *site); err != nil {
+			if err := st.RemoveMeshMember(ctx, *name, *site, nil); err != nil {
 				return err
 			}
 			fmt.Printf("site %q removed from mesh %q\n", *site, *name)
