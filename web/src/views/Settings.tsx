@@ -45,6 +45,7 @@ export default function Settings({
   // "no plane" row, which is what allowGlobal offers — to a global caller
   // only, since those rows are adminWrite.
   const workloadPlane = useMemo(() => planeChoice(caps, networks), [caps, networks])
+  const ownedPlane = useMemo(() => planeChoice(caps, networks, { allowGlobal: true }), [caps, networks])
 
   // Poll like every other view: a transient failure retries on the next
   // tick, and another admin's change converges here ≤30 s. The panel keeps
@@ -110,7 +111,7 @@ export default function Settings({
       ) : tab === 'enrollment' ? (
         <EnrollmentPanel caps={caps} canWrite={caps.networkWrite} plane={workloadPlane} onAuthError={onAuthError} />
       ) : tab === 'targets' ? (
-        <TargetsPanel canWrite={caps.networkWrite} onAuthError={onAuthError} />
+        <TargetsPanel caps={caps} canWrite={caps.networkWrite} plane={ownedPlane} onAuthError={onAuthError} />
       ) : tab === 'meshes' ? (
         <MeshesPanel canWrite={caps.networkWrite} plane={workloadPlane} onAuthError={onAuthError} />
       ) : tab === 'probes' ? (
@@ -154,7 +155,9 @@ export default function Settings({
           </section>
           <PathThresholdsPanel
             settings={settings}
+            caps={caps}
             canWrite={caps.networkWrite}
+            plane={ownedPlane}
             onChanged={load}
             onAuthError={onAuthError}
           />

@@ -1,8 +1,13 @@
 import { useEffect, useState } from 'react'
 import { apiDelete, apiGet, apiPost } from '../api'
 import { fmtAgo } from '../format'
+import type { Caps } from '../caps'
+import { canWriteRow } from '../caps'
+import type { PlaneChoice } from '../plane'
+import { initialPlane, networkField } from '../plane'
 import type { TargetsConfigResponse, TargetConfig } from '../types'
 import ConfirmButton from './ConfirmButton'
+import PlaneField from './PlaneField'
 
 const POLL_MS = 30_000
 
@@ -11,9 +16,12 @@ interface Draft {
   address: string
   port: string
   url: string
+  // The owning plane, '' for the global target every network may probe.
+  // Fixed once created: the row's owner decides who may edit it.
+  network: string
 }
 
-const emptyDraft: Draft = { name: '', address: '', port: '', url: '' }
+const emptyDraft: Draft = { name: '', address: '', port: '', url: '', network: '' }
 
 // Mirrors the server's target validation; server 400s render verbatim as a
 // backstop.
@@ -33,10 +41,14 @@ function validate(d: Draft): { errors: string[]; port: number } {
 }
 
 export default function TargetsPanel({
+  caps,
   canWrite,
+  plane,
   onAuthError,
 }: {
+  caps: Caps
   canWrite: boolean
+  plane: PlaneChoice
   onAuthError: (err: unknown) => void
 }) {
   const [data, setData] = useState<TargetsConfigResponse | null>(null)
@@ -85,6 +97,7 @@ export default function TargetsPanel({
         address: draft.address.trim(),
         port,
         url: draft.url.trim(),
+        ...networkField(draft.network),
       })
       setDraft(null)
       setEditing(false)
@@ -117,6 +130,7 @@ export default function TargetsPanel({
       address: t.address ?? '',
       port: t.port ? String(t.port) : '',
       url: t.url ?? '',
+      network: t.network,
     })
   }
 
@@ -139,6 +153,11 @@ export default function TargetsPanel({
 
   const externals = data.targets.filter((t) => t.kind === 'external')
   const agents = data.targets.filter((t) => t.kind === 'agent')
+  // Show the owner once there is anything to distinguish: a real choice of
+  // plane, a tenant pinned to one, or any tenant-owned row in the list.
+  const showNetworkColumn = plane.kind !== 'implicit' || externals.some((t) => t.network !== '')
+
+  const blankDraft = (): Draft => ({ ...emptyDraft, network: initialPlane(plane) })
 
   const field = (label: string, key: keyof Draft, placeholder: string, locked = false) => (
     <label className="threshold-field">
@@ -151,7 +170,7 @@ export default function TargetsPanel({
           disabled={saving || locked}
           onChange={(e) => {
             setSavedFlash(false)
-            setDraft((d) => ({ ...(d ?? emptyDraft), [key]: e.target.value }))
+            setDraft((d) => ({ ...(d ?? blankDraft()), [key]: e.target.value }))
           }}
         />
       </span>
@@ -189,6 +208,7 @@ export default function TargetsPanel({
                 <tr>
                   <th>Name</th>
                   <th>Address</th>
+                  {showNetworkColumn && <th>Network</th>}
                   <th>Probes</th>
                   <th>Created</th>
                   {canWrite && (
@@ -207,22 +227,37 @@ export default function TargetsPanel({
                     <td data-label="Address" className="mono">
                       {t.url ? t.url : t.port ? `${t.address}:${t.port}` : t.address}
                     </td>
+                    {showNetworkColumn && (
+                      <td data-label="Network">
+                        {t.network === '' ? <span className="hint">all networks</span> : t.network}
+                      </td>
+                    )}
                     <td data-label="Probes">{t.probe_count}</td>
                     <td data-label="Created">{fmtAgo(t.created_at)}</td>
                     {canWrite && (
                       <td data-label="Actions" className="config-actions">
-                        <button type="button" className="secondary-button" onClick={() => startEdit(t)}>
-                          Edit
-                        </button>
-                        <ConfirmButton
-                          label="Delete"
-                          confirmLabel="Confirm delete?"
-                          disabled={t.probe_count > 0}
-                          title={
-                            t.probe_count > 0 ? `In use by ${t.probe_count} probe(s) — remove those first` : undefined
-                          }
-                          onConfirm={() => remove(t)}
-                        />
+                        {canWriteRow(caps, t.network) ? (
+                          <>
+                            <button type="button" className="secondary-button" onClick={() => startEdit(t)}>
+                              Edit
+                            </button>
+                            <ConfirmButton
+                              label="Delete"
+                              confirmLabel="Confirm delete?"
+                              disabled={t.probe_count > 0}
+                              title={
+                                t.probe_count > 0
+                                  ? `In use by ${t.probe_count} probe(s) — remove those first`
+                                  : undefined
+                              }
+                              onConfirm={() => remove(t)}
+                            />
+                          </>
+                        ) : (
+                          // Published by the operator for every plane: yours
+                          // to probe, not to change.
+                          <span className="hint">operator-owned</span>
+                        )}
                       </td>
                     )}
                   </tr>
@@ -239,6 +274,19 @@ export default function TargetsPanel({
               {field('Address', 'address', 'host or IP (tcp/tls/icmp/dns/ntp)')}
               {field('Port', 'port', 'for tcp/tls probes (ntp defaults to 123)')}
               {field('URL', 'url', 'full URL for http probes')}
+              {/* Ownership is fixed at creation: it decides who may edit the
+                row, so changing it on an existing target would be a
+                privilege transfer rather than an edit. */}
+              {!editing && (
+                <PlaneField
+                  choice={plane}
+                  value={draft?.network ?? initialPlane(plane)}
+                  onChange={(v) => setDraft((d) => ({ ...(d ?? blankDraft()), network: v }))}
+                  disabled={saving}
+                  label="Owner"
+                  hint="all networks publishes it to every plane; a network makes it that tenant's"
+                />
+              )}
             </div>
             {formErrors.length > 0 && (
               <ul className="error threshold-errors">

@@ -5,7 +5,8 @@ import type { PathThresholdOverride, ThresholdSettings } from '../types'
 // Editor for one pair's threshold override, hosted by the Settings →
 // Thresholds overrides table (edit rows and the add flow). Fields speak
 // ms/percent (wire is µs, like the global thresholds form); an EMPTY field
-// means "inherit the global value", so the placeholders show what would
+// means "inherit the next layer out" — the plane's defaults where it has
+// them, else the global row — so the placeholders show what would
 // apply. Saving with every field empty clears the override (DELETE) — the
 // server rejects all-null rows by design.
 const usToMs = (us: number) => String(us / 1000)
@@ -36,7 +37,8 @@ function draftFrom(o: PathThresholdOverride | null): Draft {
 
 // Mirrors the server's validateOverride: set values are checked on their
 // own, then warn/crit consistency runs on the EFFECTIVE values (empty
-// fields fall back to the global row), with the inherited side named.
+// fields fall back to the layer outside this row), with the inherited side
+// named.
 function validate(d: Draft, global: ThresholdSettings): { errors: string[]; body: OverrideBody | null } {
   const errors: string[] = []
   const num = (label: string, s: string): number | null => {
@@ -62,7 +64,7 @@ function validate(d: Draft, global: ThresholdSettings): { errors: string[]; body
       errors.push('loss critical must be positive and at most 100%')
   }
   if (errors.length === 0) {
-    const inherit = ' (inherited from global)'
+    const inherit = ' (inherited)'
     const effWarnMs = warnMs ?? global.latency_warn_us / 1000
     const effCritMs = critMs ?? global.latency_crit_us / 1000
     if (effCritMs <= effWarnMs) {
@@ -117,6 +119,9 @@ export default function PathThresholdEditor({
   // leaves it empty, which is what a global admin has always created.
   network?: string
   override: PathThresholdOverride | null
+  // What an empty field falls back to: for a plane-qualified row that is
+  // the plane's defaults folded over the global row, not the global row
+  // itself.
   global: ThresholdSettings
   canWrite: boolean
   onChanged: () => void
@@ -131,7 +136,7 @@ export default function PathThresholdEditor({
   const save = async () => {
     const allEmpty = Object.values(current).every((v) => v.trim() === '')
     if (allEmpty && !override) {
-      setErrors(['set at least one value — empty fields inherit the global thresholds'])
+      setErrors(['set at least one value — empty fields inherit the layer outside this one'])
       return
     }
     setSaving(true)
@@ -202,7 +207,7 @@ export default function PathThresholdEditor({
         )}
         <div className="threshold-foot">
           <span className="hint">
-            Empty fields inherit the global thresholds
+            Empty fields inherit the layer outside this one
             {override ? ' · clearing every field removes the override on save' : ''}
           </span>
           {canWrite ? (
