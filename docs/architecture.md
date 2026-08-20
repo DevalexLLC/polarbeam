@@ -171,7 +171,7 @@ browsers ──HTTPS────▶ │ nginx     │  SNI: lh.example ───
 *Verify:* direct + mesh path_mtu probes converge on the dev stack; a black hole (drop >1400 without ICMP errors via iptables) reports TIMEOUT with the flag, never OK; missing NET_RAW → ERROR naming the capability.
 
 **M8 — Networks.** Named connectivity planes for shared sites (ISP management vs tenant networks): `networks` table + `network_id` on agents/tokens/meshes/direct probes with network-scoped expansion and re-derivation (PR ①), networks CRUD API/CLI + `--network` on token/mesh/probe (PR ②), read-path exposure (matrix sub-cells, `?network=` pair filter, per-(site, network) target sources) + SPA surfaces + docs (PR ③). No proto change — the network rides the join token server-side.
-*Verify:* on the dev stack, a second network's mesh over the same sites yields disjoint series (the Overview selector shows each plane alone, cross-plane pairs "not probed"); a single-network install renders pixel-identical with no selector anywhere and unchanged `config_hash`es.
+*Verify:* on the dev stack, a second network's mesh over the same sites yields disjoint series (the top-bar network filter shows each plane alone across every view, cross-plane pairs "not probed"); a single-network install renders pixel-identical with no filter control anywhere and unchanged `config_hash`es.
 
 ## Dev environment
 

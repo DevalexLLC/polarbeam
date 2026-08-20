@@ -929,15 +929,19 @@ docker compose exec server polarbeam-server probe add \
 
 The site list does not change — `nyc` is still one site, one map dot — but
 the two meshes now measure disjoint agent pairs over the same sites. On the
-dashboard, the Overview connectivity card gains a network selector (it is
-hidden while only one network exists): **All networks** folds both planes into
-one cell per site pair exactly as before, and selecting `mgmt` or `default`
-shows that plane alone, with pairs the plane does not probe marked
-"not probed". The map keeps one dot per site and breaks the site's health out
-per network in its detail card, and the pair pages grow the same selector.
-The **Agents** page shows each agent's network. The dashboard
-equivalent of everything above lives on **user menu -> Settings -> Networks**
-plus network pickers on the Enrollment, Meshes, and Probes tabs.
+dashboard, the top bar gains a filter control (a funnel icon; it is hidden
+while only one network exists): **All networks** folds both planes into one
+cell per site pair exactly as before, and selecting `mgmt` or `default`
+scopes every view to that plane alone — the Overview tiles, map/matrix, and
+fleet card, plus the Incidents, Routes, Targets, and Agents pages and the
+pair and target detail pages — with pairs the plane does not probe marked
+"not probed" and off-plane sites dropped from the map and matrix. The choice
+persists per browser, and a dot on the funnel marks an active filter. The
+map breaks a site's health out per network in its detail card, and the
+Overview fleet card and **Agents** page show each agent's network. The
+dashboard equivalent of everything above lives on
+**user menu -> Settings -> Networks** plus network pickers on the
+Enrollment, Meshes, and Probes tabs.
 
 A network with no remaining agents, meshes, or probes can be deleted from the
 Networks tab or with `polarbeam-server network delete`; unused join tokens are
@@ -956,8 +960,8 @@ distribution interval, then verify each layer:
 5. `probe list` shows the enabled mesh and direct probes you created.
 6. The dashboard **Overview** map or matrix shows both directions between
    mesh sites.
-7. Multi-network deployments only: the connectivity card's network selector
-   lists every plane, and each plane's view shows only its own agent pairs —
+7. Multi-network deployments only: the top-bar filter (funnel icon) lists
+   every plane, and each plane's view shows only its own agent pairs —
    a pair appearing under the wrong network means an agent was enrolled with
    the wrong token.
 8. The **Routes** page begins to populate after traceroute runs.
