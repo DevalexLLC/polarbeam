@@ -23,6 +23,13 @@ export default function PlaneField({
   hint?: string
 }) {
   if (choice.kind === 'implicit') return null
+  if (choice.kind === 'unknown') {
+    return (
+      <div className="inline-alert" role="status">
+        Loading networks… the plane this will be created on is not known yet.
+      </div>
+    )
+  }
   if (choice.kind === 'none') {
     return (
       <div className="inline-alert" role="status">

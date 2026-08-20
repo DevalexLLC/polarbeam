@@ -14,6 +14,11 @@ import { isScoped } from './caps'
 // GET /api/v1/config/networks is already scope-filtered server-side, so the
 // list a panel fetches IS the caller's scope. Nothing here re-derives it.
 export type PlaneChoice =
+  // The caller's network list has not loaded yet (or its fetch failed).
+  // Not the same as "one network": guessing here would let a global admin
+  // on a multi-plane install silently create configuration on `default`
+  // because the selector never rendered. Forms wait instead.
+  | { kind: 'unknown' }
   // Scoped caller with no networks assigned. Every write would 404, so the
   // form must refuse rather than submit and render the server's error.
   | { kind: 'none' }
@@ -38,7 +43,8 @@ export interface PlaneOpts {
 
 // The plane the form should start on. Never the literal 'default' for a
 // scoped caller — that plane is usually not theirs.
-export function planeChoice(caps: Caps, known: string[], opts: PlaneOpts = {}): PlaneChoice {
+export function planeChoice(caps: Caps, known: string[] | null, opts: PlaneOpts = {}): PlaneChoice {
+  if (known === null) return { kind: 'unknown' }
   if (isScoped(caps)) {
     if (known.length === 0) return { kind: 'none' }
     if (known.length === 1) return { kind: 'fixed', plane: known[0] }
@@ -56,6 +62,7 @@ export function planeChoice(caps: Caps, known: string[], opts: PlaneOpts = {}): 
 /** The value a form starts on, for every shape of choice. */
 export function initialPlane(choice: PlaneChoice): string {
   switch (choice.kind) {
+    case 'unknown':
     case 'none':
       return ''
     case 'fixed':
@@ -68,6 +75,13 @@ export function initialPlane(choice: PlaneChoice): string {
 
 /** True when the form should render a selector rather than a chip or nothing. */
 export const planeSelectable = (choice: PlaneChoice): boolean => choice.kind === 'choice'
+
+// Whether a write may be submitted at all. Both 'unknown' and 'none' mean
+// the plane cannot be stated correctly — one because the list has not
+// arrived, the other because the caller has no plane — and in both cases
+// submitting would either land on the wrong plane or be refused. Gate every
+// create button on this rather than letting the request go.
+export const planeReady = (choice: PlaneChoice): boolean => choice.kind !== 'unknown' && choice.kind !== 'none'
 
 // Spreads into a JSON body. '' means "no plane" — the global target or the
 // all-planes row — and omits the field, which is exactly what the server

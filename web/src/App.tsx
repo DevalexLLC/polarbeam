@@ -93,7 +93,10 @@ export default function App() {
   const [sso, setSso] = useState(false)
   const [banner, setBanner] = useState<UIBanner | null>(null)
   const [changingPassword, setChangingPassword] = useState(false)
-  const [networkNames, setNetworkNames] = useState<string[]>([])
+  // null until this session's /config/networks has succeeded — deliberately
+  // distinct from [], which means "this caller sees no networks". Plane
+  // pickers must not read "not loaded yet" as "single-network install".
+  const [networks, setNetworks] = useState<string[] | null>(null)
   const [route, setRoute] = useState<Route>(() => parseHash(location.hash))
 
   useEffect(() => {
@@ -154,6 +157,11 @@ export default function App() {
   // fetch also reconciles a persisted filter that may have gone stale. A
   // failure keeps the last known list — filtering must never block the app.
   useEffect(() => {
+    // Drop the previous session's list before fetching this one's. The
+    // names are another tenant's topology to a scoped user, and "keep the
+    // last known on failure" — right within a session — would otherwise
+    // show them across a logout, or indefinitely if the new fetch fails.
+    setNetworks(null)
     if (!user) return
     let cancelled = false
     const load = () =>
@@ -161,8 +169,22 @@ export default function App() {
         .then((res) => {
           if (cancelled) return
           const names = res.networks.map((n) => n.name)
-          setNetworkNames(names)
+          setNetworks(names)
           reconcileNetworkFilter(names)
+          // A scoped session that started with no networks is looking at
+          // the "no networks assigned" wall. The server applies a scope
+          // change live, so the moment this poll returns a plane, the
+          // session identity is stale — re-read it rather than making the
+          // user reload to escape a wall an admin has already cleared.
+          if (user.networks !== null && user.networks.length === 0 && names.length > 0) {
+            apiGet<LoginResponse>('/api/v1/auth/me')
+              .then((me) => {
+                if (!cancelled) setUser(me.user)
+              })
+              .catch(() => {
+                /* keep the wall; the next poll tries again */
+              })
+          }
         })
         .catch((err) => console.warn('networks unavailable; keeping last known', err))
     load()
@@ -255,7 +277,7 @@ export default function App() {
             ))}
           </nav>
           <div className="topbar-right">
-            <TopbarFilter networks={networkNames} scope={caps?.networks ?? null} />
+            <TopbarFilter networks={networks ?? []} scope={caps?.networks ?? null} />
             <TimezoneToggle />
             <ThemeToggle />
             <details className={'user-menu' + (route.view === 'settings' ? ' user-menu-current' : '')}>
@@ -361,7 +383,7 @@ export default function App() {
               <Settings
                 tab={settingsTab}
                 caps={caps}
-                networks={networkNames}
+                networks={networks}
                 username={user.username}
                 onAuthError={onAuthError}
                 onBannerSaved={setBanner}

@@ -3,7 +3,7 @@ import { apiDelete } from '../api'
 import type { Caps } from '../caps'
 import { fmtAgo } from '../format'
 import type { PlaneChoice } from '../plane'
-import { initialPlane } from '../plane'
+import { initialPlane, planeReady } from '../plane'
 import type { NetworkThreshold, SettingsResponse } from '../types'
 import ConfirmButton from './ConfirmButton'
 import PlaneField from './PlaneField'
@@ -73,7 +73,7 @@ export default function NetworkThresholdsPanel({
     }
   }
 
-  const addable = addNetwork !== '' && !configured.has(addNetwork)
+  const addable = addNetwork !== '' && !configured.has(addNetwork) && planeReady(addChoice)
 
   return (
     <section className="card settings-card config-card">
@@ -159,8 +159,8 @@ export default function NetworkThresholdsPanel({
                             inherited={global}
                             canWrite={canWrite}
                             emptyHint="the global thresholds"
-                            onChanged={() => {
-                              setEditKey(null)
+                            onChanged={(warnings) => {
+                              if (warnings.length === 0) setEditKey(null)
                               onChanged()
                             }}
                             onAuthError={onAuthError}
@@ -209,8 +209,8 @@ export default function NetworkThresholdsPanel({
                   inherited={global}
                   canWrite={canWrite}
                   emptyHint="the global thresholds"
-                  onChanged={() => {
-                    setAdding(false)
+                  onChanged={(warnings) => {
+                    if (warnings.length === 0) setAdding(false)
                     onChanged()
                   }}
                   onAuthError={onAuthError}

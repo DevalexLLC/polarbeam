@@ -11,7 +11,7 @@ import type {
   TargetsConfigResponse,
 } from '../types'
 import type { PlaneChoice } from '../plane'
-import { initialPlane, networkField } from '../plane'
+import { initialPlane, networkField, planeReady } from '../plane'
 import ConfirmButton from './ConfirmButton'
 import PlaneField from './PlaneField'
 
@@ -814,7 +814,11 @@ export default function ProbesPanel({
               <span className="hint">Agents at the affected sites start probing within ~30 seconds.</span>
               <span className="threshold-actions">
                 {savedFlash && <span className="hint">saved</span>}
-                <button className="primary" disabled={busy || !draft} onClick={create}>
+                <button
+                  className="primary"
+                  disabled={busy || !draft || (createDraft.mode === 'direct' && !planeReady(plane))}
+                  onClick={create}
+                >
                   {busy ? 'Saving…' : 'Add probe'}
                 </button>
               </span>

@@ -430,7 +430,14 @@ export default function OIDCSettingsPanel({
                       <option value="network_viewer">network viewer</option>
                     </select>
                     <div className="chips" role="group" aria-label={`Rule ${i + 1} networks`}>
-                      {networks.map((n) => (
+                      {/* A rule can outlive a network: the name stays in the
+                        stored rule after the network is deleted, and the
+                        server then refuses the whole settings save until it
+                        is removed. Listing only live networks would hide the
+                        one entry the admin has to clear, so selected-but-gone
+                        names are shown too — checked, so unchecking removes
+                        them. */}
+                      {[...networks, ...rule.networks.filter((n) => !networks.includes(n))].map((n) => (
                         <label key={n} className="chip">
                           <input
                             type="checkbox"
@@ -445,6 +452,7 @@ export default function OIDCSettingsPanel({
                             }
                           />
                           {n}
+                          {!networks.includes(n) && <span className="hint"> (deleted)</span>}
                         </label>
                       ))}
                     </div>

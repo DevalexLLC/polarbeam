@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Caps } from '../caps'
 import type { PlaneChoice } from '../plane'
-import { initialPlane, networkField } from '../plane'
+import { initialPlane, networkField, planeReady } from '../plane'
 import PlaneField from './PlaneField'
 import RoleWall from './RoleWall'
 import { apiDelete, apiGet, apiPost } from '../api'
@@ -239,7 +239,7 @@ export default function EnrollmentPanel({
                 <button
                   className="primary"
                   onClick={create}
-                  disabled={creating || !site || minted !== null}
+                  disabled={creating || !site || minted !== null || !planeReady(plane)}
                   title={minted !== null ? 'Copy and dismiss the displayed token first' : undefined}
                 >
                   {creating ? 'Issuing…' : 'Issue token'}

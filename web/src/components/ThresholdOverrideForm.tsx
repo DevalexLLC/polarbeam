@@ -113,11 +113,16 @@ export default function ThresholdOverrideForm({
   canWrite: boolean
   // Names the layer an empty field falls through to, in the footer.
   emptyHint: string
-  onChanged: () => void
+  // Called after a successful write with the server's advisory warnings
+  // (empty when there were none). Hosts close the editor only on a clean
+  // save — closing on a warning would discard the very thing the server
+  // went out of its way to report.
+  onChanged: (warnings: string[]) => void
   onAuthError: (err: unknown) => void
 }) {
   const [draft, setDraft] = useState<Draft | null>(null)
   const [errors, setErrors] = useState<string[]>([])
+  const [warnings, setWarnings] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
 
   const current = draft ?? draftFrom(override)
@@ -140,13 +145,26 @@ export default function ThresholdOverrideForm({
           setSaving(false)
           return
         }
-        await apiPut(url, body)
+        // The write can succeed WITH caveats: a new network default can
+        // leave this plane's pair rows inverted, and a pair override can
+        // name a plane neither site carries yet. The server reports those
+        // as advisory warnings rather than refusing, so dropping them would
+        // tell the operator "saved" and silently swallow the "but…".
+        const res = await apiPut<{ warnings?: string[] }>(url, body)
+        if (res?.warnings?.length) {
+          setWarnings(res.warnings)
+          setDraft(null)
+          onChanged(res.warnings)
+          setSaving(false)
+          return
+        }
       }
       setErrors([])
+      setWarnings([])
       // Clear the draft so the form resumes following server state (same
       // poll-reconciliation contract as the global thresholds form).
       setDraft(null)
-      onChanged()
+      onChanged([])
     } catch (err) {
       onAuthError(err)
       setErrors([err instanceof Error ? err.message : String(err)])
@@ -193,6 +211,16 @@ export default function ThresholdOverrideForm({
               <li key={e}>{e}</li>
             ))}
           </ul>
+        )}
+        {warnings.length > 0 && (
+          <div className="inline-alert" role="status">
+            Saved, with warnings:
+            <ul className="threshold-errors">
+              {warnings.map((w) => (
+                <li key={w}>{w}</li>
+              ))}
+            </ul>
+          </div>
         )}
         <div className="threshold-foot">
           <span className="hint">

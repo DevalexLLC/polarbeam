@@ -30,7 +30,9 @@ export default function Settings({
 }: {
   tab: SettingsTab
   caps: Caps
-  networks: string[]
+  // null while this session's network list is still loading or failed.
+  // Plane pickers must refuse to guess rather than treat it as one network.
+  networks: string[] | null
   username: string
   onAuthError: (err: unknown) => void
   onBannerSaved: (b: UIBanner) => void
@@ -47,6 +49,9 @@ export default function Settings({
   // only, since those rows are adminWrite.
   const workloadPlane = useMemo(() => planeChoice(caps, networks), [caps, networks])
   const ownedPlane = useMemo(() => planeChoice(caps, networks, { allowGlobal: true }), [caps, networks])
+  // Panels that only need the raw list (admin-only surfaces) can treat
+  // not-yet-loaded as empty; the plane pickers above cannot.
+  const knownNetworks = networks ?? []
 
   // Poll like every other view: a transient failure retries on the next
   // tick, and another admin's change converges here ≤30 s. The panel keeps
@@ -100,14 +105,14 @@ export default function Settings({
         glance. adminWrite and networkWrite are the server's own wrapper
         names; a panel never sees `caps` and so cannot pick the wrong one. */}
       {tab === 'authentication' ? (
-        <OIDCSettingsPanel caps={caps} canWrite={caps.adminWrite} networks={networks} onAuthError={onAuthError} />
+        <OIDCSettingsPanel caps={caps} canWrite={caps.adminWrite} networks={knownNetworks} onAuthError={onAuthError} />
       ) : tab === 'banner' ? (
         <BannerSettingsPanel caps={caps} canWrite={caps.adminWrite} onAuthError={onAuthError} onSaved={onBannerSaved} />
       ) : tab === 'users' ? (
         <UsersPanel
           caps={caps}
           canWrite={caps.adminWrite}
-          networks={networks}
+          networks={knownNetworks}
           currentUsername={username}
           onAuthError={onAuthError}
         />

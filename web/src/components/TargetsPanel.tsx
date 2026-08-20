@@ -4,7 +4,7 @@ import { fmtAgo } from '../format'
 import type { Caps } from '../caps'
 import { canWriteRow } from '../caps'
 import type { PlaneChoice } from '../plane'
-import { initialPlane, networkField } from '../plane'
+import { initialPlane, networkField, planeReady } from '../plane'
 import type { TargetsConfigResponse, TargetConfig } from '../types'
 import ConfirmButton from './ConfirmButton'
 import PlaneField from './PlaneField'
@@ -313,7 +313,11 @@ export default function TargetsPanel({
                     Cancel
                   </button>
                 )}
-                <button className="primary" onClick={save} disabled={saving || !draft}>
+                <button
+                  className="primary"
+                  onClick={save}
+                  disabled={saving || !draft || (!editing && !planeReady(plane))}
+                >
                   {saving ? 'Saving…' : editing ? 'Save changes' : 'Add target'}
                 </button>
               </span>

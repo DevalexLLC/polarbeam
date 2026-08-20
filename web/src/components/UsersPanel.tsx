@@ -668,7 +668,15 @@ export default function UsersPanel({
                         network admin. */}
                         <td data-label="Role">{roleLabel(u.role)}</td>
                         <td data-label="Networks">
-                          {u.networks === null ? (
+                          {/* A deleted identity also reports null, because
+                            its scope rows are gone — so null alone cannot
+                            mean "global". Saying "all" for a deleted
+                            network_admin would claim it once had access it
+                            never had, in the one view that exists to answer
+                            that question. */}
+                          {u.networks === null && SCOPED_ROLES.has(u.role) ? (
+                            <span className="hint">unknown</span>
+                          ) : u.networks === null ? (
                             <span className="hint">all</span>
                           ) : u.networks.length === 0 ? (
                             // Assignable but unassigned: this account can see

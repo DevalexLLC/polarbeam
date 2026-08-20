@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { apiDelete, apiGet, apiPost } from '../api'
 import type { PlaneChoice } from '../plane'
-import { initialPlane, networkField } from '../plane'
+import { initialPlane, networkField, planeReady } from '../plane'
 import type { MeshesConfigResponse, MeshConfig, SitesResponse } from '../types'
 import ConfirmButton from './ConfirmButton'
 import PlaneField from './PlaneField'
@@ -231,7 +231,7 @@ export default function MeshesPanel({
               </span>
               <button
                 className="primary"
-                disabled={busy || newName.trim() === ''}
+                disabled={busy || newName.trim() === '' || !planeReady(plane)}
                 onClick={() =>
                   // The mesh POST upserts by name with omitted network
                   // meaning "keep an existing mesh's binding", so the plane

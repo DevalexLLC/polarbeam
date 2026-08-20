@@ -33,7 +33,7 @@ export default function PathThresholdEditor({
   // global row, already resolved by the panel.
   global: ThresholdSettings
   canWrite: boolean
-  onChanged: () => void
+  onChanged: (warnings: string[]) => void
   onAuthError: (err: unknown) => void
 }) {
   return (

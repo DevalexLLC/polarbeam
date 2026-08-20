@@ -5,7 +5,7 @@ import { mergeLayers } from '../severity'
 import type { Caps } from '../caps'
 import { canWriteRow } from '../caps'
 import type { PlaneChoice } from '../plane'
-import { initialPlane } from '../plane'
+import { initialPlane, planeReady } from '../plane'
 import type { PathThresholdOverride, SettingsResponse, SitesResponse } from '../types'
 import ConfirmButton from './ConfirmButton'
 import PathThresholdEditor, { pathThresholdURL } from './PathThresholdEditor'
@@ -75,11 +75,16 @@ export default function PathThresholdsPanel({
 
   const overrides = settings.overrides
   const global = settings.thresholds
-  // What a row's empty fields fall through to: its plane's defaults folded
-  // over the global row, mirroring the resolver's pair -> network -> global
-  // order with the pair layer itself left out.
+  // What a row's empty fields fall through to. This must mirror
+  // buildThresholdResolver exactly (severity.ts), minus the row itself:
+  // a plane-qualified pair row inherits the SAME pair's all-planes row
+  // before that plane's defaults, so folding only the network layer would
+  // report a number the pair does not actually grade against — and would
+  // make the editor's inversion check disagree with the server's.
   const networkDefaults = new Map(settings.network_defaults.map((d) => [d.network, d]))
-  const inherited = (network: string) => (network === '' ? global : mergeLayers(global, networkDefaults.get(network)))
+  const allPlanePairs = new Map(settings.overrides.filter((o) => o.network === '').map((o) => [pairKey(o.a, o.b), o]))
+  const inherited = (a: string, b: string, network: string) =>
+    network === '' ? global : mergeLayers(global, allPlanePairs.get(pairKey(a, b)), networkDefaults.get(network))
   const overridden = new Set(overrides.map((o) => pairKey(o.a, o.b, o.network)))
 
   const remove = async (o: PathThresholdOverride) => {
@@ -96,7 +101,7 @@ export default function PathThresholdsPanel({
   const addPicked = addA !== '' && addB !== '' && addA !== addB
   // A scoped caller cannot write the all-planes row, so an unresolved plane
   // ('' with no global rights) is not a valid target for the add flow.
-  const addPlaneOk = canWriteRow(caps, addNetwork) && plane.kind !== 'none'
+  const addPlaneOk = canWriteRow(caps, addNetwork) && planeReady(plane)
   const addDuplicate = addPicked && overridden.has(pairKey(addA, addB, addNetwork))
   const addReady = addPicked && addPlaneOk && !addDuplicate
 
@@ -159,7 +164,7 @@ export default function PathThresholdsPanel({
             <tbody>
               {overrides.map((o) => {
                 const key = pairKey(o.a, o.b, o.network)
-                const base = inherited(o.network)
+                const base = inherited(o.a, o.b, o.network)
                 return (
                   <Fragment key={key}>
                     <tr>
@@ -216,8 +221,10 @@ export default function PathThresholdsPanel({
                               override={o}
                               global={base}
                               canWrite={canWriteRow(caps, o.network)}
-                              onChanged={() => {
-                                setEditKey(null)
+                              onChanged={(warnings) => {
+                                // Stay open when the server had something to
+                                // say; the editor is where it is shown.
+                                if (warnings.length === 0) setEditKey(null)
                                 onChanged()
                               }}
                               onAuthError={onAuthError}
@@ -286,10 +293,10 @@ export default function PathThresholdsPanel({
                   b={addB}
                   network={addNetwork}
                   override={null}
-                  global={inherited(addNetwork)}
+                  global={inherited(addA, addB, addNetwork)}
                   canWrite={canWrite}
-                  onChanged={() => {
-                    setAdding(false)
+                  onChanged={(warnings) => {
+                    if (warnings.length === 0) setAdding(false)
                     onChanged()
                   }}
                   onAuthError={onAuthError}
