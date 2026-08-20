@@ -86,6 +86,12 @@ type fakeDB struct {
 	directionLatest      []store.MatrixRow
 	passedLatencySources []string
 	lastSource           store.Source // source passed to the last PairSeries/PairSummary call
+	// srcAgents of every PairSummary call, in order — asserts the pair
+	// endpoints' ?network= filter narrowed the endpoint ID sets.
+	pairSummaryAgents [][]uuid.UUID
+
+	matrixRows    []store.MatrixRow
+	expectedPairs []store.NetworkPair
 
 	targetEndpoints map[uuid.UUID]*store.TargetEndpoints
 	stageBuckets    []store.StageBucket
@@ -337,9 +343,11 @@ func (f *fakeDB) AgentBucketFailures(_ context.Context, agentID uuid.UUID, bucke
 	return f.bucketFailures, nil
 }
 func (f *fakeDB) MatrixLatest(_ context.Context, _ time.Duration) ([]store.MatrixRow, error) {
-	return nil, nil
+	return f.matrixRows, nil
 }
-func (f *fakeDB) ExpectedPairs(_ context.Context) ([]store.SitePair, error) { return nil, nil }
+func (f *fakeDB) ExpectedPairs(_ context.Context) ([]store.NetworkPair, error) {
+	return f.expectedPairs, nil
+}
 func (f *fakeDB) SiteEndpoints(_ context.Context, name string) (*store.SiteEndpoints, error) {
 	return f.endpoints[name], nil
 }
@@ -348,8 +356,9 @@ func (f *fakeDB) PairSeries(_ context.Context, _, _ []uuid.UUID, _, _ time.Durat
 	f.passedLatencySources = append(f.passedLatencySources, latencySource)
 	return f.pairSeries, nil
 }
-func (f *fakeDB) PairSummary(_ context.Context, _, _ []uuid.UUID, _ time.Duration, source store.Source) (*store.PairSummaryRow, error) {
+func (f *fakeDB) PairSummary(_ context.Context, srcAgents, _ []uuid.UUID, _ time.Duration, source store.Source) (*store.PairSummaryRow, error) {
 	f.lastSource = source
+	f.pairSummaryAgents = append(f.pairSummaryAgents, srcAgents)
 	if f.pairSummary != nil {
 		return f.pairSummary, nil
 	}
@@ -1369,12 +1378,13 @@ func TestEventsEndpoints(t *testing.T) {
 	dst, target, ptype := "nyc", "nyc-agent", int16(1)
 	degradedErr := "latency at or above critical threshold (40ms)"
 	f.outages = []store.OutageInfo{
-		{ID: uuid.New(), Kind: "probe_failing", AgentHostname: "syd-1", SrcSite: "syd",
+		{ID: uuid.New(), Kind: "probe_failing", AgentHostname: "syd-1", Network: "corp", SrcSite: "syd",
 			DstSite: &dst, TargetName: &target, ProbeType: &ptype,
 			OpenedAt: closed.Add(-time.Hour)},
+		// No Network: the agent row is gone, the plane serves as "".
 		{ID: uuid.New(), Kind: "agent_offline", AgentHostname: "lon-1", SrcSite: "lon",
 			OpenedAt: closed.Add(-2 * time.Hour), ClosedAt: &closed},
-		{ID: uuid.New(), Kind: "probe_degraded", AgentHostname: "syd-1", SrcSite: "syd",
+		{ID: uuid.New(), Kind: "probe_degraded", AgentHostname: "syd-1", Network: "corp", SrcSite: "syd",
 			DstSite: &dst, TargetName: &target, ProbeType: &ptype,
 			OpenedAt: closed.Add(-30 * time.Minute), Error: &degradedErr},
 	}
@@ -1398,6 +1408,10 @@ func TestEventsEndpoints(t *testing.T) {
 	}
 	if !strings.Contains(body, `"kind":"probe_degraded"`) || !strings.Contains(body, degradedErr) {
 		t.Errorf("outages body missing probe_degraded passthrough: %s", body)
+	}
+	// The plane passes through, and a deleted agent's empty plane stays "".
+	if !strings.Contains(body, `"network":"corp"`) || !strings.Contains(body, `"network":""`) {
+		t.Errorf("outages body missing network passthrough: %s", body)
 	}
 
 	// Empty results serve well-formed shapes, not nulls that break the SPA.
@@ -1441,7 +1455,7 @@ func TestPathEventsTargetID(t *testing.T) {
 	when := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
 	f.pathEvents = []store.PathEventInfo{
 		// External target still present: the row links by id.
-		{ID: uuid.New(), Time: when, AgentHostname: "syd-1", SrcSite: "syd",
+		{ID: uuid.New(), Time: when, AgentHostname: "syd-1", Network: "corp", SrcSite: "syd",
 			TargetName: &name, TargetID: &tid,
 			OldPathHash: []byte{1}, NewPathHash: []byte{2},
 			OldHops: []byte("[]"), NewHops: []byte("[]")},
@@ -1466,6 +1480,10 @@ func TestPathEventsTargetID(t *testing.T) {
 	}
 	if !strings.Contains(body, `"target_id":null`) {
 		t.Errorf("path-events body missing null target_id for deleted target: %s", body)
+	}
+	// The plane passes through, and a deleted agent's empty plane stays "".
+	if !strings.Contains(body, `"network":"corp"`) || !strings.Contains(body, `"network":""`) {
+		t.Errorf("path-events body missing network passthrough: %s", body)
 	}
 }
 
@@ -1676,5 +1694,152 @@ func TestTracerouteEndpoint(t *testing.T) {
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "nowhere") {
 		t.Errorf("unknown site = %d %s, want 404 naming it", w.Code, w.Body)
+	}
+}
+
+// TestPairNetworkFilter pins the pair endpoints' ?network= contract: the
+// response lists the planes present at both sites, a filter narrows the
+// endpoint ID sets to that plane's agents before any series query runs,
+// and an unknown network is a 404 — never a silent all-planes fallback.
+func TestPairNetworkFilter(t *testing.T) {
+	f := newFakeDB()
+	corpID := uuid.New()
+	f.networks = []store.NetworkAdminInfo{
+		{ID: uuid.New(), Name: "default"}, {ID: corpID, Name: "corp"}, {ID: uuid.New(), Name: "oob"},
+	}
+	nycCorp, nycDefault, lonCorp := uuid.New(), uuid.New(), uuid.New()
+	nycCorpT, nycDefaultT, lonCorpT := uuid.New(), uuid.New(), uuid.New()
+	f.endpoints = map[string]*store.SiteEndpoints{
+		// nyc spans two planes; lon has corp only, plus an oob agent —
+		// so the pair's plane list is exactly {corp}.
+		"nyc": {SiteInfo: store.SiteInfo{Name: "nyc"},
+			AgentIDs:  []uuid.UUID{nycCorp, nycDefault},
+			TargetIDs: []uuid.UUID{nycCorpT, nycDefaultT},
+			Networks:  []string{"corp", "default"}},
+		"lon": {SiteInfo: store.SiteInfo{Name: "lon"},
+			AgentIDs:  []uuid.UUID{lonCorp, uuid.New()},
+			TargetIDs: []uuid.UUID{lonCorpT, uuid.New()},
+			Networks:  []string{"corp", "oob"}},
+	}
+	h := newTestAPI(t, f)
+	cookie, _ := loginAndCookie(t, h, f)
+
+	get := func(url string) (int, map[string]any) {
+		t.Helper()
+		req := httptest.NewRequest("GET", url, nil)
+		req.AddCookie(cookie)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		var body map[string]any
+		if w.Code == http.StatusOK {
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatalf("GET %s: %v", url, err)
+			}
+		}
+		return w.Code, body
+	}
+
+	// Unfiltered: every agent queried, plane list = intersection.
+	code, pair := get("/api/v1/pairs/nyc/lon")
+	if code != http.StatusOK {
+		t.Fatalf("pair = %d", code)
+	}
+	if pair["network"] != "" {
+		t.Errorf("network echo = %v, want empty (all planes)", pair["network"])
+	}
+	if nets, _ := pair["networks"].([]any); len(nets) != 1 || nets[0] != "corp" {
+		t.Errorf("networks = %v, want [corp] (present at both sites)", pair["networks"])
+	}
+	if len(f.pairSummaryAgents) != 2 || len(f.pairSummaryAgents[0]) != 2 {
+		t.Fatalf("unfiltered PairSummary agents = %+v, want both nyc agents", f.pairSummaryAgents)
+	}
+
+	// Filtered: only the plane's agents reach the series queries.
+	f.pairSummaryAgents = nil
+	code, pair = get("/api/v1/pairs/nyc/lon?network=corp")
+	if code != http.StatusOK {
+		t.Fatalf("filtered pair = %d", code)
+	}
+	if pair["network"] != "corp" {
+		t.Errorf("network echo = %v, want corp", pair["network"])
+	}
+	if len(f.pairSummaryAgents) != 2 ||
+		len(f.pairSummaryAgents[0]) != 1 || f.pairSummaryAgents[0][0] != nycCorp ||
+		len(f.pairSummaryAgents[1]) != 1 || f.pairSummaryAgents[1][0] != lonCorp {
+		t.Errorf("filtered PairSummary agents = %+v, want only the corp agents", f.pairSummaryAgents)
+	}
+
+	// Unknown plane: loud 404, and no series query ran.
+	f.pairSummaryAgents = nil
+	if code, _ = get("/api/v1/pairs/nyc/lon?network=nope"); code != http.StatusNotFound {
+		t.Errorf("unknown network = %d, want 404", code)
+	}
+	if len(f.pairSummaryAgents) != 0 {
+		t.Errorf("series queried despite unknown network: %+v", f.pairSummaryAgents)
+	}
+	if code, _ = get("/api/v1/pairs/nyc/lon/series?network=nope"); code != http.StatusNotFound {
+		t.Errorf("unknown network on series = %d, want 404", code)
+	}
+}
+
+// TestMatrixCellsCarryNetworkSubCells pins the matrix response's networks
+// breakdown end-to-end: every cell carries per-plane sub-cells, and on a
+// single-network install the lone sub-cell mirrors its parent, so the SPA
+// filter has nothing to special-case.
+func TestMatrixCellsCarryNetworkSubCells(t *testing.T) {
+	f := newFakeDB()
+	f.sites = []store.SiteInfo{{Name: "nyc"}, {Name: "lon"}}
+	loss := float32(0)
+	lat := int64(1500)
+	f.matrixRows = []store.MatrixRow{{
+		SrcSite: "nyc", DstSite: "lon", Network: "default",
+		ProbeType: int16(pb.ProbeType_PROBE_TYPE_ICMP),
+		Status:    int16(pb.ProbeStatus_PROBE_STATUS_OK),
+		Time:      time.Now(), LatencyUS: &lat, LatencySource: "rtt", LossPct: &loss,
+	}}
+	f.expectedPairs = []store.NetworkPair{{Src: "nyc", Dst: "lon", Network: "default"}}
+	h := newTestAPI(t, f)
+	cookie, _ := loginAndCookie(t, h, f)
+
+	req := httptest.NewRequest("GET", "/api/v1/matrix", nil)
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("matrix = %d %s", w.Code, w.Body)
+	}
+	var res struct {
+		Cells []struct {
+			Src       string `json:"src"`
+			Dst       string `json:"dst"`
+			Status    string `json:"status"`
+			LatencyUS *int64 `json:"latency_us"`
+			Probes    []struct {
+				Network string `json:"network"`
+			} `json:"probes"`
+			Networks []struct {
+				Network   string `json:"network"`
+				Status    string `json:"status"`
+				LatencyUS *int64 `json:"latency_us"`
+			} `json:"networks"`
+		} `json:"cells"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Cells) != 1 {
+		t.Fatalf("cells = %+v, want one", res.Cells)
+	}
+	c := res.Cells[0]
+	if len(c.Networks) != 1 {
+		t.Fatalf("sub-cells = %+v, want exactly one on a single-network install", c.Networks)
+	}
+	n := c.Networks[0]
+	if n.Network != "default" || n.Status != c.Status ||
+		n.LatencyUS == nil || c.LatencyUS == nil || *n.LatencyUS != *c.LatencyUS {
+		t.Errorf("sub-cell %+v should mirror parent %+v", n, c)
+	}
+	if len(c.Probes) != 1 || c.Probes[0].Network != "default" {
+		t.Errorf("matrix probes = %+v, want network on each", c.Probes)
 	}
 }

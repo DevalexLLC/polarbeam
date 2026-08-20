@@ -3,6 +3,7 @@ import { apiDelete, apiGet, apiPost, apiPut } from '../api'
 import { fmtAgo } from '../format'
 import type {
   MeshesConfigResponse,
+  NetworksConfigResponse,
   ParamSpec,
   ProbeConfig,
   ProbesConfigResponse,
@@ -31,6 +32,9 @@ interface ProbeDraft {
   mesh: string
   site: string
   target: string
+  // Direct mode only; mesh templates inherit the mesh's network and the
+  // server rejects the combination.
+  network: string
   type: string
   intervalS: string
   timeoutS: string
@@ -45,6 +49,7 @@ function newDraft(): ProbeDraft {
     mesh: '',
     site: '',
     target: '',
+    network: 'default',
     type: 'icmp',
     intervalS: '30',
     timeoutS: '5',
@@ -60,6 +65,7 @@ function draftFrom(p: ProbeConfig): ProbeDraft {
     mesh: p.mesh ?? '',
     site: p.site ?? '',
     target: p.target ?? '',
+    network: p.network,
     type: p.type,
     intervalS: String(p.interval_ms / 1000),
     timeoutS: String(p.timeout_ms / 1000),
@@ -192,6 +198,7 @@ export default function ProbesPanel({
   const [meshes, setMeshes] = useState<string[]>([])
   const [sites, setSites] = useState<string[]>([])
   const [targets, setTargets] = useState<string[]>([])
+  const [networks, setNetworks] = useState<string[]>([])
   const [error, setError] = useState('')
   const [rowError, setRowError] = useState('')
   const [visible, setVisible] = useState(PROBE_PAGE)
@@ -221,12 +228,14 @@ export default function ProbesPanel({
         apiGet<MeshesConfigResponse>('/api/v1/config/meshes'),
         apiGet<SitesResponse>('/api/v1/sites'),
         apiGet<TargetsConfigResponse>('/api/v1/config/targets'),
+        apiGet<NetworksConfigResponse>('/api/v1/config/networks'),
       ])
-        .then(([probes, meshRes, sitesRes, targetsRes]) => {
+        .then(([probes, meshRes, sitesRes, targetsRes, networksRes]) => {
           if (cancelled) return
           setData(probes)
           setMeshes(meshRes.meshes.map((m) => m.name))
           setSites(sitesRes.sites.map((s) => s.name))
+          setNetworks(networksRes.networks.map((n) => n.name))
           // Agent-kind targets are excluded: they carry no address/port/URL
           // (mesh expansion resolves peers), so the server rejects direct
           // probes against them.
@@ -257,7 +266,16 @@ export default function ProbesPanel({
     if (!body) return
     setBusy(true)
     try {
-      const assignment = draft.mode === 'mesh' ? { mesh: draft.mesh } : { site: draft.site, target: draft.target }
+      // Omitting network keeps the request identical to the pre-networks
+      // one ('default'); mesh templates never send it (server 400).
+      const assignment =
+        draft.mode === 'mesh'
+          ? { mesh: draft.mesh }
+          : {
+              site: draft.site,
+              target: draft.target,
+              ...(draft.network !== 'default' ? { network: draft.network } : {}),
+            }
       const res = await apiPost<{ warnings?: string[] }>('/api/v1/config/probes', {
         ...assignment,
         type: draft.type,
@@ -346,6 +364,8 @@ export default function ProbesPanel({
 
   const probes = data?.probes ?? NO_PROBES
   const shown = useMemo(() => probes.slice(0, visible), [probes, visible])
+  // Single-network installs never see the network picker or labels.
+  const multiNetwork = networks.length > 1
 
   if (error && !data) {
     return (
@@ -508,9 +528,9 @@ export default function ProbesPanel({
           <span className="hint">Changes reach agents within ~30s · refreshes every 30s</span>
         </div>
         <p className="section-intro">
-          Direct probes run from every agent at a site against one target; mesh templates expand over every ordered pair
-          of member sites. Type and assignment are fixed once created — cadence, params, and enabled state edit in place
-          so history stays continuous.
+          Direct probes run from every agent on the probe's network at a site against one target; mesh templates expand
+          over every ordered pair of member sites, pairing only agents on the mesh's network. Type, assignment, and
+          network are fixed once created — cadence, params, and enabled state edit in place so history stays continuous.
         </p>
         {rowError && (
           <ul className="error threshold-errors">
@@ -563,6 +583,7 @@ export default function ProbesPanel({
                       </td>
                       <td data-label="Assignment" className="mono">
                         {assignmentLabel(p)}
+                        {multiNetwork && <span className="chip">{p.network}</span>}
                       </td>
                       <td data-label="Interval">{p.interval_ms / 1000}s</td>
                       <td data-label="Timeout">{p.timeout_ms / 1000}s</td>
@@ -623,7 +644,7 @@ export default function ProbesPanel({
                               Edit {p.type} · {assignmentLabel(p)}
                               <span className="hint">
                                 {' '}
-                                — type and assignment are fixed; delete and re-create to re-target
+                                — type, assignment, and network are fixed; delete and re-create to re-target
                               </span>
                             </h3>
                             {cadenceFields(editDraft, setEditDraftFn)}
@@ -768,6 +789,25 @@ export default function ProbesPanel({
                       </select>
                     </span>
                   </label>
+                  {multiNetwork && (
+                    <label className="threshold-field">
+                      <span className="eyebrow">Network</span>
+                      <span className="threshold-input">
+                        <select
+                          value={createDraft.network}
+                          disabled={busy}
+                          onChange={(e) => setCreateDraft((d) => ({ ...d, network: e.target.value }))}
+                        >
+                          {networks.map((n) => (
+                            <option key={n} value={n}>
+                              {n}
+                            </option>
+                          ))}
+                        </select>
+                        <span className="hint">only this network's agents at the site run it</span>
+                      </span>
+                    </label>
+                  )}
                 </>
               )}
             </div>

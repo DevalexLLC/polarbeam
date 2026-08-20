@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { apiGet } from '../api'
 import HealthStrip, { stripStats, UptimeValue } from '../components/HealthStrip'
 import { fmtAgo, fmtTime } from '../format'
+import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
 import { useTimezone } from '../timezone'
 import type {
   AgentBucketFailuresResponse,
@@ -203,12 +204,14 @@ function ProbeDetail({
 
 function Row({
   a,
+  multiNetwork,
   expanded,
   onToggle,
   detail,
   detailError,
 }: {
   a: AgentInfo
+  multiNetwork: boolean
   expanded: boolean
   onToggle: () => void
   detail: AgentProbeHealthResponse | null
@@ -235,6 +238,11 @@ function Row({
         <td className="mono" data-label="Agent" title={`enrolled ${fmtTime(a.enrolled_at)} · ${a.id}`}>
           {a.site} · {a.hostname}
         </td>
+        {multiNetwork && (
+          <td className="mono" data-label="Network">
+            {a.network}
+          </td>
+        )}
         <td className="mono" data-label="Address">
           {a.probe_address || '—'}
         </td>
@@ -286,7 +294,7 @@ function Row({
       </tr>
       {expanded && (
         <tr className="agent-detail-row">
-          <td colSpan={10} data-label="24 h probes">
+          <td colSpan={multiNetwork ? 11 : 10} data-label="24 h probes">
             <ProbeDetail agentId={a.id} detail={detail} error={detailError} />
           </td>
         </tr>
@@ -371,20 +379,27 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
     document.getElementById('agent-' + expanded)?.scrollIntoView({ block: 'nearest' })
   }, [expanded, data])
 
+  // The global top-bar network filter scopes the whole view: rows, header
+  // chips, and the health-filter button counts all derive from this subset.
+  const { network } = useNetworkFilter()
+  const fleet = useMemo(
+    () => (data?.agents ?? []).filter((a) => matchesNetworkFilter(network, a.network)),
+    [data, network],
+  )
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase()
-    return (data?.agents ?? []).filter((row) => {
+    return fleet.filter((row) => {
       // The two filters partition the fleet on needsAttention — including
       // never-seen (stale) agents and recent spool drops — so the button
       // counts always match the rows they reveal.
       if (filter === 'attention' && !needsAttention(row)) return false
       if (filter === 'healthy' && needsAttention(row)) return false
       if (!needle) return true
-      return [row.site, row.hostname, row.probe_address, row.version].some((value) =>
+      return [row.site, row.network, row.hostname, row.probe_address, row.version].some((value) =>
         value.toLowerCase().includes(needle),
       )
     })
-  }, [data, filter, query])
+  }, [fleet, filter, query])
 
   if (error && !data)
     return (
@@ -401,11 +416,17 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
       </div>
     )
 
-  const down = data.agents.filter((a) => health(a).status === 'down').length
-  const degraded = data.agents.filter((a) => health(a).status === 'degraded').length
-  const dropsTotal = data.agents.reduce((sum, a) => sum + a.dropped_results, 0)
-  const attention = data.agents.filter(needsAttention).length
-  const healthy = data.agents.length - attention
+  // Column appears only when the fleet actually spans networks — derived
+  // from the whole fleet, not the filtered subset, so the table shape stays
+  // stable as the global filter changes; single-network installs keep the
+  // exact pre-networks table.
+  const multiNetwork = new Set(data.agents.map((a) => a.network)).size > 1
+
+  const down = fleet.filter((a) => health(a).status === 'down').length
+  const degraded = fleet.filter((a) => health(a).status === 'degraded').length
+  const dropsTotal = fleet.reduce((sum, a) => sum + a.dropped_results, 0)
+  const attention = fleet.filter(needsAttention).length
+  const healthy = fleet.length - attention
 
   return (
     <>
@@ -417,7 +438,7 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
         </div>
         <div className="chips">
           <span className="chip">
-            enrolled <span className="mono">{data.agents.length}</span>
+            enrolled <span className="mono">{fleet.length}</span>
           </span>
           <span className="chip">
             {down > 0 && <span className="dot swatch status-down" />}
@@ -446,7 +467,7 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
             aria-pressed={filter === 'all'}
             onClick={() => setFilter('all')}
           >
-            All {data.agents.length}
+            All {fleet.length}
           </button>
           <button
             className={filter === 'attention' ? 'active' : ''}
@@ -491,7 +512,7 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
             <span>
               {data.agents.length === 0
                 ? 'Enroll an agent to begin monitoring a site.'
-                : 'Change the health filter or search query.'}
+                : 'Change the health filter, search query, or top-bar network filter.'}
             </span>
           </div>
         ) : (
@@ -501,6 +522,7 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
                 <tr>
                   <th className="eyebrow">status</th>
                   <th className="eyebrow">agent</th>
+                  {multiNetwork && <th className="eyebrow">network</th>}
                   <th className="eyebrow">address</th>
                   <th className="eyebrow">version</th>
                   <th className="eyebrow">last seen</th>
@@ -518,6 +540,7 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
                   <Row
                     key={a.id}
                     a={a}
+                    multiNetwork={multiNetwork}
                     expanded={expanded === a.id}
                     onToggle={() => {
                       location.hash = expanded === a.id ? '#/agents' : '#/agents/' + a.id

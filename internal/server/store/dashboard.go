@@ -188,9 +188,13 @@ type AgentBucketFailureGroup struct {
 // series, mapped to its ordered site pair. TargetID is set only by
 // DirectionLatest — the pair page's check chips link to the target detail
 // page — and stays nil from MatrixLatest, which folds to site pairs.
+// Network is the source agent's network name, set only by MatrixLatest
+// (mesh expansion pairs same-network agents, so it is the series' plane);
+// DirectionLatest leaves it empty — the pair page filters by endpoint IDs.
 type MatrixRow struct {
 	SrcSite       string
 	DstSite       string
+	Network       string
 	TargetID      *uuid.UUID
 	ProbeType     int16
 	Status        int16
@@ -207,12 +211,23 @@ type SitePair struct {
 	Dst string
 }
 
+// NetworkPair is a SitePair on one connectivity plane. Projecting the set
+// to (Src, Dst) yields exactly the pre-networks expected-pair set.
+type NetworkPair struct {
+	Src     string
+	Dst     string
+	Network string
+}
+
 // SiteEndpoints are the probe-series endpoints belonging to one site: its
 // agents (result senders) and those agents' targets (result destinations).
+// Networks holds each agent's network name, parallel to AgentIDs and
+// TargetIDs, so callers can filter all three in lockstep by plane.
 type SiteEndpoints struct {
 	SiteInfo
 	AgentIDs  []uuid.UUID
 	TargetIDs []uuid.UUID
+	Networks  []string
 }
 
 // SeriesBucket is one time_bucket of a directional pair series. The
@@ -619,11 +634,12 @@ func (s *Store) MatrixLatest(ctx context.Context, horizon time.Duration) ([]Matr
 		     WHERE time > now() - $1::interval
 		     ORDER BY agent_id, target_id, probe_type, time DESC
 		)
-		SELECT ss.name, ds.name, l.probe_type, l.status, l.time,
+		SELECT ss.name, ds.name, nw.name, l.probe_type, l.status, l.time,
 		       l.latency_us, l.latency_source, l.loss_pct
 		  FROM latest l
 		  JOIN agents sa ON sa.id = l.agent_id
 		  JOIN sites  ss ON ss.id = sa.site_id
+		  JOIN networks nw ON nw.id = sa.network_id
 		  JOIN targets t ON t.id = l.target_id AND t.agent_id IS NOT NULL
 		  JOIN agents da ON da.id = t.agent_id
 		  JOIN sites  ds ON ds.id = da.site_id`, latencyExpr, latencySourceExpr),
@@ -635,7 +651,7 @@ func (s *Store) MatrixLatest(ctx context.Context, horizon time.Duration) ([]Matr
 	var out []MatrixRow
 	for rows.Next() {
 		var mr MatrixRow
-		if err := rows.Scan(&mr.SrcSite, &mr.DstSite, &mr.ProbeType, &mr.Status, &mr.Time,
+		if err := rows.Scan(&mr.SrcSite, &mr.DstSite, &mr.Network, &mr.ProbeType, &mr.Status, &mr.Time,
 			&mr.LatencyUS, &mr.LatencySource, &mr.LossPct); err != nil {
 			return nil, fmt.Errorf("matrix latest: %w", err)
 		}
@@ -644,21 +660,22 @@ func (s *Store) MatrixLatest(ctx context.Context, horizon time.Duration) ([]Matr
 	return out, rows.Err()
 }
 
-// ExpectedPairs returns the ordered site pairs that enabled probe configs
-// should be producing results for — mesh templates expanded over member
-// pairs plus direct probes whose target is an agent. Pairs present here but
-// absent from MatrixLatest render as stale.
+// ExpectedPairs returns the ordered site pairs, per network, that enabled
+// probe configs should be producing results for — mesh templates expanded
+// over member pairs plus direct probes whose target is an agent. Pairs
+// present here but absent from MatrixLatest render as stale (per plane).
 //
 // Network scoping is deliberately conservative: a member site only drops
 // out of a pair when it has agents but none on the probe's network (real
 // cross-plane unreachability). A member site with no agents at all keeps
 // its pairs — rendering stale for an unstaffed member is today's behavior
 // and stays, so the matrix is bit-identical across the networks upgrade.
-func (s *Store) ExpectedPairs(ctx context.Context) ([]SitePair, error) {
+func (s *Store) ExpectedPairs(ctx context.Context) ([]NetworkPair, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT DISTINCT s1.name, s2.name
+		`SELECT DISTINCT s1.name, s2.name, n.name
 		   FROM probe_configs pc
 		   JOIN mesh_groups mg ON mg.id = pc.mesh_id
+		   JOIN networks n ON n.id = mg.network_id
 		   JOIN mesh_members m1 ON m1.mesh_id = pc.mesh_id
 		   JOIN mesh_members m2 ON m2.mesh_id = pc.mesh_id AND m2.site_id <> m1.site_id
 		   JOIN sites s1 ON s1.id = m1.site_id
@@ -669,8 +686,9 @@ func (s *Store) ExpectedPairs(ctx context.Context) ([]SitePair, error) {
 		    AND (EXISTS (SELECT 1 FROM agents a WHERE a.site_id = m2.site_id AND a.network_id = mg.network_id)
 		         OR NOT EXISTS (SELECT 1 FROM agents a WHERE a.site_id = m2.site_id))
 		 UNION
-		 SELECT DISTINCT s1.name, s2.name
+		 SELECT DISTINCT s1.name, s2.name, n.name
 		   FROM probe_configs pc
+		   JOIN networks n ON n.id = pc.network_id
 		   JOIN sites s1 ON s1.id = pc.site_id
 		   JOIN targets t ON t.id = pc.target_id AND t.agent_id IS NOT NULL
 		   JOIN agents da ON da.id = t.agent_id
@@ -682,10 +700,10 @@ func (s *Store) ExpectedPairs(ctx context.Context) ([]SitePair, error) {
 		return nil, fmt.Errorf("expected pairs: %w", err)
 	}
 	defer rows.Close()
-	var out []SitePair
+	var out []NetworkPair
 	for rows.Next() {
-		var p SitePair
-		if err := rows.Scan(&p.Src, &p.Dst); err != nil {
+		var p NetworkPair
+		if err := rows.Scan(&p.Src, &p.Dst, &p.Network); err != nil {
 			return nil, fmt.Errorf("expected pairs: %w", err)
 		}
 		out = append(out, p)
@@ -709,9 +727,10 @@ func (s *Store) SiteEndpoints(ctx context.Context, siteName string) (*SiteEndpoi
 		return nil, fmt.Errorf("site %q: %w", siteName, err)
 	}
 	rows, err := s.pool.Query(ctx,
-		`SELECT a.id, t.id
+		`SELECT a.id, t.id, n.name
 		   FROM agents a
 		   JOIN targets t ON t.agent_id = a.id
+		   JOIN networks n ON n.id = a.network_id
 		  WHERE a.site_id = $1`, ep.ID)
 	if err != nil {
 		return nil, fmt.Errorf("site %q endpoints: %w", siteName, err)
@@ -719,11 +738,13 @@ func (s *Store) SiteEndpoints(ctx context.Context, siteName string) (*SiteEndpoi
 	defer rows.Close()
 	for rows.Next() {
 		var agentID, targetID uuid.UUID
-		if err := rows.Scan(&agentID, &targetID); err != nil {
+		var network string
+		if err := rows.Scan(&agentID, &targetID, &network); err != nil {
 			return nil, fmt.Errorf("site %q endpoints: %w", siteName, err)
 		}
 		ep.AgentIDs = append(ep.AgentIDs, agentID)
 		ep.TargetIDs = append(ep.TargetIDs, targetID)
+		ep.Networks = append(ep.Networks, network)
 	}
 	return &ep, rows.Err()
 }

@@ -71,7 +71,8 @@ func (a *api) handleTargetSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type sourceJSON struct {
-		Site string `json:"site"`
+		Site    string `json:"site"`
+		Network string `json:"network"`
 		directionJSON
 	}
 	sources := []sourceJSON{}
@@ -81,7 +82,7 @@ func (a *api) handleTargetSummary(w http.ResponseWriter, r *http.Request) {
 			internalError(w, "target summary "+src.Site, err)
 			return
 		}
-		sources = append(sources, sourceJSON{Site: src.Site, directionJSON: dir})
+		sources = append(sources, sourceJSON{Site: src.Site, Network: src.Network, directionJSON: dir})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"target":  toTargetInfoJSON(ep),
@@ -114,6 +115,7 @@ func (a *api) handleTargetSeries(w http.ResponseWriter, r *http.Request) {
 	}
 	type sourceSeriesJSON struct {
 		Site          string      `json:"site"`
+		Network       string      `json:"network"`
 		LatencySource string      `json:"latency_source"`
 		Points        []pointJSON `json:"points"`
 	}
@@ -131,7 +133,7 @@ func (a *api) handleTargetSeries(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		sources = append(sources, sourceSeriesJSON{
-			Site: src.Site, LatencySource: family, Points: toPoints(points),
+			Site: src.Site, Network: src.Network, LatencySource: family, Points: toPoints(points),
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -205,8 +207,9 @@ func (a *api) handleTargetPaths(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type sourcePathsJSON struct {
-		Site  string            `json:"site"`
-		Paths []currentPathJSON `json:"paths"`
+		Site    string            `json:"site"`
+		Network string            `json:"network"`
+		Paths   []currentPathJSON `json:"paths"`
 	}
 	dstTargets := []uuid.UUID{ep.ID}
 	sources := []sourcePathsJSON{}
@@ -216,7 +219,7 @@ func (a *api) handleTargetPaths(w http.ResponseWriter, r *http.Request) {
 			internalError(w, "target paths "+src.Site, err)
 			return
 		}
-		sources = append(sources, sourcePathsJSON{Site: src.Site, Paths: toCurrentPathJSON(paths)})
+		sources = append(sources, sourcePathsJSON{Site: src.Site, Network: src.Network, Paths: toCurrentPathJSON(paths)})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"target":  toTargetInfoJSON(ep),
@@ -230,6 +233,7 @@ func (a *api) handleTargetPaths(w http.ResponseWriter, r *http.Request) {
 type targetProbeHealthJSON struct {
 	AgentID    string                  `json:"agent_id"`
 	Site       string                  `json:"site"`
+	Network    string                  `json:"network"`
 	Hostname   string                  `json:"hostname"`
 	ProbeID    string                  `json:"probe_id"`
 	Type       string                  `json:"type"`
@@ -266,6 +270,7 @@ func (a *api) handleTargetHealth(w http.ResponseWriter, r *http.Request) {
 			probes = append(probes, targetProbeHealthJSON{
 				AgentID:    aid,
 				Site:       row.SrcSite,
+				Network:    row.Network,
 				Hostname:   row.Hostname,
 				ProbeID:    pid,
 				Type:       probeTypeName(row.ProbeType),

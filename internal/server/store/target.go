@@ -15,11 +15,14 @@ import (
 // (the caggs already group by target_id), so only the stage breakdown and
 // the health inventory need queries of their own.
 
-// TargetSource is one site probing a target, with the site's agents that
-// have series toward it. Series fold across a site's agents exactly like
-// pair directions do.
+// TargetSource is one (site, network) probing a target, with the agents
+// that have series toward it. Series fold across a source's agents exactly
+// like pair directions do; splitting by network keeps planes apart when a
+// site probes the same target from more than one (single-network installs
+// fold identically to the pre-networks site-only key).
 type TargetSource struct {
 	Site     string
+	Network  string
 	AgentIDs []uuid.UUID
 }
 
@@ -66,6 +69,7 @@ type StageBucket struct {
 type TargetProbeHealthRow struct {
 	AgentID    uuid.UUID
 	SrcSite    string
+	Network    string
 	Hostname   string
 	ProbeID    uuid.UUID
 	ProbeType  int16
@@ -115,27 +119,28 @@ func (s *Store) TargetEndpoints(ctx context.Context, targetID uuid.UUID) (*Targe
 		return nil, fmt.Errorf("target %s: %w", targetID, err)
 	}
 	rows, err := s.pool.Query(ctx,
-		`SELECT s.name, ss.agent_id
+		`SELECT s.name, n.name, ss.agent_id
 		   FROM series_state ss
 		   JOIN agents a ON a.id = ss.agent_id
 		   JOIN sites  s ON s.id = a.site_id
+		   JOIN networks n ON n.id = a.network_id
 		  WHERE ss.target_id = $1
-		  GROUP BY s.name, ss.agent_id
-		  ORDER BY s.name, ss.agent_id`, targetID)
+		  GROUP BY s.name, n.name, ss.agent_id
+		  ORDER BY s.name, n.name, ss.agent_id`, targetID)
 	if err != nil {
 		return nil, fmt.Errorf("target %s sources: %w", targetID, err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var site string
+		var site, network string
 		var agentID uuid.UUID
-		if err := rows.Scan(&site, &agentID); err != nil {
+		if err := rows.Scan(&site, &network, &agentID); err != nil {
 			return nil, fmt.Errorf("target %s sources: %w", targetID, err)
 		}
-		if n := len(ep.Sources); n > 0 && ep.Sources[n-1].Site == site {
+		if n := len(ep.Sources); n > 0 && ep.Sources[n-1].Site == site && ep.Sources[n-1].Network == network {
 			ep.Sources[n-1].AgentIDs = append(ep.Sources[n-1].AgentIDs, agentID)
 		} else {
-			ep.Sources = append(ep.Sources, TargetSource{Site: site, AgentIDs: []uuid.UUID{agentID}})
+			ep.Sources = append(ep.Sources, TargetSource{Site: site, Network: network, AgentIDs: []uuid.UUID{agentID}})
 		}
 	}
 	return &ep, rows.Err()
@@ -216,13 +221,14 @@ func (s *Store) TargetProbeHealth(ctx context.Context, targetID uuid.UUID, windo
 		return nil, fmt.Errorf("target probe health: %w", err)
 	}
 	rows, err := s.pool.Query(ctx,
-		`SELECT ss.agent_id, s.name, a.hostname, ss.probe_id, ss.probe_type,
+		`SELECT ss.agent_id, s.name, n.name, a.hostname, ss.probe_id, ss.probe_type,
 		        ss.last_status, ss.last_time, oe.opened_at, oe.open_error,
 		        b.bucket, b.samples, b.ok
 		   FROM series_state ss
 		   JOIN unnest($4::uuid[]) AS ep(probe_id) ON ep.probe_id = ss.probe_id
 		   JOIN agents a ON a.id = ss.agent_id
 		   JOIN sites  s ON s.id = a.site_id
+		   JOIN networks n ON n.id = a.network_id
 		   LEFT JOIN outage_events oe ON oe.id = ss.open_event_id AND oe.kind = 'probe_failing'
 		   LEFT JOIN (
 		        SELECT h.agent_id, h.probe_id, time_bucket($2::interval, h.bucket) AS bucket,
@@ -242,7 +248,7 @@ func (s *Store) TargetProbeHealth(ctx context.Context, targetID uuid.UUID, windo
 	var out []TargetProbeHealthRow
 	for rows.Next() {
 		var r TargetProbeHealthRow
-		if err := rows.Scan(&r.AgentID, &r.SrcSite, &r.Hostname, &r.ProbeID, &r.ProbeType,
+		if err := rows.Scan(&r.AgentID, &r.SrcSite, &r.Network, &r.Hostname, &r.ProbeID, &r.ProbeType,
 			&r.LastStatus, &r.LastTime, &r.OpenedAt, &r.OpenError,
 			&r.Bucket, &r.Samples, &r.OK); err != nil {
 			return nil, fmt.Errorf("target probe health: %w", err)

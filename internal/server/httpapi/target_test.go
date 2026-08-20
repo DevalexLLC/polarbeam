@@ -22,8 +22,8 @@ func targetFake() (*fakeDB, *store.TargetEndpoints) {
 		ID: uuid.New(), Kind: "external", Name: "svc",
 		Address: "svc.example", Port: 443, URL: "https://svc.example/",
 		Sources: []store.TargetSource{
-			{Site: "lon", AgentIDs: []uuid.UUID{lonAgent, lonAgent2}},
-			{Site: "nyc", AgentIDs: []uuid.UUID{nycAgent}},
+			{Site: "lon", Network: "default", AgentIDs: []uuid.UUID{lonAgent, lonAgent2}},
+			{Site: "nyc", Network: "corp", AgentIDs: []uuid.UUID{nycAgent}},
 		},
 	}
 	f.targetEndpoints = map[uuid.UUID]*store.TargetEndpoints{ep.ID: ep}
@@ -105,6 +105,9 @@ func TestTargetSummary(t *testing.T) {
 	if first["site"] != "lon" || first["latency_source"] != "ttfb" || first["samples"] != 9.0 {
 		t.Errorf("first source = %#v, want lon summary", first)
 	}
+	if first["network"] != "default" {
+		t.Errorf("first source network = %v, want default", first["network"])
+	}
 	checks := first["checks"].([]any)
 	if len(checks) != 1 || checks[0].(map[string]any)["type"] != "http" {
 		t.Errorf("checks = %#v, want the latest http check", checks)
@@ -114,8 +117,9 @@ func TestTargetSummary(t *testing.T) {
 	if _, present := checks[0].(map[string]any)["target_id"]; present {
 		t.Error("check without TargetID carries target_id; want key absent")
 	}
-	if sources[1].(map[string]any)["site"] != "nyc" {
-		t.Errorf("second source = %#v, want nyc", sources[1])
+	second := sources[1].(map[string]any)
+	if second["site"] != "nyc" || second["network"] != "corp" {
+		t.Errorf("second source = %#v, want nyc on corp", second)
 	}
 }
 
@@ -147,6 +151,9 @@ func TestTargetSeriesPerSourceFamilies(t *testing.T) {
 		nyc["site"] != "nyc" || nyc["latency_source"] != "rtt" {
 		t.Errorf("per-source families = %v/%v + %v/%v, want lon/ttfb + nyc/rtt",
 			lon["site"], lon["latency_source"], nyc["site"], nyc["latency_source"])
+	}
+	if lon["network"] != "default" || nyc["network"] != "corp" {
+		t.Errorf("source networks = %v/%v, want default/corp", lon["network"], nyc["network"])
 	}
 	if len(f.passedLatencySources) != 2 ||
 		f.passedLatencySources[0] != "ttfb" || f.passedLatencySources[1] != "rtt" {
@@ -208,17 +215,17 @@ func TestTargetHealthFold(t *testing.T) {
 	errText := "connect timeout"
 	f.targetHealth = []store.TargetProbeHealthRow{
 		// probe1: two buckets, failing.
-		{AgentID: agentA, SrcSite: "lon", Hostname: "lon-1", ProbeID: probe1,
+		{AgentID: agentA, SrcSite: "lon", Network: "default", Hostname: "lon-1", ProbeID: probe1,
 			ProbeType: int16(pb.ProbeType_PROBE_TYPE_TCP), LastStatus: 2, LastTime: t0,
 			OpenedAt: &openSince, OpenError: &errText,
 			Bucket: &t0, Samples: i64(4), OK: i64(1)},
-		{AgentID: agentA, SrcSite: "lon", Hostname: "lon-1", ProbeID: probe1,
+		{AgentID: agentA, SrcSite: "lon", Network: "default", Hostname: "lon-1", ProbeID: probe1,
 			ProbeType: int16(pb.ProbeType_PROBE_TYPE_TCP), LastStatus: 2, LastTime: t0,
 			OpenedAt: &openSince, OpenError: &errText,
 			Bucket:  func() *time.Time { b := t0.Add(30 * time.Minute); return &b }(),
 			Samples: i64(6), OK: i64(6)},
 		// probe2: silent series, single nil-bucket row.
-		{AgentID: agentB, SrcSite: "nyc", Hostname: "nyc-1", ProbeID: probe2,
+		{AgentID: agentB, SrcSite: "nyc", Network: "corp", Hostname: "nyc-1", ProbeID: probe2,
 			ProbeType: int16(pb.ProbeType_PROBE_TYPE_HTTP), LastStatus: 1, LastTime: t0},
 	}
 	h := newTestAPI(t, f)
@@ -236,7 +243,8 @@ func TestTargetHealthFold(t *testing.T) {
 		t.Fatalf("probes = %d, want 2 folded series", len(probes))
 	}
 	p0 := probes[0].(map[string]any)
-	if p0["agent_id"] != agentA.String() || p0["site"] != "lon" || p0["hostname"] != "lon-1" ||
+	if p0["agent_id"] != agentA.String() || p0["site"] != "lon" || p0["network"] != "default" ||
+		p0["hostname"] != "lon-1" ||
 		p0["type"] != "tcp" || p0["failing"] != true || p0["error"] != errText {
 		t.Errorf("first probe = %#v", p0)
 	}
@@ -272,8 +280,8 @@ func TestTargetPathsPerSource(t *testing.T) {
 		t.Fatalf("sources = %d, want 2", len(sources))
 	}
 	lon := sources[0].(map[string]any)
-	if lon["site"] != "lon" {
-		t.Errorf("first source = %#v, want lon", lon)
+	if lon["site"] != "lon" || lon["network"] != "default" {
+		t.Errorf("first source = %#v, want lon on default", lon)
 	}
 	paths := lon["paths"].([]any)
 	if len(paths) != 1 {

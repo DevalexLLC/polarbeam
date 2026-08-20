@@ -66,10 +66,13 @@ results/day = directional assignments × (86,400 / interval seconds)
 
 A full mesh of N single-agent sites creates `N × (N − 1)` directional
 assignments per probe template (each direction is measured independently).
-A direct probe adds one assignment per agent at its source site — every
-agent at the site runs it. Sites with multiple agents likewise multiply
-their mesh assignments, since mesh expansion is per agent pair, not per
-site pair.
+A direct probe adds one assignment per agent on its network at its source
+site — every such agent runs it. Sites with multiple agents likewise
+multiply their mesh assignments, since mesh expansion is per same-network
+agent pair, not per site pair. Networks partition the quadratic: a mesh
+pairs only agents on its own network, so N is the mesh's agent count per
+plane, never the whole deployment — two 50-site meshes on separate networks
+cost two 50-site meshes, not one 100-site one.
 
 Worked examples for one ICMP template at the default 30-second interval:
 

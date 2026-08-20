@@ -27,6 +27,9 @@ interface SiteStats {
   bestLatencyUs: number | null
   directions: number // configured directions (cells) touching this site
   dirCounts: Record<Severity, number>
+  // healthy/total directions per plane, from the cells' sub-cell breakdown;
+  // rendered in the info card only when the site spans more than one plane.
+  netCounts: Map<string, { ok: number; total: number }>
   peers: string[] // the other end of each monitored pair, for pair links
 }
 
@@ -36,6 +39,7 @@ function newStats(): SiteStats {
     bestLatencyUs: null,
     directions: 0,
     dirCounts: { ok: 0, warn: 0, crit: 0, down: 0, stale: 0 },
+    netCounts: new Map(),
     peers: [],
   }
 }
@@ -100,6 +104,20 @@ export default function WorldMap({
         if (stats) {
           stats.directions++
           stats.dirCounts[sev]++
+        }
+      }
+      // Per-plane rollup from the same sub-cells the matrix filter uses; a
+      // sub-cell grades with the direction rule, so the breakdown can never
+      // disagree with a filtered view of the same plane.
+      for (const sub of c.networks) {
+        const subSev = directionSeverity({ ...c, ...sub }, thresholds(c.src, c.dst))
+        for (const name of [c.src, c.dst]) {
+          const stats = siteStats.get(name)
+          if (!stats) continue
+          const entry = stats.netCounts.get(sub.network) ?? { ok: 0, total: 0 }
+          entry.total++
+          if (subSev === 'ok') entry.ok++
+          stats.netCounts.set(sub.network, entry)
         }
       }
     }
@@ -346,6 +364,15 @@ export default function WorldMap({
                 {shownStats.degree} {shownStats.degree === 1 ? 'link' : 'links'} · {shownStats.dirCounts.ok} of{' '}
                 {shownStats.directions} {shownStats.directions === 1 ? 'direction' : 'directions'} healthy
               </div>
+              {shownStats.netCounts.size > 1 &&
+                [...shownStats.netCounts.entries()]
+                  // oxlint-disable-next-line unicorn/no-array-sort -- toSorted needs ES2023 lib
+                  .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+                  .map(([name, counts]) => (
+                    <div key={name} className="map-tip-caption">
+                      <span className="mono">{name}</span> · {counts.ok} of {counts.total} healthy
+                    </div>
+                  ))}
               {shownStats.peers.length > 0 && (
                 <div className="map-tip-links">
                   {shownStats.peers.map((peer) => (

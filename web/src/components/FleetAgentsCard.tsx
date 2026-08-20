@@ -6,12 +6,16 @@ import HealthStrip, { stripStats, UptimeValue } from './HealthStrip'
 // Fleet health at a glance: one row per agent with its last update, 24 h
 // probe-success strip, and uptime %. Agents absent from the health response
 // have no results in the window — they show "—", never an invented 100 %.
+// On multi-network installs each row carries its plane as a chip: site and
+// hostname alone cannot tell two same-site agents on different planes apart.
 export default function FleetAgentsCard({
   agents,
   health,
+  multiNetwork,
 }: {
   agents: AgentInfo[]
   health: AgentHealthResponse | null
+  multiNetwork: boolean
 }) {
   const bucketS = health?.bucket_s ?? 1800
   const nowS = Date.now() / 1000
@@ -68,9 +72,14 @@ export default function FleetAgentsCard({
                       <a
                         className="fleet-agent-link"
                         href={'#/agents/' + a.id}
-                        aria-label={`${a.site} · ${a.hostname}`}
+                        aria-label={
+                          multiNetwork ? `${a.site} · ${a.hostname} · ${a.network}` : `${a.site} · ${a.hostname}`
+                        }
                       >
-                        <strong>{a.site}</strong>
+                        <strong>
+                          {a.site}
+                          {multiNetwork && <span className="chip">{a.network}</span>}
+                        </strong>
                         <small>{a.hostname}</small>
                       </a>
                     </td>

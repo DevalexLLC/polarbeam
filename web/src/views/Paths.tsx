@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { apiGet } from '../api'
 import PathGraph from '../components/PathGraph'
 import { fmtAgo, fmtTime } from '../format'
+import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
 import { useTimezone } from '../timezone'
 import type { Hop, PathEvent, PathEventsResponse, Window } from '../types'
 import { WINDOWS } from '../types'
@@ -149,6 +150,7 @@ function EventRow({ e }: { e: PathEvent }) {
 
 export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => void }) {
   useTimezone() // re-render fmtTime tooltips on UTC/local toggle
+  const { network } = useNetworkFilter()
   const [win, setWin] = useState<Window>('24h')
   const [data, setData] = useState<PathEventsResponse | null>(null)
   const [error, setError] = useState('')
@@ -177,9 +179,14 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
     }
   }, [win, onAuthError])
 
+  // The global top-bar network filter narrows first (the header count reads
+  // this subset too), then the search narrows the listed rows.
+  const events = useMemo(
+    () => (data?.events ?? []).filter((e) => matchesNetworkFilter(network, e.network)),
+    [data, network],
+  )
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase()
-    const events = data?.events ?? []
     if (!needle) return events
     // "src -> dst" filters by direction; either side may be empty ("lon ->",
     // "-> ny"). "→" is accepted so a copied row header works as a query.
@@ -200,9 +207,9 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(needle)),
     )
-  }, [data, query])
+  }, [events, query])
 
-  useEffect(() => setVisibleLimit(ROUTE_PAGE), [query, win])
+  useEffect(() => setVisibleLimit(ROUTE_PAGE), [query, win, network])
 
   if (error && !data)
     return (
@@ -229,7 +236,7 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
         </div>
         <div className="chips">
           <span className="chip">
-            in window <span className="mono">{data.events.length}</span>
+            in window <span className="mono">{events.length}</span>
           </span>
         </div>
       </div>

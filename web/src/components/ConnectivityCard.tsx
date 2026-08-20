@@ -1,21 +1,27 @@
 import MatrixTable from './MatrixTable'
 import WorldMap from './WorldMap'
 import type { ThresholdResolver } from '../severity'
-import type { MatrixResponse } from '../types'
+import type { MatrixCell, MatrixResponse, Site } from '../types'
 
 export type ConnectivityMode = 'map' | 'matrix'
 
 // The connectivity card owns the map/matrix switch in its own header (the
 // retired Connectivity page's toolbar, moved in-card). Mode is lifted to the
 // caller so other Overview elements — the "Healthy directions" tile — can
-// flip straight to the matrix.
+// flip straight to the matrix. The global top-bar network filter scopes this
+// card through its props: sites and cells may be plane-filtered subsets of
+// the matrix response (the caller derives both).
 export default function ConnectivityCard({
   matrix,
+  sites,
+  cells,
   thresholds,
   mode,
   onModeChange,
 }: {
   matrix: MatrixResponse
+  sites: Site[]
+  cells: MatrixCell[]
   thresholds: ThresholdResolver
   mode: ConnectivityMode
   onModeChange: (mode: ConnectivityMode) => void
@@ -48,9 +54,9 @@ export default function ConnectivityCard({
         </div>
       </div>
       {mode === 'map' ? (
-        <WorldMap sites={matrix.sites} cells={matrix.cells} thresholds={thresholds} />
+        <WorldMap sites={sites} cells={cells} thresholds={thresholds} />
       ) : (
-        <MatrixTable sites={matrix.sites} cells={matrix.cells} thresholds={thresholds} />
+        <MatrixTable sites={sites} cells={cells} thresholds={thresholds} />
       )}
     </section>
   )

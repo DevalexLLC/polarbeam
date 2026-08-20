@@ -16,6 +16,7 @@ type OutageInfo struct {
 	ID            uuid.UUID
 	Kind          string
 	AgentHostname string
+	Network       string // "" once the agent row is deleted
 	SrcSite       string
 	DstSite       *string // nil for agent_offline and external targets
 	TargetName    *string // nil for agent_offline
@@ -36,7 +37,8 @@ type OutageInfo struct {
 // incident, exactly when the dashboard must show them all.
 func (s *Store) ListOutages(ctx context.Context, window time.Duration) ([]OutageInfo, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT oe.id, oe.kind, COALESCE(a.hostname, ''), COALESCE(src.name, ''),
+		SELECT oe.id, oe.kind, COALESCE(a.hostname, ''), COALESCE(n.name, ''),
+			COALESCE(src.name, ''),
 			dst.name, t.name, oe.probe_type, oe.opened_at, oe.closed_at, oe.open_error
 		FROM (
 			SELECT id, kind, agent_id, target_id, probe_type, opened_at, closed_at, open_error
@@ -50,6 +52,7 @@ func (s *Store) ListOutages(ctx context.Context, window time.Duration) ([]Outage
 			LIMIT 500)
 		) oe
 		LEFT JOIN agents a ON a.id = oe.agent_id
+		LEFT JOIN networks n ON n.id = a.network_id
 		LEFT JOIN sites src ON src.id = a.site_id
 		LEFT JOIN targets t ON t.id = oe.target_id
 		LEFT JOIN agents ta ON ta.id = t.agent_id
@@ -63,7 +66,7 @@ func (s *Store) ListOutages(ctx context.Context, window time.Duration) ([]Outage
 	var out []OutageInfo
 	for rows.Next() {
 		var o OutageInfo
-		if err := rows.Scan(&o.ID, &o.Kind, &o.AgentHostname, &o.SrcSite,
+		if err := rows.Scan(&o.ID, &o.Kind, &o.AgentHostname, &o.Network, &o.SrcSite,
 			&o.DstSite, &o.TargetName, &o.ProbeType, &o.OpenedAt, &o.ClosedAt, &o.Error); err != nil {
 			return nil, fmt.Errorf("scan outage: %w", err)
 		}
@@ -78,6 +81,7 @@ type PathEventInfo struct {
 	ID            uuid.UUID
 	Time          time.Time
 	AgentHostname string
+	Network       string // "" once the agent row is deleted
 	SrcSite       string
 	DstSite       *string
 	TargetName    *string
@@ -91,10 +95,12 @@ type PathEventInfo struct {
 // ListPathEvents returns path change events within the window, newest first.
 func (s *Store) ListPathEvents(ctx context.Context, window time.Duration) ([]PathEventInfo, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT pe.id, pe.time, COALESCE(a.hostname, ''), COALESCE(src.name, ''),
+		SELECT pe.id, pe.time, COALESCE(a.hostname, ''), COALESCE(n.name, ''),
+			COALESCE(src.name, ''),
 			dst.name, t.name, t.id, pe.old_path_hash, pe.new_path_hash, pe.old_hops, pe.new_hops
 		FROM path_events pe
 		LEFT JOIN agents a ON a.id = pe.agent_id
+		LEFT JOIN networks n ON n.id = a.network_id
 		LEFT JOIN sites src ON src.id = a.site_id
 		LEFT JOIN targets t ON t.id = pe.target_id
 		LEFT JOIN agents ta ON ta.id = t.agent_id
@@ -110,7 +116,7 @@ func (s *Store) ListPathEvents(ctx context.Context, window time.Duration) ([]Pat
 	var out []PathEventInfo
 	for rows.Next() {
 		var e PathEventInfo
-		if err := rows.Scan(&e.ID, &e.Time, &e.AgentHostname, &e.SrcSite,
+		if err := rows.Scan(&e.ID, &e.Time, &e.AgentHostname, &e.Network, &e.SrcSite,
 			&e.DstSite, &e.TargetName, &e.TargetID, &e.OldPathHash, &e.NewPathHash, &e.OldHops, &e.NewHops); err != nil {
 			return nil, fmt.Errorf("scan path event: %w", err)
 		}

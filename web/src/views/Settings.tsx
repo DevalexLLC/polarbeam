@@ -4,6 +4,7 @@ import type { SettingsTab } from '../App'
 import BannerSettingsPanel from '../components/BannerSettingsPanel'
 import EnrollmentPanel from '../components/EnrollmentPanel'
 import MeshesPanel from '../components/MeshesPanel'
+import NetworksPanel from '../components/NetworksPanel'
 import OIDCSettingsPanel from '../components/OIDCSettingsPanel'
 import PathThresholdsPanel from '../components/PathThresholdsPanel'
 import ProbesPanel from '../components/ProbesPanel'
@@ -18,6 +19,7 @@ const POLL_MS = 30_000
 const TABS: Array<{ tab: SettingsTab; href: string; label: string }> = [
   { tab: 'thresholds', href: '#/settings', label: 'Thresholds' },
   { tab: 'sites', href: '#/settings/sites', label: 'Sites' },
+  { tab: 'networks', href: '#/settings/networks', label: 'Networks' },
   { tab: 'targets', href: '#/settings/targets', label: 'Targets' },
   { tab: 'meshes', href: '#/settings/meshes', label: 'Meshes' },
   { tab: 'probes', href: '#/settings/probes', label: 'Probes' },
@@ -30,6 +32,7 @@ const TABS: Array<{ tab: SettingsTab; href: string; label: string }> = [
 const TAB_INTRO: Record<SettingsTab, string> = {
   thresholds: 'Shared thresholds used to classify network health across the dashboard.',
   sites: 'The locations agents enroll into, with optional map placement and display metadata.',
+  networks: 'Connectivity planes. Agents join one at enrollment; meshes and direct probes measure within exactly one.',
   targets: 'External hosts and URLs that site agents probe.',
   meshes: 'Site groups whose members probe each other in both directions.',
   probes: 'The measurement workload pushed to every affected agent within ~30 seconds.',
@@ -108,6 +111,8 @@ export default function Settings({
         <BannerSettingsPanel isAdmin={isAdmin} onAuthError={onAuthError} onSaved={onBannerSaved} />
       ) : tab === 'users' ? (
         <UsersPanel isAdmin={isAdmin} currentUsername={username} onAuthError={onAuthError} />
+      ) : tab === 'networks' ? (
+        <NetworksPanel isAdmin={isAdmin} onAuthError={onAuthError} />
       ) : tab === 'sites' ? (
         <SitesPanel isAdmin={isAdmin} onAuthError={onAuthError} />
       ) : tab === 'enrollment' ? (

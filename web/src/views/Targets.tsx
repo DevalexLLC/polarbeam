@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { apiGet } from '../api'
 import { fmtAgo, fmtTime } from '../format'
+import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
 import { useTimezone } from '../timezone'
 import type {
   AgentInfo,
   AgentsResponse,
+  OutageEvent,
   OutagesResponse,
+  ProbeConfig,
   ProbesConfigResponse,
   TargetConfig,
   TargetsConfigResponse,
@@ -17,11 +20,13 @@ const POLL_MS = 30_000
 // authenticated user can reach the per-target drill-down (#/target/<id>)
 // from here. All four feeds are any-session reads; the joins are by
 // target NAME because probe configs and outages carry names, not ids.
+// Raw rows are kept so the global network filter can re-derive the view
+// without a refetch.
 interface Feeds {
   targets: TargetConfig[]
-  probeSites: Map<string, string[]> // target name -> distinct probing sites
+  probes: ProbeConfig[]
   agentByID: Map<string, AgentInfo>
-  troubled: Set<string> // target names with an open incident
+  outages: OutageEvent[]
 }
 
 // Agent-kind targets are enrollment-managed rows named agent:<agent-uuid>;
@@ -68,20 +73,11 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
       ])
         .then(([targets, probes, agents, outages]) => {
           if (cancelled) return
-          const probeSites = new Map<string, string[]>()
-          for (const p of probes.probes) {
-            // Direct probes carry a target name; mesh templates carry a
-            // mesh. Disabled configs are not probing anyone — skip them.
-            if (!p.target || !p.site || !p.enabled) continue
-            const sites = probeSites.get(p.target) ?? []
-            if (!sites.includes(p.site)) sites.push(p.site)
-            probeSites.set(p.target, sites)
-          }
           setFeeds({
             targets: targets.targets,
-            probeSites,
+            probes: probes.probes,
             agentByID: new Map(agents.agents.map((a) => [a.id, a])),
-            troubled: new Set(outages.outages.filter((o) => !o.closed_at && o.target).map((o) => o.target as string)),
+            outages: outages.outages,
           })
           setError('')
         })
@@ -97,21 +93,60 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
     }
   }, [onAuthError])
 
+  // The global top-bar network filter scopes the whole view before the
+  // search does: probing sites, incident status, rows, and header chips.
+  const { network } = useNetworkFilter()
+  const scoped = useMemo(() => {
+    if (!feeds) return null
+    const probeSites = new Map<string, string[]>() // target name -> distinct probing sites
+    // target name -> direct-config count on the plane; replaces the
+    // server-wide probe_count under a filter (same semantics: disabled
+    // configs count, only the plane changes).
+    const probeCounts = new Map<string, number>()
+    for (const p of feeds.probes) {
+      // Direct probes carry a target name; mesh templates carry a mesh.
+      if (!p.target || !matchesNetworkFilter(network, p.network)) continue
+      probeCounts.set(p.target, (probeCounts.get(p.target) ?? 0) + 1)
+      // Disabled configs are not probing anyone — they count above but
+      // contribute no probing site.
+      if (!p.site || !p.enabled) continue
+      const sites = probeSites.get(p.target) ?? []
+      if (!sites.includes(p.site)) sites.push(p.site)
+      probeSites.set(p.target, sites)
+    }
+    // target names with an open incident on the plane
+    const troubled = new Set(
+      feeds.outages
+        .filter((o) => !o.closed_at && o.target && matchesNetworkFilter(network, o.network))
+        .map((o) => o.target as string),
+    )
+    // An external belongs to the planes that probe it: under a filter one
+    // with no enabled probe on the plane is not part of it — hidden, not
+    // shown as "unprobed". Site destinations follow their agent's plane;
+    // deleted-agent rows stay visible under any filter (gap convention).
+    const externals = feeds.targets.filter((t) => t.kind === 'external' && (network === '' || probeSites.has(t.name)))
+    const sites = feeds.targets.filter((t) => {
+      if (t.kind !== 'agent') return false
+      const agent = agentIDOf(t) ? feeds.agentByID.get(agentIDOf(t) as string) : undefined
+      return agent == null || matchesNetworkFilter(network, agent.network)
+    })
+    return { probeSites, probeCounts, troubled, externals, sites }
+  }, [feeds, network])
   const visible = useMemo(() => {
-    if (!feeds) return { externals: [], sites: [] }
+    if (!feeds || !scoped) return { externals: [], sites: [] }
     const needle = query.trim().toLowerCase()
     const matches = (t: TargetConfig) => {
       if (!needle) return true
       const agent = agentIDOf(t) ? feeds.agentByID.get(agentIDOf(t) as string) : undefined
-      return [t.name, t.address, t.url, agent?.site, agent?.hostname, ...(feeds.probeSites.get(t.name) ?? [])]
+      return [t.name, t.address, t.url, agent?.site, agent?.hostname, ...(scoped.probeSites.get(t.name) ?? [])]
         .filter(Boolean)
         .some((v) => String(v).toLowerCase().includes(needle))
     }
     return {
-      externals: feeds.targets.filter((t) => t.kind === 'external' && matches(t)),
-      sites: feeds.targets.filter((t) => t.kind === 'agent' && matches(t)),
+      externals: scoped.externals.filter(matches),
+      sites: scoped.sites.filter(matches),
     }
-  }, [feeds, query])
+  }, [feeds, scoped, query])
 
   if (error && !feeds)
     return (
@@ -120,7 +155,7 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
         <p>{error}</p>
       </div>
     )
-  if (!feeds)
+  if (!feeds || !scoped)
     return (
       <div className="state-panel" role="status">
         <span className="state-spinner" />
@@ -128,9 +163,9 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
       </div>
     )
 
-  const externalCount = feeds.targets.filter((t) => t.kind === 'external').length
-  const siteCount = feeds.targets.length - externalCount
-  const troubledCount = feeds.targets.filter((t) => feeds.troubled.has(t.name)).length
+  const externalCount = scoped.externals.length
+  const siteCount = scoped.sites.length
+  const troubledCount = [...scoped.externals, ...scoped.sites].filter((t) => scoped.troubled.has(t.name)).length
 
   return (
     <>
@@ -206,7 +241,7 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
                 {visible.externals.map((t) => (
                   <tr key={t.id}>
                     <td data-label="Status">
-                      <StatusCell t={t} troubled={feeds.troubled} active={feeds.probeSites.has(t.name)} />
+                      <StatusCell t={t} troubled={scoped.troubled} active={scoped.probeSites.has(t.name)} />
                     </td>
                     <td data-label="Name" className="mono">
                       <a href={'#/target/' + encodeURIComponent(t.id)}>{t.name}</a>
@@ -214,9 +249,9 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
                     <td data-label="Endpoint" className="mono">
                       {t.url ? t.url : t.port ? `${t.address}:${t.port}` : t.address}
                     </td>
-                    <td data-label="Probes">{t.probe_count}</td>
+                    <td data-label="Probes">{scoped.probeCounts.get(t.name) ?? 0}</td>
                     <td data-label="Probed from" className="mono">
-                      {(feeds.probeSites.get(t.name) ?? []).join(', ') || '—'}
+                      {(scoped.probeSites.get(t.name) ?? []).join(', ') || '—'}
                     </td>
                     <td data-label="Created" title={fmtTime(t.created_at)}>
                       {fmtAgo(t.created_at)}
@@ -261,7 +296,7 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
                   return (
                     <tr key={t.id}>
                       <td data-label="Status">
-                        <StatusCell t={t} troubled={feeds.troubled} active />
+                        <StatusCell t={t} troubled={scoped.troubled} active />
                       </td>
                       <td data-label="Site" className="mono">
                         <a href={'#/target/' + encodeURIComponent(t.id)}>{agent ? agent.site : t.name}</a>

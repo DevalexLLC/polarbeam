@@ -8,6 +8,7 @@ import IncidentTimeline, {
   timelineGrid,
 } from '../components/IncidentTimeline'
 import { fmtAgo, fmtTime } from '../format'
+import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
 import { useTimezone } from '../timezone'
 import type { OutageEvent, OutagesResponse, Window } from '../types'
 import { WINDOWS } from '../types'
@@ -202,9 +203,16 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
     }
   }, [win, onAuthError])
 
-  const activeEvents = data?.outages.filter((o) => o.closed_at == null) ?? []
+  // The global top-bar network filter scopes everything on this view —
+  // groups, timeline, chips, and button counts all derive from this subset.
+  const { network } = useNetworkFilter()
+  const events = useMemo(
+    () => (data?.outages ?? []).filter((o) => matchesNetworkFilter(network, o.network)),
+    [data, network],
+  )
+  const activeEvents = events.filter((o) => o.closed_at == null)
   const activeCount = activeEvents.length
-  const resolvedCount = (data?.outages.length ?? 0) - activeCount
+  const resolvedCount = events.length - activeCount
   // The API emits one event per failing series (probe × direction), so a
   // target failing on two probes is two events but one affected target.
   const activeTargetCount = new Set(activeEvents.map(target)).size
@@ -226,7 +234,7 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
   const bucket = timeline?.bucket ?? null
   const groups = useMemo(() => {
     const needle = query.trim().toLowerCase()
-    const filtered = (data?.outages ?? []).filter((event) => {
+    const filtered = events.filter((event) => {
       const active = event.closed_at == null
       if (filter === 'active' && !active) return false
       if (filter === 'resolved' && active) return false
@@ -238,12 +246,12 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
         .some((value) => String(value).toLowerCase().includes(needle))
     })
     return groupIncidents(filtered)
-  }, [data, filter, query, timeline, fetchedAt])
+  }, [events, filter, query, timeline, fetchedAt])
   const sliceHasHiddenIncidents =
     groups.length === 0 &&
     bucket != null &&
     timeline != null &&
-    (data?.outages ?? []).some((event) => overlapsBucket(event, bucket, timeline.grid.bucketMs, fetchedAt))
+    events.some((event) => overlapsBucket(event, bucket, timeline.grid.bucketMs, fetchedAt))
 
   if (error && !data)
     return (
@@ -274,7 +282,7 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
             <span className="mono">{activeTargetCount}</span>
           </span>
           <span className="chip">
-            In window <span className="mono">{data.outages.length}</span>
+            In window <span className="mono">{events.length}</span>
           </span>
         </div>
       </div>
@@ -299,7 +307,7 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
             aria-pressed={filter === 'all'}
             onClick={() => setFilter('all')}
           >
-            All {data.outages.length}
+            All {events.length}
           </button>
           <button
             className={filter === 'resolved' ? 'active' : ''}
@@ -343,12 +351,16 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
               <h2>Incident timeline</h2>
             </div>
             <span className="hint">
+              {/* The 500 cap is applied server-side BEFORE the network
+                  filter, so the hint watches the unfiltered count. */}
               Height: incidents per slice · color: kind · muted: resolved · click a bar to filter
-              {resolvedCount >= 500 ? ' · oldest resolved past 500 omitted' : ''}
+              {data.outages.filter((o) => o.closed_at != null).length >= 500
+                ? ' · oldest resolved past 500 omitted'
+                : ''}
             </span>
           </div>
           <IncidentTimeline
-            events={data.outages}
+            events={events}
             win={timeline.win}
             nowMs={fetchedAt}
             selected={bucket}

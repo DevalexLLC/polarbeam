@@ -34,6 +34,7 @@ export interface SitesResponse {
 export interface AgentInfo {
   id: string
   site: string
+  network: string
   hostname: string
   probe_address: string
   version: string
@@ -133,10 +134,27 @@ export interface MatrixProbe {
   // Present on pair-detail checks (links the chip to its target's detail
   // page); absent on matrix cell probes, which fold to site pairs.
   target_id?: string
+  // The series' plane. Present on matrix cell probes; absent on pair-detail
+  // checks, where the page already filtered by network.
+  network?: string
   latency_us: number | null
   latency_source: string
   loss_pct: number | null
   as_of: string
+}
+
+// One (src, dst, network) fold inside a matrix cell — length 1 on
+// single-network installs. A plane that configuration expects but that has
+// been silent in the horizon appears as a stale entry, so a network filter
+// can tell "stale on this plane" from "not probed".
+export interface MatrixNetworkCell {
+  network: string
+  status: CellStatus
+  latency_us: number | null
+  latency_source: string
+  loss_pct: number | null
+  as_of: string
+  probes: MatrixProbe[]
 }
 
 export interface MatrixCell {
@@ -148,6 +166,8 @@ export interface MatrixCell {
   loss_pct: number | null
   as_of: string
   probes: MatrixProbe[]
+  // Per-plane breakdown; the top-level fields stay the all-plane fold.
+  networks: MatrixNetworkCell[]
 }
 
 export interface MatrixResponse {
@@ -220,6 +240,10 @@ export interface PairResponse {
   b: string
   window: string
   source: SeriesSource
+  // Echo of the applied ?network= filter; '' = all planes.
+  network: string
+  // Planes with agents at both sites — the selector's option list.
+  networks: string[]
   a_to_b: DirectionSummary
   b_to_a: DirectionSummary
 }
@@ -243,6 +267,7 @@ export interface SeriesResponse {
   window: string
   resolution_s: number
   source: SeriesSource
+  network: string
   latency_source: string
   a_to_b: { latency_source: string; points: SeriesPoint[] }
   b_to_a: { latency_source: string; points: SeriesPoint[] }
@@ -263,13 +288,15 @@ export interface TargetInfo {
 
 export interface TargetSourceSummary extends DirectionSummary {
   site: string
+  network: string
 }
 
 export interface TargetSummaryResponse {
   target: TargetInfo
   window: string
   source: SeriesSource
-  // One entry per site probing this target; [] until something probes it.
+  // One entry per (site, network) probing this target; [] until something
+  // probes it. Single-network installs get exactly one row per site.
   sources: TargetSourceSummary[]
 }
 
@@ -278,7 +305,7 @@ export interface TargetSeriesResponse {
   window: string
   resolution_s: number
   source: SeriesSource
-  sources: { site: string; latency_source: string; points: SeriesPoint[] }[]
+  sources: { site: string; network: string; latency_source: string; points: SeriesPoint[] }[]
 }
 
 // One bucket of per-stage successful averages (µs); null = no probe
@@ -306,6 +333,7 @@ export interface TargetStagesResponse {
 export interface TargetHealthProbe {
   agent_id: string
   site: string
+  network: string
   hostname: string
   probe_id: string
   type: string
@@ -328,6 +356,7 @@ export interface OutageEvent {
   id: string
   kind: 'probe_failing' | 'agent_offline' | 'probe_degraded'
   agent: string
+  network: string // '' once the agent row is deleted
   src_site: string
   dst_site: string | null
   target: string | null
@@ -356,6 +385,7 @@ export interface PathEvent {
   id: string
   time: string
   agent: string
+  network: string // '' once the agent row is deleted
   src_site: string
   dst_site: string | null
   target: string | null
@@ -396,7 +426,7 @@ export interface TracerouteResponse {
 // empty paths list; the SPA hides the card when every source is empty.
 export interface TargetPathsResponse {
   target: TargetInfo
-  sources: { site: string; paths: CurrentPath[] }[]
+  sources: { site: string; network: string; paths: CurrentPath[] }[]
 }
 
 // GET /api/v1/path-mtu/{a}/{b} — latest usable path MTU measurement per
@@ -453,6 +483,7 @@ export interface TargetsConfigResponse {
 export interface MeshConfig {
   id: string
   name: string
+  network: string
   sites: string[]
   probe_count: number
 }
@@ -479,11 +510,32 @@ export interface SitesConfigResponse {
   sites: SiteConfig[]
 }
 
+// GET /api/v1/config/networks — readable by any session (selector options
+// on viewer pages); writes are admin-only. A network is a connectivity
+// plane: agents inherit one from their join token, meshes and direct probes
+// bind to exactly one. probe_count counts direct rows only — mesh templates
+// count through their mesh.
+export interface NetworkConfig {
+  id: string
+  name: string
+  display_name: string
+  created_at: string
+  agent_count: number
+  token_count: number
+  mesh_count: number
+  probe_count: number
+}
+
+export interface NetworksConfigResponse {
+  networks: NetworkConfig[]
+}
+
 // Join tokens (/api/v1/config/tokens) are admin-only including the list.
 // Status (active / expired / used) is derived client-side from these fields.
 export interface JoinToken {
   id: string
   site: string
+  network: string
   created_by: string
   created_at: string
   expires_at: string
@@ -501,6 +553,7 @@ export interface TokensResponse {
 export interface TokenCreateResponse {
   token: string
   site: string
+  network: string
   expires_at: string
 }
 
@@ -509,6 +562,8 @@ export interface ProbeConfig {
   site?: string
   target?: string
   mesh?: string
+  // Always present: a direct row's own plane, or the mesh's for templates.
+  network: string
   type: string
   interval_ms: number
   timeout_ms: number
