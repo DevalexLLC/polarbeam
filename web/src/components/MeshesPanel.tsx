@@ -6,10 +6,10 @@ import ConfirmButton from './ConfirmButton'
 const POLL_MS = 30_000
 
 export default function MeshesPanel({
-  isAdmin,
+  canWrite,
   onAuthError,
 }: {
-  isAdmin: boolean
+  canWrite: boolean
   onAuthError: (err: unknown) => void
 }) {
   const [data, setData] = useState<MeshesConfigResponse | null>(null)
@@ -128,7 +128,7 @@ export default function MeshesPanel({
                   <span className="hint">
                     {m.sites.length} site(s) · {m.probe_count} probe template(s)
                   </span>
-                  {isAdmin && (
+                  {canWrite && (
                     <ConfirmButton
                       label="Delete mesh"
                       confirmLabel={`Confirm delete? Removes ${m.probe_count} probe template(s) and their series`}
@@ -142,7 +142,7 @@ export default function MeshesPanel({
                   {m.sites.map((s) => (
                     <span key={s} className="chip">
                       {s}
-                      {isAdmin && (
+                      {canWrite && (
                         <ConfirmButton
                           label="×"
                           confirmLabel="remove?"
@@ -162,7 +162,7 @@ export default function MeshesPanel({
                       )}
                     </span>
                   ))}
-                  {isAdmin && addable(m).length > 0 && (
+                  {canWrite && addable(m).length > 0 && (
                     <span className="mesh-add">
                       <label>
                         <span className="sr-only">Site to add to {m.name}</span>
@@ -203,7 +203,7 @@ export default function MeshesPanel({
             ))}
           </ul>
         )}
-        {isAdmin && (
+        {canWrite && (
           <div className="config-form">
             <h3 className="eyebrow">Create mesh</h3>
             <div className="config-form-grid">

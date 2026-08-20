@@ -187,10 +187,10 @@ function paramsSummary(p: ProbeConfig): string {
 }
 
 export default function ProbesPanel({
-  isAdmin,
+  canWrite,
   onAuthError,
 }: {
-  isAdmin: boolean
+  canWrite: boolean
   onAuthError: (err: unknown) => void
 }) {
   const [data, setData] = useState<ProbesConfigResponse | null>(null)
@@ -567,7 +567,7 @@ export default function ProbesPanel({
                   <th>Params</th>
                   <th>State</th>
                   <th>Updated</th>
-                  {isAdmin && (
+                  {canWrite && (
                     <th className="actions-col">
                       <span className="sr-only">Actions</span>
                     </th>
@@ -599,7 +599,7 @@ export default function ProbesPanel({
                         {fmtAgo(p.updated_at)}
                         {p.updated_by ? ` by ${p.updated_by}` : ''}
                       </td>
-                      {isAdmin && (
+                      {canWrite && (
                         <td data-label="Actions" className="config-actions">
                           <button
                             type="button"
@@ -638,7 +638,7 @@ export default function ProbesPanel({
                     </tr>
                     {editID === p.id && editDraft && (
                       <tr key={p.id + '-edit'} className="config-edit-row">
-                        <td colSpan={isAdmin ? 8 : 7}>
+                        <td colSpan={canWrite ? 8 : 7}>
                           <div className="config-form">
                             <h3 className="eyebrow">
                               Edit {p.type} · {assignmentLabel(p)}
@@ -679,7 +679,7 @@ export default function ProbesPanel({
             </button>
           </div>
         )}
-        {isAdmin && (
+        {canWrite && (
           <div className="config-form">
             <h3 className="eyebrow">Add probe</h3>
             <div className="config-form-grid">

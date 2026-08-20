@@ -2501,6 +2501,25 @@ button.primary:disabled {
   text-transform: uppercase;
 }
 
+/* A scoped account's planes, under its role. Lower-case and unspaced: it
+   is a list of names, not a label like the role above it, and a long list
+   must wrap rather than push the popover wide. */
+.user-menu-scope {
+  color: var(--ink-3);
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+  text-transform: none !important;
+}
+
+/* The static plane indicator a single-plane tenant gets in place of the
+   filter popover: same slot in the top bar, but nothing to open. */
+.topbar-plane {
+  align-self: center;
+  white-space: nowrap;
+}
+
 .user-menu-popover > a,
 .user-menu-popover > button {
   display: block;

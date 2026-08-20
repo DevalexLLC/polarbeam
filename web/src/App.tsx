@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ApiError, apiGet, apiPost, setCsrfToken } from './api'
+import { capsOf, roleLabel } from './caps'
 import { reconcileNetworkFilter } from './networkFilter'
+import { canOpenSettings, resolveTab } from './settingsTabs'
 import type { AuthProviders, LoginResponse, NetworksConfigResponse, UIBanner, User } from './types'
 import BannerFrame from './components/BannerFrame'
 import ChangePasswordDialog from './components/ChangePasswordDialog'
@@ -21,30 +23,8 @@ import Targets from './views/Targets'
 
 // Hash routing stays dependency-free and preserves the original route names
 // as aliases, so bookmarks survive the information-architecture cleanup.
-export type SettingsTab =
-  | 'thresholds'
-  | 'sites'
-  | 'networks'
-  | 'targets'
-  | 'meshes'
-  | 'probes'
-  | 'enrollment'
-  | 'users'
-  | 'authentication'
-  | 'banner'
-
-const SETTINGS_TABS: SettingsTab[] = [
-  'thresholds',
-  'sites',
-  'networks',
-  'targets',
-  'meshes',
-  'probes',
-  'enrollment',
-  'users',
-  'authentication',
-  'banner',
-]
+// The tab vocabulary itself lives in settingsTabs.ts, which also owns which
+// role may open each one.
 
 type Route =
   | { view: 'overview' }
@@ -55,7 +35,7 @@ type Route =
   | { view: 'routes' }
   | { view: 'agents'; agent: string | null }
   | { view: 'about' }
-  | { view: 'settings'; tab: SettingsTab }
+  | { view: 'settings'; tab: string }
 
 // A malformed percent-escape in a hand-edited bookmark must not blank the
 // app; fall back to the raw segment so PairDetail shows a loud not-found.
@@ -85,10 +65,11 @@ function parseHash(hash: string): Route {
   if (parts[0] === 'agents') return { view: 'agents', agent: parts[1] ? decodeSegment(parts[1]) : null }
   if (parts[0] === 'about') return { view: 'about' }
   if (parts[0] === 'settings') {
-    // #/settings/<tab>; unknown or absent tabs land on thresholds so the
-    // plain #/settings bookmark (and the user-menu link) keep working.
-    const tab = SETTINGS_TABS.find((t) => t === parts[1]) ?? 'thresholds'
-    return { view: 'settings', tab }
+    // #/settings/<tab>, kept raw. Which tabs exist AND which this caller may
+    // open is a question only answerable once the session is known, so it is
+    // resolved at render (resolveTab) rather than here: parseHash runs from
+    // a useState initializer before /auth/me returns.
+    return { view: 'settings', tab: decodeSegment(parts[1] ?? '') }
   }
   // #/connectivity and #/sightlines land here too: the map/matrix switch
   // lives on the Overview now, so those bookmarks alias to it.
@@ -192,6 +173,24 @@ export default function App() {
     }
   }, [user])
 
+  // Capabilities are derived from the session, not stored: they change
+  // exactly once per session (at login/logout), and App re-renders its whole
+  // tree at that moment anyway. A store would add a global that can drift
+  // from `user`, and would make logout ordering a correctness bug.
+  const caps = useMemo(() => (user ? capsOf(user) : null), [user])
+
+  // A hash naming a tab this role cannot open is rewritten to the one it
+  // landed on, so the URL the user copies is honest. replaceState does not
+  // fire hashchange, so this cannot loop.
+  const settingsTab = caps && route.view === 'settings' ? resolveTab(route.tab, caps) : null
+  useEffect(() => {
+    if (route.view !== 'settings' || settingsTab === null) return
+    if (route.tab === settingsTab) return
+    const href = settingsTab === 'thresholds' ? '#/settings' : `#/settings/${settingsTab}`
+    history.replaceState(null, '', href)
+    setRoute({ view: 'settings', tab: settingsTab })
+  }, [route, settingsTab])
+
   // Any 401 from a view means the session died server-side: back to login.
   const onAuthError = useCallback((err: unknown) => {
     if (err instanceof ApiError && err.status === 401) setUser(null)
@@ -256,7 +255,7 @@ export default function App() {
             ))}
           </nav>
           <div className="topbar-right">
-            <TopbarFilter networks={networkNames} />
+            <TopbarFilter networks={networkNames} scope={caps?.networks ?? null} />
             <TimezoneToggle />
             <ThemeToggle />
             <details className={'user-menu' + (route.view === 'settings' ? ' user-menu-current' : '')}>
@@ -269,9 +268,16 @@ export default function App() {
               <div className="user-menu-popover">
                 <div className="user-menu-identity">
                   <strong>{user.username}</strong>
-                  <span>{user.role}</span>
+                  <span>{roleLabel(user.role)}</span>
+                  {/* A scoped account's planes are part of its identity:
+                    what it can see and where its writes land. */}
+                  {user.networks !== null && (
+                    <span className="user-menu-scope">
+                      {user.networks.length === 0 ? 'no networks assigned' : user.networks.join(', ')}
+                    </span>
+                  )}
                 </div>
-                {user.role === 'admin' && (
+                {caps !== null && canOpenSettings(caps) && (
                   <a
                     href="#/settings"
                     aria-current={route.view === 'settings' ? 'page' : undefined}
@@ -314,7 +320,19 @@ export default function App() {
           <ChangePasswordDialog onClose={() => setChangingPassword(false)} onAuthError={onAuthError} />
         )}
         <main id="main-content" tabIndex={-1}>
-          {route.view === 'overview' ? (
+          {caps !== null && caps.networks !== null && caps.networks.length === 0 ? (
+            // A scoped account with an empty set is a real server state — a
+            // mapping that matched nothing, or a network deleted out from
+            // under it. Every view would render blank and every write would
+            // 404, so say why once instead of ten times.
+            <div className="state-panel">
+              <h2>No networks assigned</h2>
+              <p>
+                Your account is limited to specific networks, but none are assigned to it yet. Ask an administrator to
+                assign one.
+              </p>
+            </div>
+          ) : route.view === 'overview' ? (
             <Overview onAuthError={onAuthError} />
           ) : route.view === 'pair' ? (
             // Keyed on the pair so switching pairs remounts with fresh state:
@@ -331,13 +349,23 @@ export default function App() {
           ) : route.view === 'agents' ? (
             <Agents agent={route.agent} onAuthError={onAuthError} />
           ) : route.view === 'settings' ? (
-            <Settings
-              tab={route.tab}
-              isAdmin={user.role === 'admin'}
-              username={user.username}
-              onAuthError={onAuthError}
-              onBannerSaved={setBanner}
-            />
+            // The link is hidden for roles that may open no tab, but the
+            // hash is still typeable; say so rather than rendering an empty
+            // shell.
+            caps === null || settingsTab === null ? (
+              <div className="state-panel">
+                <h2>Nothing to configure</h2>
+                <p>Your role has no settings to manage. Configuration is shown on the pages it applies to.</p>
+              </div>
+            ) : (
+              <Settings
+                tab={settingsTab}
+                caps={caps}
+                username={user.username}
+                onAuthError={onAuthError}
+                onBannerSaved={setBanner}
+              />
+            )
           ) : route.view === 'about' ? (
             <About version={serverVersion} />
           ) : (

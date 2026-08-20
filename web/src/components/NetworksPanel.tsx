@@ -33,10 +33,10 @@ function refSummary(n: NetworkConfig): string {
 }
 
 export default function NetworksPanel({
-  isAdmin,
+  canWrite,
   onAuthError,
 }: {
-  isAdmin: boolean
+  canWrite: boolean
   onAuthError: (err: unknown) => void
 }) {
   const [data, setData] = useState<NetworksConfigResponse | null>(null)
@@ -182,7 +182,7 @@ export default function NetworksPanel({
                 <th>Meshes</th>
                 <th>Probes</th>
                 <th>Created</th>
-                {isAdmin && (
+                {canWrite && (
                   <th className="actions-col">
                     <span className="sr-only">Actions</span>
                   </th>
@@ -201,7 +201,7 @@ export default function NetworksPanel({
                   <td data-label="Meshes">{n.mesh_count}</td>
                   <td data-label="Probes">{n.probe_count}</td>
                   <td data-label="Created">{fmtAgo(n.created_at)}</td>
-                  {isAdmin && (
+                  {canWrite && (
                     <td data-label="Actions" className="config-actions">
                       <button type="button" className="secondary-button" onClick={() => startEdit(n)}>
                         Edit
@@ -226,7 +226,7 @@ export default function NetworksPanel({
             </tbody>
           </table>
         </div>
-        {isAdmin && (
+        {canWrite && (
           <div className="config-form">
             <h3 className="eyebrow">{editing ? `Edit ${draft?.name}` : 'Add network'}</h3>
             <div className="config-form-grid">

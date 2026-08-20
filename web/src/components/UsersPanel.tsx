@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import type { Caps } from '../caps'
+import RoleWall from './RoleWall'
 import { apiDelete, apiGet, apiPost, apiPut } from '../api'
 import { fmtAgo, fmtTime } from '../format'
 import { useTimezone } from '../timezone'
@@ -155,11 +157,13 @@ function FilterGroup<T extends string>({
 }
 
 export default function UsersPanel({
-  isAdmin,
+  caps,
+  canWrite,
   currentUsername,
   onAuthError,
 }: {
-  isAdmin: boolean
+  caps: Caps
+  canWrite: boolean
   currentUsername: string
   onAuthError: (err: unknown) => void
 }) {
@@ -221,7 +225,7 @@ export default function UsersPanel({
   // sign-in history), so viewers get a static explanation instead of a
   // doomed fetch.
   useEffect(() => {
-    if (!isAdmin) return
+    if (!canWrite) return
     let cancelled = false
     const params = new URLSearchParams()
     if (q) params.set('q', q)
@@ -251,7 +255,7 @@ export default function UsersPanel({
       cancelled = true
       clearInterval(id)
     }
-  }, [isAdmin, onAuthError, q, role, status, source, offset, refresh])
+  }, [canWrite, onAuthError, q, role, status, source, offset, refresh])
 
   const openCreate = () => {
     setCreateError('')
@@ -334,13 +338,8 @@ export default function UsersPanel({
     )
   }
 
-  if (!isAdmin) {
-    return (
-      <div className="state-panel">
-        <h2>Admin role required</h2>
-        <p>User accounts and sign-in activity are visible to administrators only.</p>
-      </div>
-    )
+  if (!canWrite) {
+    return <RoleWall need="adminWrite" what="User accounts and sign-in activity" caps={caps} />
   }
   if (error && !data) {
     return (

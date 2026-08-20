@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import type { Caps } from '../caps'
+import RoleWall from './RoleWall'
 import { apiDelete, apiGet, apiPost } from '../api'
 import { fmtAgo, fmtTime } from '../format'
 import { useTimezone } from '../timezone'
@@ -32,10 +34,12 @@ function tokenStatus(t: JoinToken): { label: string; kind: 'used' | 'expired' | 
 }
 
 export default function EnrollmentPanel({
-  isAdmin,
+  caps,
+  canWrite,
   onAuthError,
 }: {
-  isAdmin: boolean
+  caps: Caps
+  canWrite: boolean
   onAuthError: (err: unknown) => void
 }) {
   useTimezone() // re-render fmtTime renders on UTC/local toggle
@@ -57,7 +61,7 @@ export default function EnrollmentPanel({
   // credentials), so viewers get a static explanation instead of a doomed
   // fetch.
   useEffect(() => {
-    if (!isAdmin) return
+    if (!canWrite) return
     let cancelled = false
     const load = () => {
       apiGet<TokensResponse>('/api/v1/config/tokens')
@@ -93,15 +97,10 @@ export default function EnrollmentPanel({
       cancelled = true
       clearInterval(id)
     }
-  }, [isAdmin, onAuthError])
+  }, [canWrite, onAuthError])
 
-  if (!isAdmin) {
-    return (
-      <div className="state-panel">
-        <h2>Admin role required</h2>
-        <p>Enrollment tokens are visible to administrators only.</p>
-      </div>
-    )
+  if (!canWrite) {
+    return <RoleWall need="networkWrite" what="Enrollment tokens" caps={caps} />
   }
   if (error && !data) {
     return (
@@ -188,7 +187,7 @@ export default function EnrollmentPanel({
           Single-use tokens that enroll one agent into a site. Deleting an unused token revokes it immediately; used
           tokens are kept as the enrollment audit record.
         </p>
-        {isAdmin && (
+        {canWrite && (
           <div className="config-form">
             <h3 className="eyebrow">Issue token</h3>
             {siteNames.length === 0 ? (
@@ -305,7 +304,7 @@ export default function EnrollmentPanel({
                   <th>Created</th>
                   <th>Expires</th>
                   <th>Status</th>
-                  {isAdmin && (
+                  {canWrite && (
                     <th className="actions-col">
                       <span className="sr-only">Actions</span>
                     </th>
@@ -329,7 +328,7 @@ export default function EnrollmentPanel({
                       <td data-label="Created">{fmtAgo(t.created_at)}</td>
                       <td data-label="Expires">{fmtTime(t.expires_at)}</td>
                       <td data-label="Status">{status.label}</td>
-                      {isAdmin && (
+                      {canWrite && (
                         <td data-label="Actions" className="config-actions">
                           <ConfirmButton
                             label="Delete"

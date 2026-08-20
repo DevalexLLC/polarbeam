@@ -107,7 +107,7 @@ export default function PathThresholdEditor({
   network = '',
   override,
   global,
-  isAdmin,
+  canWrite,
   onChanged,
   onAuthError,
 }: {
@@ -118,7 +118,7 @@ export default function PathThresholdEditor({
   network?: string
   override: PathThresholdOverride | null
   global: ThresholdSettings
-  isAdmin: boolean
+  canWrite: boolean
   onChanged: () => void
   onAuthError: (err: unknown) => void
 }) {
@@ -170,7 +170,7 @@ export default function PathThresholdEditor({
           inputMode="decimal"
           value={current[key]}
           placeholder={`inherits ${inheritValue}`}
-          disabled={!isAdmin || saving}
+          disabled={!canWrite || saving}
           onChange={(e) => setDraft((d) => ({ ...(d ?? draftFrom(override)), [key]: e.target.value }))}
         />
         <span className="hint">{unit}</span>
@@ -205,12 +205,12 @@ export default function PathThresholdEditor({
             Empty fields inherit the global thresholds
             {override ? ' · clearing every field removes the override on save' : ''}
           </span>
-          {isAdmin ? (
+          {canWrite ? (
             <button className="primary" onClick={() => void save()} disabled={saving || !dirty}>
               {saving ? 'Saving…' : 'Save'}
             </button>
           ) : (
-            <span className="hint">admin role required to edit</span>
+            <span className="hint">write access required to edit</span>
           )}
         </div>
       </div>

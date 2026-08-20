@@ -6,8 +6,15 @@ import { useNetworkFilter } from '../networkFilter'
 // first dimension; the layout leaves room for more (site, probe type).
 // Follows the user-menu <details> pattern: native summary toggling, items
 // close the popover on activation.
-export default function TopbarFilter({ networks }: { networks: string[] }) {
+export default function TopbarFilter({ networks, scope }: { networks: string[]; scope: string[] | null }) {
   const { network, setNetwork } = useNetworkFilter()
+  // A scoped account limited to exactly one plane has nothing to filter —
+  // the server already returns that plane alone — but it should still be
+  // able to SEE which one it is looking at, so the control becomes a static
+  // chip instead of disappearing.
+  if (scope !== null && networks.length === 1) {
+    return <span className="chip topbar-plane">{networks[0]}</span>
+  }
   // Single-network installs never filter: no control, top bar unchanged.
   // But an ACTIVE filter always keeps the control (and "All networks")
   // reachable — a persisted filter applies before the networks list loads,
@@ -35,7 +42,7 @@ export default function TopbarFilter({ networks }: { networks: string[] }) {
               setNetwork(n)
             }}
           >
-            {n === '' ? 'All networks' : n}
+            {n === '' ? (scope === null ? 'All networks' : 'All my networks') : n}
           </button>
         ))}
       </div>

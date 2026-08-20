@@ -25,12 +25,12 @@ function valueCell(us: number | null, unit: 'ms' | '%', globalValue: number) {
 
 export default function PathThresholdsPanel({
   settings,
-  isAdmin,
+  canWrite,
   onChanged,
   onAuthError,
 }: {
   settings: SettingsResponse
-  isAdmin: boolean
+  canWrite: boolean
   onChanged: () => void
   onAuthError: (err: unknown) => void
 }) {
@@ -45,14 +45,14 @@ export default function PathThresholdsPanel({
   // audience, and a one-shot fetch is enough — a site created mid-visit
   // appears after a tab switch like every other config panel.
   useEffect(() => {
-    if (!isAdmin) return
+    if (!canWrite) return
     apiGet<SitesResponse>('/api/v1/sites')
       // Sorting the fresh array .map just returned (toSorted needs the
       // ES2023 lib — same note as WorldMap's ordered sites).
       // oxlint-disable-next-line unicorn/no-array-sort
       .then((res) => setSiteNames(res.sites.map((s) => s.name).sort()))
       .catch(onAuthError)
-  }, [isAdmin, onAuthError])
+  }, [canWrite, onAuthError])
 
   const overrides = settings.overrides
   const global = settings.thresholds
@@ -121,7 +121,7 @@ export default function PathThresholdsPanel({
                 <th>Loss degraded</th>
                 <th>Loss critical</th>
                 <th>Updated</th>
-                {isAdmin && (
+                {canWrite && (
                   <th className="actions-col">
                     <span className="sr-only">Actions</span>
                   </th>
@@ -150,7 +150,7 @@ export default function PathThresholdsPanel({
                         {fmtAgo(o.updated_at)}
                         {o.updated_by ? ` by ${o.updated_by}` : ''}
                       </td>
-                      {isAdmin && (
+                      {canWrite && (
                         <td data-label="Actions" className="config-actions">
                           <button
                             type="button"
@@ -170,7 +170,7 @@ export default function PathThresholdsPanel({
                     </tr>
                     {editKey === key && (
                       <tr className="config-edit-row">
-                        <td colSpan={isAdmin ? 7 : 6}>
+                        <td colSpan={canWrite ? 7 : 6}>
                           <div className="config-form">
                             <h3 className="eyebrow">
                               Edit override · {o.a} ↔ {o.b}
@@ -182,7 +182,7 @@ export default function PathThresholdsPanel({
                               network={o.network}
                               override={o}
                               global={global}
-                              isAdmin={isAdmin}
+                              canWrite={canWrite}
                               onChanged={() => {
                                 setEditKey(null)
                                 onChanged()
@@ -200,7 +200,7 @@ export default function PathThresholdsPanel({
           </table>
         </div>
       )}
-      {isAdmin && (
+      {canWrite && (
         <div className="config-form">
           {!adding ? (
             <button
@@ -240,7 +240,7 @@ export default function PathThresholdsPanel({
                   b={addB}
                   override={null}
                   global={global}
-                  isAdmin={isAdmin}
+                  canWrite={canWrite}
                   onChanged={() => {
                     setAdding(false)
                     onChanged()

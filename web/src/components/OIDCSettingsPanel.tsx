@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import type { Caps } from '../caps'
+import RoleWall from './RoleWall'
 import { apiGet, apiPost, apiPut } from '../api'
 import { fmtAgo } from '../format'
 import type { OIDCDiscoveryInfo, OIDCRoleRule, OIDCSettings, OIDCSettingsPut, UnmatchedRole } from '../types'
@@ -128,10 +130,12 @@ function validate(d: Draft, stored: OIDCSettings, forSave: boolean): { errors: s
 }
 
 export default function OIDCSettingsPanel({
-  isAdmin,
+  caps,
+  canWrite,
   onAuthError,
 }: {
-  isAdmin: boolean
+  caps: Caps
+  canWrite: boolean
   onAuthError: (err: unknown) => void
 }) {
   const [data, setData] = useState<OIDCSettings | null>(null)
@@ -149,7 +153,7 @@ export default function OIDCSettingsPanel({
   // mapping are IdP topology), so viewers get a static explanation instead
   // of a doomed fetch.
   useEffect(() => {
-    if (!isAdmin) return
+    if (!canWrite) return
     let cancelled = false
     const load = () => {
       apiGet<OIDCSettings>('/api/v1/settings/oidc')
@@ -171,15 +175,10 @@ export default function OIDCSettingsPanel({
       cancelled = true
       clearInterval(id)
     }
-  }, [isAdmin, onAuthError])
+  }, [canWrite, onAuthError])
 
-  if (!isAdmin) {
-    return (
-      <div className="state-panel">
-        <h2>Admin role required</h2>
-        <p>Single sign-on configuration is visible to administrators only.</p>
-      </div>
-    )
+  if (!canWrite) {
+    return <RoleWall need="adminWrite" what="Single sign-on settings" caps={caps} />
   }
   if (error && !data) {
     return (

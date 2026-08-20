@@ -33,10 +33,10 @@ function validate(d: Draft): { errors: string[]; port: number } {
 }
 
 export default function TargetsPanel({
-  isAdmin,
+  canWrite,
   onAuthError,
 }: {
-  isAdmin: boolean
+  canWrite: boolean
   onAuthError: (err: unknown) => void
 }) {
   const [data, setData] = useState<TargetsConfigResponse | null>(null)
@@ -191,7 +191,7 @@ export default function TargetsPanel({
                   <th>Address</th>
                   <th>Probes</th>
                   <th>Created</th>
-                  {isAdmin && (
+                  {canWrite && (
                     <th className="actions-col">
                       <span className="sr-only">Actions</span>
                     </th>
@@ -209,7 +209,7 @@ export default function TargetsPanel({
                     </td>
                     <td data-label="Probes">{t.probe_count}</td>
                     <td data-label="Created">{fmtAgo(t.created_at)}</td>
-                    {isAdmin && (
+                    {canWrite && (
                       <td data-label="Actions" className="config-actions">
                         <button type="button" className="secondary-button" onClick={() => startEdit(t)}>
                           Edit
@@ -231,7 +231,7 @@ export default function TargetsPanel({
             </table>
           </div>
         )}
-        {isAdmin && (
+        {canWrite && (
           <div className="config-form">
             <h3 className="eyebrow">{editing ? `Edit ${draft?.name}` : 'Add target'}</h3>
             <div className="config-form-grid">
