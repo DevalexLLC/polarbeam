@@ -1274,22 +1274,6 @@ Agents expose no operator-facing management port.
   site.
 - Confirm the fingerprint exactly matches the one printed with the token.
 - Check middlebox idle timeouts if logs repeatedly show `config stream failed`.
-- Confirm the agent's environment does not set `GODEBUG=tlsmlkem=0` (see
-  below).
-
-### Agent handshakes fail with `GODEBUG=tlsmlkem=0` set
-
-The server's gRPC listener accepts only TLS 1.3 with hybrid post-quantum
-(ML-KEM) key exchange — a deliberate floor, so a client that cannot do
-post-quantum key exchange fails loudly instead of silently downgrading to
-classical cryptography. Shipped agents satisfy this by default, but setting
-`GODEBUG=tlsmlkem=0` in an agent container's environment strips the ML-KEM
-offer from its handshake, and the server then rejects every connection
-(enrollment and uplink alike — the agent logs TLS handshake failures and
-retries continuously). Nothing in the shipped images or compose files sets
-this variable; if an agent suddenly cannot connect, check its environment
-for it and remove it. There is no supported way to disable the post-quantum
-requirement on the server side.
 
 ### Dashboard works but agents do not
 

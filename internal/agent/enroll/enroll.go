@@ -68,6 +68,17 @@ type Options struct {
 	ProbeAddress string
 }
 
+// hybridCurvePreferences returns the agent's required key-exchange groups.
+// Keeping them explicit makes the post-quantum transport policy independent
+// of Go's process-wide ML-KEM defaults and their GODEBUG compatibility knobs.
+func hybridCurvePreferences() []tls.CurveID {
+	return []tls.CurveID{
+		tls.X25519MLKEM768,
+		tls.SecP256r1MLKEM768,
+		tls.SecP384r1MLKEM1024,
+	}
+}
+
 // Run enrolls against cfg.Server and writes the PKI state. Refuses to
 // overwrite an existing enrollment.
 func Run(ctx context.Context, cfg config.Config, opts Options) error {
@@ -306,7 +317,8 @@ func (p PKI) ClientTLS(cfg config.Config) (*tls.Config, error) {
 		return nil, errors.New("CA bundle contains no certificates")
 	}
 	return &tls.Config{
-		MinVersion: tls.VersionTLS12,
+		MinVersion:       tls.VersionTLS13,
+		CurvePreferences: hybridCurvePreferences(),
 		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
 			cert, err := tls.LoadX509KeyPair(certPath, keyPath)
 			if err != nil {
@@ -338,7 +350,12 @@ func bootstrapTLS(cfg config.Config, opts Options) (*tls.Config, error) {
 		if !pool.AppendCertsFromPEM(caPEM) {
 			return nil, fmt.Errorf("--ca-cert %s contains no certificates", opts.CACertFile)
 		}
-		return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool, ServerName: name}, nil
+		return &tls.Config{
+			MinVersion:       tls.VersionTLS13,
+			CurvePreferences: hybridCurvePreferences(),
+			RootCAs:          pool,
+			ServerName:       name,
+		}, nil
 
 	case opts.Fingerprint != "":
 		want, err := parseFingerprint(opts.Fingerprint)
@@ -350,7 +367,8 @@ func bootstrapTLS(cfg config.Config, opts Options) (*tls.Config, error) {
 		// verification is disabled (InsecureSkipVerify) because the pin IS
 		// the trust anchor; this callback replaces it, never skips it.
 		return &tls.Config{
-			MinVersion:         tls.VersionTLS12,
+			MinVersion:         tls.VersionTLS13,
+			CurvePreferences:   hybridCurvePreferences(),
 			ServerName:         name,
 			InsecureSkipVerify: true,
 			VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
