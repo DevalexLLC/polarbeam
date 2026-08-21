@@ -209,6 +209,7 @@ export default function NetworkThresholdsPanel({
                   inherited={global}
                   canWrite={canWrite}
                   emptyHint="the global thresholds"
+                  onCancel={() => setAdding(false)}
                   onChanged={(warnings) => {
                     if (warnings.length === 0) setAdding(false)
                     onChanged()
@@ -216,12 +217,14 @@ export default function NetworkThresholdsPanel({
                   onAuthError={onAuthError}
                 />
               )}
-              <div className="threshold-foot">
-                <span className="hint" />
-                <button type="button" className="secondary-button" onClick={() => setAdding(false)}>
-                  Cancel
-                </button>
-              </div>
+              {!addable && (
+                <div className="threshold-foot">
+                  <span className="hint" />
+                  <button type="button" className="secondary-button" onClick={() => setAdding(false)}>
+                    Cancel
+                  </button>
+                </div>
+              )}
             </>
           )}
         </div>

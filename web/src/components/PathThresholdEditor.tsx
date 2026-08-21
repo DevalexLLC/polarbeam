@@ -21,6 +21,7 @@ export default function PathThresholdEditor({
   override,
   global,
   canWrite,
+  onCancel,
   onChanged,
   onAuthError,
 }: {
@@ -33,6 +34,7 @@ export default function PathThresholdEditor({
   // global row, already resolved by the panel.
   global: ThresholdSettings
   canWrite: boolean
+  onCancel?: () => void
   onChanged: (warnings: string[]) => void
   onAuthError: (err: unknown) => void
 }) {
@@ -43,6 +45,7 @@ export default function PathThresholdEditor({
       inherited={global}
       canWrite={canWrite}
       emptyHint={network === '' ? 'the global thresholds' : `the ${network} defaults`}
+      onCancel={onCancel}
       onChanged={onChanged}
       onAuthError={onAuthError}
     />

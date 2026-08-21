@@ -99,6 +99,7 @@ export default function ThresholdOverrideForm({
   inherited,
   canWrite,
   emptyHint,
+  onCancel,
   onChanged,
   onAuthError,
 }: {
@@ -113,6 +114,9 @@ export default function ThresholdOverrideForm({
   canWrite: boolean
   // Names the layer an empty field falls through to, in the footer.
   emptyHint: string
+  // Add flows use this to keep Cancel beside Save. Existing-row editors
+  // omit it because their host already provides a Close action.
+  onCancel?: () => void
   // Called after a successful write with the server's advisory warnings
   // (empty when there were none). Hosts close the editor only on a clean
   // save — closing on a warning would discard the very thing the server
@@ -228,9 +232,16 @@ export default function ThresholdOverrideForm({
             {override ? ' · clearing every field removes this row on save' : ''}
           </span>
           {canWrite ? (
-            <button className="primary" onClick={() => void save()} disabled={saving || !dirty}>
-              {saving ? 'Saving…' : 'Save'}
-            </button>
+            <span className="threshold-actions">
+              {onCancel && (
+                <button type="button" className="secondary-button" onClick={onCancel} disabled={saving}>
+                  Cancel
+                </button>
+              )}
+              <button className="primary" onClick={() => void save()} disabled={saving || !dirty}>
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            </span>
           ) : (
             <span className="hint">write access required to edit</span>
           )}
