@@ -36,9 +36,11 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 `main` accepts no direct pushes — not from contributors, not from
 maintainers. Every change lands through a pull request whose required
 checks pass: `offline-build` (the air-gap gate), `web-lint`, and
-`docker-build (server)` / `docker-build (agent)` / `docker-build (proxy)`.
-Reviews are not required, so a maintainer can self-merge once CI is green;
-force-pushes and branch deletion are blocked outright.
+`db-test`, plus `docker-build (server)` / `docker-build (agent)` /
+`docker-build (proxy)`. CodeQL also reports advisory `Analyze` checks under
+the current ruleset; review its alerts before merging. Reviews are not
+required, so a maintainer can self-merge once CI is green; force-pushes and
+branch deletion are blocked outright.
 
 For pull requests from forks, GitHub Actions runs only after a maintainer
 approves the workflow run — expect a short delay before CI starts on your

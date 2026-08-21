@@ -26,6 +26,12 @@ Deployment files live in `deploy/` (including the annotated
 The Go version is pinned in `go.mod` and both Go builder images; keep those
 pins and the air-gap prerequisites aligned.
 
+CodeQL uses advanced setup with a manual Go build so it honors that pin; keep
+default CodeQL setup disabled and do not replace the explicit build with
+autobuild. Its checks are advisory under the current ruleset. Do not adopt Go
+1.27-only syntax until CodeQL's published language support includes it, and
+review reported alerts before merging.
+
 After starting the stack, use `cd web && pnpm run dev` for Vite. Never run
 the base Compose file alone for development.
 

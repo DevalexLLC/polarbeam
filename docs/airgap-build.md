@@ -43,6 +43,12 @@ That is not a hole in the guarantee: it lints and format-checks SPA
 hand with `make web` and committed — no release path ever runs a package
 manager.
 
+The separate `CodeQL` workflow is hosted security analysis, not a build or
+release path. Its setup steps obtain the pinned Go toolchain and CodeQL bundle,
+and its analysis step uploads results to GitHub. The traced project build still
+runs with `GOPROXY=off`, `GOTOOLCHAIN=local`, and committed `vendor/`, so it
+cannot fetch Go dependencies or a replacement toolchain.
+
 Container image builds compile from vendor the same way, but are NOT
 zero-network: besides pulling the golang/alpine/nginx base images, the
 agent image's release stage installs one Alpine package (`libcap`, for
