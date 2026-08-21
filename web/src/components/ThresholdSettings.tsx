@@ -61,13 +61,13 @@ function validate(d: Draft): { errors: string[]; parsed: ThresholdSettings | nul
 
 export default function ThresholdSettingsPanel({
   settings,
-  isAdmin,
+  canWrite,
   onSaved,
   onAuthError,
   variant = 'popover',
 }: {
   settings: SettingsResponse | null
-  isAdmin: boolean
+  canWrite: boolean
   onSaved: (s: SettingsResponse) => void
   onAuthError: (err: unknown) => void
   variant?: 'popover' | 'page'
@@ -121,7 +121,7 @@ export default function ThresholdSettingsPanel({
           type="text"
           inputMode="decimal"
           value={(draft ?? draftFrom(settings.thresholds))[key]}
-          disabled={!isAdmin || saving}
+          disabled={!canWrite || saving}
           onChange={(e) => {
             setSavedFlash(false)
             setDraft((d) => ({ ...(d ?? draftFrom(settings.thresholds)), [key]: e.target.value }))
@@ -176,7 +176,7 @@ export default function ThresholdSettingsPanel({
               Shared by every dashboard user
               {settings.updated_by ? ` · last set by ${settings.updated_by} ${fmtAgo(settings.updated_at)}` : ''}
             </span>
-            {isAdmin ? (
+            {canWrite ? (
               <span className="threshold-actions">
                 {savedFlash && <span className="hint">saved</span>}
                 <button className="primary" onClick={save} disabled={saving || !dirty}>

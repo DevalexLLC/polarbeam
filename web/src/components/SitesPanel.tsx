@@ -52,10 +52,10 @@ function refSummary(s: SiteConfig): string {
 }
 
 export default function SitesPanel({
-  isAdmin,
+  canWrite,
   onAuthError,
 }: {
-  isAdmin: boolean
+  canWrite: boolean
   onAuthError: (err: unknown) => void
 }) {
   const [data, setData] = useState<SitesConfigResponse | null>(null)
@@ -219,7 +219,7 @@ export default function SitesPanel({
                   <th>Meshes</th>
                   <th>Probes</th>
                   <th>Created</th>
-                  {isAdmin && (
+                  {canWrite && (
                     <th className="actions-col">
                       <span className="sr-only">Actions</span>
                     </th>
@@ -243,7 +243,7 @@ export default function SitesPanel({
                     <td data-label="Meshes">{s.mesh_count}</td>
                     <td data-label="Probes">{s.probe_count}</td>
                     <td data-label="Created">{fmtAgo(s.created_at)}</td>
-                    {isAdmin && (
+                    {canWrite && (
                       <td data-label="Actions" className="config-actions">
                         <button type="button" className="secondary-button" onClick={() => startEdit(s)}>
                           Edit
@@ -263,7 +263,7 @@ export default function SitesPanel({
             </table>
           </div>
         )}
-        {isAdmin && (
+        {canWrite && (
           <div className="config-form">
             <h3 className="eyebrow">{editing ? `Edit ${draft?.name}` : 'Add site'}</h3>
             <div className="config-form-grid">

@@ -534,6 +534,35 @@ can change their own password from the user menu (top right; same
 eight-character minimum), and administrators can create further accounts and
 reset lost passwords from **Settings → Users**.
 
+`--admin` creates a global administrator, which is what you want for the
+first account. There are four roles in total, and the other three are worth
+knowing about before you hand out logins:
+
+| Role | Sees | May change |
+|---|---|---|
+| `admin` | Everything | Everything |
+| `viewer` | Everything | Nothing |
+| `network_admin` | Only its assigned networks | Probes, meshes, targets, enrollment tokens, and thresholds on those networks |
+| `network_viewer` | Only its assigned networks | Nothing |
+
+The two network-scoped roles exist so one control plane can carry your
+management network alongside per-tenant networks and you can give a tenant
+a login that sees only its own. They need at least one network, named at
+creation:
+
+```sh
+docker compose exec server polarbeam-server user add \
+  --config /etc/polarbeam/server.yaml \
+  --username acme-ops --role network_admin --network acme
+```
+
+Repeat `--network` to span several planes. Scoped accounts never reach
+**Settings → Users**, **Authentication**, **Banner**, **Networks**, or
+**Sites**, and cannot change the deployment-wide thresholds — those are
+yours. §10.4 walks through a worked two-network example. Skip all of this
+if you run a single flat network: the roles are additive and change nothing
+until you create a scoped account.
+
 A successful health request also
 confirms that DNS, the proxy's default route, dashboard TLS, and the HTTP
 listener work together:
@@ -943,9 +972,34 @@ dashboard equivalent of everything above lives on
 **user menu -> Settings -> Networks** plus network pickers on the
 Enrollment, Meshes, and Probes tabs.
 
+Everything above is the operator's view, which sees every plane. If the
+second network belongs to someone else — a tenant, or a team you would
+rather not hand the whole deployment to — give them an account scoped to it:
+
+```sh
+docker compose exec server polarbeam-server user add \
+  --config /etc/polarbeam/server.yaml \
+  --username mgmt-ops --role network_admin --network mgmt
+```
+
+That account signs in to the same dashboard and sees only `mgmt`: its
+agents, its site pairs, its incidents, routes, and targets. Sites hosting no
+`mgmt` agent do not appear at all, and because it can see exactly one plane
+the top-bar filter is replaced by a static label naming it — there is
+nothing to filter. It manages that plane's probes, meshes, targets, and
+enrollment tokens, and can set thresholds for the plane and for individual
+site pairs on it, but the **Users**, **Authentication**, **Banner**,
+**Networks**, and **Sites** tabs are simply absent, and the deployment-wide
+thresholds are read-only. Use `--role network_viewer` for a read-only tenant
+account. Enrollment stays safe by construction: a scoped admin can only mint
+tokens for its own networks, and an agent takes its plane from the token, so
+it cannot enroll a box onto yours.
+
 A network with no remaining agents, meshes, or probes can be deleted from the
 Networks tab or with `polarbeam-server network delete`; unused join tokens are
-revoked with it. The `default` network cannot be deleted.
+revoked with it. Tenant-owned targets on a network block its deletion the
+same way probes do — the Networks tab shows the count. The `default` network
+cannot be deleted.
 
 ## 11. Verify the complete system
 
@@ -964,7 +1018,12 @@ distribution interval, then verify each layer:
    every plane, and each plane's view shows only its own agent pairs —
    a pair appearing under the wrong network means an agent was enrolled with
    the wrong token.
-8. The **Routes** page begins to populate after traceroute runs.
+8. Scoped accounts only: sign in as a `network_admin` and confirm it sees
+   only its own networks' agents and pairs, that **Settings** offers
+   Thresholds, Targets, Meshes, Probes, and Enrollment but no Users,
+   Authentication, Banner, Networks, or Sites, and that issuing a token from
+   that account produces one on its own network.
+9. The **Routes** page begins to populate after traceroute runs.
 
 Useful logs while verifying are:
 
@@ -1026,7 +1085,17 @@ way.
 4. To grant PolarBEAM admin from group membership, add a **Group
    Membership** mapper (claim name `groups`, full path off is simplest) to
    the client, and put your operator accounts in a group such as
-   `polarbeam-admins`.
+   `polarbeam-admins`. Leave **Full group path** off: the values PolarBEAM
+   matches are the bare group names, not `/parent/child` paths.
+5. **Only if you are giving tenants logins.** Add one group per tenant role,
+   e.g. `acme-admins` and `acme-viewers`, and put each tenant's users in
+   theirs. Nothing else about the client changes — the same `groups` claim
+   carries them, and PolarBEAM decides what each value means in the next
+   section. A user in two tenants' groups gets both networks.
+6. Optional but recommended when tenants are involved: restrict who may
+   complete the flow for this client at all (a Keycloak client policy
+   requiring one of the PolarBEAM groups), so unrelated realm users never
+   reach PolarBEAM's own refusal.
 
 ### Configure PolarBEAM
 
@@ -1040,12 +1109,29 @@ Sign in as a local admin and open **Settings → Authentication** (user menu
 | Redirect URL | The exact callback URL above. It is deliberately explicit — the server sits behind an SNI passthrough proxy and never guesses its own external name. |
 | Scopes | Must include `openid`. Add `profile`/`email` if your username claim needs them. |
 | Username claim | The ID-token claim shown as the dashboard username (default `preferred_username`). Missing claim = failed login, loudly. |
-| Role claim / Admin values | The claim checked for admin (default `groups`, string or array). Exact matches against any admin value grant `admin`; every other authenticated user is a `viewer`. |
+| Role claim / Admin values | The claim carrying group membership (default `groups`, string or array). Exact matches against any admin value grant global `admin`, and this list always wins. |
+| Network role rules | Ordered mappings from the same claim to a network-scoped role, each naming one or more networks. Every matching rule contributes: the strongest role wins and the networks are unioned, so a user in two tenants' admin groups administers both. Only `network_admin` and `network_viewer` are mappable — `admin` has its own list, and a rule granting global `viewer` would be the unmatched fallback in disguise. Empty on a single-tenant install. |
+| Unmatched users | What happens to a user the provider authenticates who matches no admin value and no rule: become global viewers (the default, and the behaviour that predates tenancy) or be denied sign-in. **Any install carrying more than one tenant must set this to denied** — a global viewer sees every network. |
 | Identity provider CA | Optional PEM certificate(s) for providers on a private PKI. When set it replaces the system trust store for IdP calls only. |
 
 Use **Test connection** before enabling: it runs discovery with the
 submitted values and reports the provider's endpoints, or the exact
 network/TLS error. Saving applies immediately — no restart.
+
+If you are mapping tenants, the four fields work together like this: role
+claim `groups`, admin values `polarbeam-admins`, one rule per tenant group
+(`acme-admins` → network admin on `acme`, `acme-viewers` → network viewer on
+`acme`, and so on), and unmatched users **denied**. Leaving unmatched users
+on the default while rules exist is the one configuration that quietly
+defeats the whole arrangement — every realm user the IdP authenticates would
+still land as a global viewer and see every tenant — so the form warns about
+exactly that combination when you save it.
+
+The networks a rule names must already exist (**Settings → Networks**); a
+rule naming an unknown one is refused when you save. If a network is deleted
+later, rules mentioning it contribute nothing, and a login whose winning
+role ends up with no networks at all is refused and recorded rather than
+being silently downgraded.
 
 ### Semantics worth knowing
 
@@ -1057,7 +1143,10 @@ network/TLS error. Saving applies immediately — no restart.
   Admins can also create local users there (the password is generated
   and shown once), and disable, re-enable, or delete accounts — you
   cannot act on your own account, and the last enabled admin is
-  protected. The CLI (`user add`) and SQL levers below keep working.
+  protected. A role is chosen at creation and fixed thereafter; the
+  networks of a *local* scoped account can be changed afterwards from its
+  row. Only global admins reach this page at all. The CLI (`user add`) and
+  SQL levers below keep working.
 - **Password management for local accounts.** An admin can reset any
   other local user's password from its Settings → Users row: a new
   password is generated server-side and shown exactly once, and all of
@@ -1079,11 +1168,13 @@ network/TLS error. Saving applies immediately — no restart.
   derived from the issuer and subject. (If that exact suffixed name is
   also taken — practically only when someone pre-created it on purpose —
   the login fails loudly rather than guessing further.)
-- Username and role are refreshed from the IdP at every login, and the
-  refreshed role takes effect immediately for **all** of that user's open
-  dashboard sessions — sessions read the user row on every request, so a
-  demotion (or promotion) at the IdP lands everywhere as soon as the user
-  next completes an SSO login.
+- Username, role, and network scope are refreshed from the IdP at every
+  login, and the refreshed values take effect immediately for **all** of
+  that user's open dashboard sessions — sessions read the user row on every
+  request, so a demotion (or promotion) at the IdP lands everywhere as soon
+  as the user next completes an SSO login. Group membership is therefore the
+  single source of truth for federated accounts: their scope cannot be
+  edited in **Settings → Users**, because the next login would overwrite it.
 - To revoke one federated user's access without touching the IdP, disable
   it in Settings → Users, or set its `disabled` flag directly (same lever
   as local users). Note that *deleting* a federated user does not revoke
@@ -1104,12 +1195,15 @@ network/TLS error. Saving applies immediately — no restart.
   provider" — the credential to rotate lives at the IdP.
 - Changing the issuer or client ID signs out every SSO session
   immediately (their roles came from the previous provider); local
-  sessions are unaffected. An SSO login already in flight across the
-  switch fails loudly instead of completing — it authenticated against
-  the previous provider. Accounts from the previous provider stay in
-  the database but are unreachable — identities are scoped to the issuer,
-  so nobody can sign in to them through the new provider. To tidy them
-  up:
+  sessions are unaffected. So does changing the authorization policy — the
+  admin values, the role rules, or the unmatched-user setting — because a
+  session's role and scope are only remapped by a login, so an existing
+  session would otherwise keep access the new policy no longer grants. An
+  SSO login already in flight across the switch fails loudly instead of
+  completing — it authenticated against the previous provider. Accounts
+  from the previous provider stay in the database but are unreachable —
+  identities are scoped to the issuer, so nobody can sign in to them
+  through the new provider. To tidy them up:
 
   ```sh
   docker compose exec timescaledb psql -U polarbeam -d polarbeam -c \

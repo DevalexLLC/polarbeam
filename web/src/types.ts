@@ -1,12 +1,23 @@
 // Shapes returned by /api/v1/* (the contract implemented by
 // internal/server/httpapi).
 
+// The four dashboard roles, mirroring internal/server/store/roles.go. The
+// two scoped roles are limited to an explicit set of networks; the two
+// global ones see every plane. Never widen a check into a hierarchy — the
+// server's requireRole is an exact string compare, and that exactness is
+// what denies a tenant every operator surface with no code of its own.
+export type Role = 'admin' | 'viewer' | 'network_admin' | 'network_viewer'
+
 export interface User {
   username: string
-  role: 'admin' | 'viewer'
+  role: Role
   // Federated accounts have no password here — their credential lives at
   // the IdP — so the UI hides password management for them.
   auth_source: 'local' | 'oidc'
+  // The caller's network scope: null for the global roles (unfiltered), the
+  // sorted plane names for a scoped role, and [] for a scoped role with
+  // nothing assigned — which sees nothing and can write nothing.
+  networks: string[] | null
 }
 
 export interface LoginResponse {
@@ -489,6 +500,11 @@ export interface TargetConfig {
   address?: string
   port?: number
   url?: string
+  // The owning plane, '' for a global (operator-published) target every
+  // network may probe but only a global admin may edit. A set name makes the
+  // row that network's. Always present, so the UI can tell "global,
+  // read-only to me" from "mine".
+  network: string
   probe_count: number
   created_at: string
 }
@@ -663,7 +679,10 @@ export interface BannerSettingsPut {
 export interface UserAccount {
   id: string
   username: string
-  role: 'admin' | 'viewer'
+  role: Role
+  // The account's network scope: null for the global roles and for deleted
+  // identities, else the planes it is limited to.
+  networks: string[] | null
   auth_source: 'local' | 'oidc'
   status: 'active' | 'disabled' | 'deleted'
   login_count: number
@@ -691,12 +710,29 @@ export interface UsersResponse {
 export interface UserCreateResponse {
   id: string
   username: string
-  role: 'admin' | 'viewer'
+  role: Role
+  networks: string[] | null
   password: string
 }
 
 // GET/PUT /api/v1/settings/oidc (admin-only). The client secret is
 // write-only: reads carry only client_secret_set.
+// One ordered group-to-role mapping. `value` is matched exactly against the
+// role claim; only the two scoped roles are mappable (admin has its own
+// admin_values list, and a rule granting global viewer would be
+// unmatched_role in disguise), and each rule needs at least one network.
+export interface OIDCRoleRule {
+  value: string
+  role: 'network_admin' | 'network_viewer'
+  networks: string[]
+}
+
+// What happens to a user the IdP authenticated who matched no rule and no
+// admin value: 'viewer' is the pre-tenancy behaviour (a global viewer who
+// sees every plane), 'deny' refuses the login. Tenanted installs must set
+// 'deny'.
+export type UnmatchedRole = 'viewer' | 'deny'
+
 export interface OIDCSettings {
   enabled: boolean
   issuer: string
@@ -707,6 +743,8 @@ export interface OIDCSettings {
   username_claim: string
   role_claim: string
   admin_values: string[]
+  role_rules: OIDCRoleRule[]
+  unmatched_role: UnmatchedRole
   ca_pem: string
   updated_at: string
   updated_by: string
@@ -724,6 +762,12 @@ export interface OIDCSettingsPut {
   username_claim: string
   role_claim: string
   admin_values: string[]
+  // Both tenant-policy fields follow the client_secret convention: omitting
+  // one keeps the stored value, resolved under the settings row lock. Once
+  // this form can edit them it must send them explicitly, or an unrelated
+  // save would silently keep a superseded mapping.
+  role_rules: OIDCRoleRule[]
+  unmatched_role: UnmatchedRole
   ca_pem: string
 }
 

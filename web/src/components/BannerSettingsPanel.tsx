@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import type { Caps } from '../caps'
+import RoleWall from './RoleWall'
 import { apiGet, apiPut } from '../api'
 import { fmtAgo } from '../format'
 import type { BannerSettings, BannerSettingsPut, UIBanner } from '../types'
@@ -27,11 +29,13 @@ function validate(d: Draft): { errors: string[]; body: BannerSettingsPut } {
 }
 
 export default function BannerSettingsPanel({
-  isAdmin,
+  caps,
+  canWrite,
   onAuthError,
   onSaved,
 }: {
-  isAdmin: boolean
+  caps: Caps
+  canWrite: boolean
   onAuthError: (err: unknown) => void
   onSaved: (b: UIBanner) => void
 }) {
@@ -45,7 +49,7 @@ export default function BannerSettingsPanel({
   // Admin-only GET (updated_by usernames), so viewers get a static
   // explanation instead of a doomed fetch.
   useEffect(() => {
-    if (!isAdmin) return
+    if (!canWrite) return
     let cancelled = false
     const load = () => {
       apiGet<BannerSettings>('/api/v1/settings/ui-banner')
@@ -67,15 +71,10 @@ export default function BannerSettingsPanel({
       cancelled = true
       clearInterval(id)
     }
-  }, [isAdmin, onAuthError])
+  }, [canWrite, onAuthError])
 
-  if (!isAdmin) {
-    return (
-      <div className="state-panel">
-        <h2>Admin role required</h2>
-        <p>Banner configuration is visible to administrators only.</p>
-      </div>
-    )
+  if (!canWrite) {
+    return <RoleWall need="adminWrite" what="Banner settings" caps={caps} />
   }
   if (error && !data) {
     return (

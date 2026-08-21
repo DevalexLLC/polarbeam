@@ -3,7 +3,6 @@ import { apiDelete, apiGet, apiPost, apiPut } from '../api'
 import { fmtAgo } from '../format'
 import type {
   MeshesConfigResponse,
-  NetworksConfigResponse,
   ParamSpec,
   ProbeConfig,
   ProbesConfigResponse,
@@ -11,7 +10,10 @@ import type {
   SitesResponse,
   TargetsConfigResponse,
 } from '../types'
+import type { PlaneChoice } from '../plane'
+import { initialPlane, networkField, planeReady } from '../plane'
 import ConfirmButton from './ConfirmButton'
+import PlaneField from './PlaneField'
 
 const POLL_MS = 30_000
 const PROBE_PAGE = 25
@@ -43,13 +45,13 @@ interface ProbeDraft {
   params: Record<string, string>
 }
 
-function newDraft(): ProbeDraft {
+function newDraft(plane: string): ProbeDraft {
   return {
     mode: 'mesh',
     mesh: '',
     site: '',
     target: '',
-    network: 'default',
+    network: plane,
     type: 'icmp',
     intervalS: '30',
     timeoutS: '5',
@@ -187,10 +189,12 @@ function paramsSummary(p: ProbeConfig): string {
 }
 
 export default function ProbesPanel({
-  isAdmin,
+  canWrite,
+  plane,
   onAuthError,
 }: {
-  isAdmin: boolean
+  canWrite: boolean
+  plane: PlaneChoice
   onAuthError: (err: unknown) => void
 }) {
   const [data, setData] = useState<ProbesConfigResponse | null>(null)
@@ -198,7 +202,6 @@ export default function ProbesPanel({
   const [meshes, setMeshes] = useState<string[]>([])
   const [sites, setSites] = useState<string[]>([])
   const [targets, setTargets] = useState<string[]>([])
-  const [networks, setNetworks] = useState<string[]>([])
   const [error, setError] = useState('')
   const [rowError, setRowError] = useState('')
   const [visible, setVisible] = useState(PROBE_PAGE)
@@ -228,14 +231,12 @@ export default function ProbesPanel({
         apiGet<MeshesConfigResponse>('/api/v1/config/meshes'),
         apiGet<SitesResponse>('/api/v1/sites'),
         apiGet<TargetsConfigResponse>('/api/v1/config/targets'),
-        apiGet<NetworksConfigResponse>('/api/v1/config/networks'),
       ])
-        .then(([probes, meshRes, sitesRes, targetsRes, networksRes]) => {
+        .then(([probes, meshRes, sitesRes, targetsRes]) => {
           if (cancelled) return
           setData(probes)
           setMeshes(meshRes.meshes.map((m) => m.name))
           setSites(sitesRes.sites.map((s) => s.name))
-          setNetworks(networksRes.networks.map((n) => n.name))
           // Agent-kind targets are excluded: they carry no address/port/URL
           // (mesh expansion resolves peers), so the server rejects direct
           // probes against them.
@@ -266,15 +267,16 @@ export default function ProbesPanel({
     if (!body) return
     setBusy(true)
     try {
-      // Omitting network keeps the request identical to the pre-networks
-      // one ('default'); mesh templates never send it (server 400).
+      // A mesh template inherits its mesh's plane and the server rejects
+      // the combination, so only a direct probe names one — and a scoped
+      // caller always must, or the write resolves to a plane it cannot see.
       const assignment =
         draft.mode === 'mesh'
           ? { mesh: draft.mesh }
           : {
               site: draft.site,
               target: draft.target,
-              ...(draft.network !== 'default' ? { network: draft.network } : {}),
+              ...networkField(draft.network),
             }
       const res = await apiPost<{ warnings?: string[] }>('/api/v1/config/probes', {
         ...assignment,
@@ -365,7 +367,7 @@ export default function ProbesPanel({
   const probes = data?.probes ?? NO_PROBES
   const shown = useMemo(() => probes.slice(0, visible), [probes, visible])
   // Single-network installs never see the network picker or labels.
-  const multiNetwork = networks.length > 1
+  const multiNetwork = plane.kind !== 'implicit'
 
   if (error && !data) {
     return (
@@ -507,10 +509,10 @@ export default function ProbesPanel({
     </div>
   )
 
-  const setCreateDraft = (fn: (d: ProbeDraft) => ProbeDraft) => setDraft((d) => fn(d ?? newDraft()))
+  const setCreateDraft = (fn: (d: ProbeDraft) => ProbeDraft) => setDraft((d) => fn(d ?? newDraft(initialPlane(plane))))
   const setEditDraftFn = (fn: (d: ProbeDraft) => ProbeDraft) => setEditDraft((d) => (d ? fn(d) : d))
 
-  const createDraft = draft ?? newDraft()
+  const createDraft = draft ?? newDraft(initialPlane(plane))
 
   return (
     <>
@@ -567,7 +569,7 @@ export default function ProbesPanel({
                   <th>Params</th>
                   <th>State</th>
                   <th>Updated</th>
-                  {isAdmin && (
+                  {canWrite && (
                     <th className="actions-col">
                       <span className="sr-only">Actions</span>
                     </th>
@@ -599,7 +601,7 @@ export default function ProbesPanel({
                         {fmtAgo(p.updated_at)}
                         {p.updated_by ? ` by ${p.updated_by}` : ''}
                       </td>
-                      {isAdmin && (
+                      {canWrite && (
                         <td data-label="Actions" className="config-actions">
                           <button
                             type="button"
@@ -638,7 +640,7 @@ export default function ProbesPanel({
                     </tr>
                     {editID === p.id && editDraft && (
                       <tr key={p.id + '-edit'} className="config-edit-row">
-                        <td colSpan={isAdmin ? 8 : 7}>
+                        <td colSpan={canWrite ? 8 : 7}>
                           <div className="config-form">
                             <h3 className="eyebrow">
                               Edit {p.type} · {assignmentLabel(p)}
@@ -679,7 +681,7 @@ export default function ProbesPanel({
             </button>
           </div>
         )}
-        {isAdmin && (
+        {canWrite && (
           <div className="config-form">
             <h3 className="eyebrow">Add probe</h3>
             <div className="config-form-grid">
@@ -789,25 +791,13 @@ export default function ProbesPanel({
                       </select>
                     </span>
                   </label>
-                  {multiNetwork && (
-                    <label className="threshold-field">
-                      <span className="eyebrow">Network</span>
-                      <span className="threshold-input">
-                        <select
-                          value={createDraft.network}
-                          disabled={busy}
-                          onChange={(e) => setCreateDraft((d) => ({ ...d, network: e.target.value }))}
-                        >
-                          {networks.map((n) => (
-                            <option key={n} value={n}>
-                              {n}
-                            </option>
-                          ))}
-                        </select>
-                        <span className="hint">only this network's agents at the site run it</span>
-                      </span>
-                    </label>
-                  )}
+                  <PlaneField
+                    choice={plane}
+                    value={createDraft.network}
+                    onChange={(v) => setCreateDraft((d) => ({ ...d, network: v }))}
+                    disabled={busy}
+                    hint="only this network's agents at the site run it"
+                  />
                 </>
               )}
             </div>
@@ -824,7 +814,11 @@ export default function ProbesPanel({
               <span className="hint">Agents at the affected sites start probing within ~30 seconds.</span>
               <span className="threshold-actions">
                 {savedFlash && <span className="hint">saved</span>}
-                <button className="primary" disabled={busy || !draft} onClick={create}>
+                <button
+                  className="primary"
+                  disabled={busy || !draft || (createDraft.mode === 'direct' && !planeReady(plane))}
+                  onClick={create}
+                >
                   {busy ? 'Saving…' : 'Add probe'}
                 </button>
               </span>

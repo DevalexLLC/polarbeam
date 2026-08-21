@@ -1,14 +1,13 @@
 import { useEffect, useState } from 'react'
+import type { Caps } from '../caps'
+import type { PlaneChoice } from '../plane'
+import { initialPlane, networkField, planeReady } from '../plane'
+import PlaneField from './PlaneField'
+import RoleWall from './RoleWall'
 import { apiDelete, apiGet, apiPost } from '../api'
 import { fmtAgo, fmtTime } from '../format'
 import { useTimezone } from '../timezone'
-import type {
-  JoinToken,
-  NetworksConfigResponse,
-  SitesConfigResponse,
-  TokenCreateResponse,
-  TokensResponse,
-} from '../types'
+import type { JoinToken, SitesConfigResponse, TokenCreateResponse, TokensResponse } from '../types'
 import ConfirmButton from './ConfirmButton'
 
 const POLL_MS = 30_000
@@ -32,20 +31,24 @@ function tokenStatus(t: JoinToken): { label: string; kind: 'used' | 'expired' | 
 }
 
 export default function EnrollmentPanel({
-  isAdmin,
+  caps,
+  canWrite,
+  plane,
   onAuthError,
 }: {
-  isAdmin: boolean
+  caps: Caps
+  canWrite: boolean
+  plane: PlaneChoice
   onAuthError: (err: unknown) => void
 }) {
   useTimezone() // re-render fmtTime renders on UTC/local toggle
   const [data, setData] = useState<TokensResponse | null>(null)
   const [siteNames, setSiteNames] = useState<string[]>([])
-  const [networkNames, setNetworkNames] = useState<string[]>([])
   const [error, setError] = useState('')
   const [actionError, setActionError] = useState('')
   const [site, setSite] = useState('')
-  const [network, setNetwork] = useState('default')
+  const [networkDraft, setNetwork] = useState<string | null>(null)
+  const network = networkDraft ?? initialPlane(plane)
   const [ttlMS, setTtlMS] = useState(86_400_000)
   const [creating, setCreating] = useState(false)
   // The freshly minted token lives in its own state so the 30 s poll can
@@ -57,7 +60,7 @@ export default function EnrollmentPanel({
   // credentials), so viewers get a static explanation instead of a doomed
   // fetch.
   useEffect(() => {
-    if (!isAdmin) return
+    if (!canWrite) return
     let cancelled = false
     const load = () => {
       apiGet<TokensResponse>('/api/v1/config/tokens')
@@ -79,13 +82,6 @@ export default function EnrollmentPanel({
         .catch((err) => {
           if (!cancelled) onAuthError(err)
         })
-      apiGet<NetworksConfigResponse>('/api/v1/config/networks')
-        .then((res) => {
-          if (!cancelled) setNetworkNames(res.networks.map((n) => n.name))
-        })
-        .catch((err) => {
-          if (!cancelled) onAuthError(err)
-        })
     }
     load()
     const id = setInterval(load, POLL_MS)
@@ -93,15 +89,10 @@ export default function EnrollmentPanel({
       cancelled = true
       clearInterval(id)
     }
-  }, [isAdmin, onAuthError])
+  }, [canWrite, onAuthError])
 
-  if (!isAdmin) {
-    return (
-      <div className="state-panel">
-        <h2>Admin role required</h2>
-        <p>Enrollment tokens are visible to administrators only.</p>
-      </div>
-    )
+  if (!canWrite) {
+    return <RoleWall need="networkWrite" what="Enrollment tokens" caps={caps} />
   }
   if (error && !data) {
     return (
@@ -128,12 +119,13 @@ export default function EnrollmentPanel({
     setActionError('')
     setCopied(false)
     try {
-      // Omitting network keeps the request identical to the pre-networks
-      // one; the server resolves it to 'default'.
+      // networkField decides whether to name the plane. A scoped caller
+      // always does — omitting it would resolve to 'default', a plane the
+      // tenant cannot see, and 404.
       const res = await apiPost<TokenCreateResponse>('/api/v1/config/tokens', {
         site,
         ttl_ms: ttlMS,
-        ...(network !== 'default' ? { network } : {}),
+        ...networkField(network),
       })
       setMinted(res)
       await reload()
@@ -164,10 +156,10 @@ export default function EnrollmentPanel({
     )
   }
 
-  // Single-network installs never see the network picker or column; the
-  // column also stays visible while any listed token names another plane.
-  const multiNetwork = networkNames.length > 1
-  const showNetworkColumn = multiNetwork || data.tokens.some((t) => t.network !== 'default')
+  // The column stays visible whenever the plane is not implied — a real
+  // choice, or a tenant pinned to one plane that is not 'default' — and
+  // also while any listed token names another plane.
+  const showNetworkColumn = plane.kind !== 'implicit' || data.tokens.some((t) => t.network !== 'default')
 
   return (
     <>
@@ -188,7 +180,7 @@ export default function EnrollmentPanel({
           Single-use tokens that enroll one agent into a site. Deleting an unused token revokes it immediately; used
           tokens are kept as the enrollment audit record.
         </p>
-        {isAdmin && (
+        {canWrite && (
           <div className="config-form">
             <h3 className="eyebrow">Issue token</h3>
             {siteNames.length === 0 ? (
@@ -214,20 +206,7 @@ export default function EnrollmentPanel({
                     </select>
                   </span>
                 </label>
-                {multiNetwork && (
-                  <label className="threshold-field">
-                    <span className="eyebrow">Network</span>
-                    <span className="threshold-input">
-                      <select value={network} disabled={creating} onChange={(e) => setNetwork(e.target.value)}>
-                        {networkNames.map((n) => (
-                          <option key={n} value={n}>
-                            {n}
-                          </option>
-                        ))}
-                      </select>
-                    </span>
-                  </label>
-                )}
+                <PlaneField choice={plane} value={network} onChange={setNetwork} disabled={creating} />
                 <label className="threshold-field">
                   <span className="eyebrow">Valid for</span>
                   <span className="threshold-input">
@@ -251,7 +230,7 @@ export default function EnrollmentPanel({
               <span className="hint">
                 Use it with <code>polarbeam-agent enroll</code> — the install guide has the full command including the
                 CA fingerprint.
-                {multiNetwork &&
+                {plane.kind !== 'implicit' &&
                   ' The agent joins the token’s network permanently; move a box by re-enrolling with a token for the other network.'}
               </span>
               <span className="threshold-actions">
@@ -260,7 +239,7 @@ export default function EnrollmentPanel({
                 <button
                   className="primary"
                   onClick={create}
-                  disabled={creating || !site || minted !== null}
+                  disabled={creating || !site || minted !== null || !planeReady(plane)}
                   title={minted !== null ? 'Copy and dismiss the displayed token first' : undefined}
                 >
                   {creating ? 'Issuing…' : 'Issue token'}
@@ -305,7 +284,7 @@ export default function EnrollmentPanel({
                   <th>Created</th>
                   <th>Expires</th>
                   <th>Status</th>
-                  {isAdmin && (
+                  {canWrite && (
                     <th className="actions-col">
                       <span className="sr-only">Actions</span>
                     </th>
@@ -329,7 +308,7 @@ export default function EnrollmentPanel({
                       <td data-label="Created">{fmtAgo(t.created_at)}</td>
                       <td data-label="Expires">{fmtTime(t.expires_at)}</td>
                       <td data-label="Status">{status.label}</td>
-                      {isAdmin && (
+                      {canWrite && (
                         <td data-label="Actions" className="config-actions">
                           <ConfirmButton
                             label="Delete"

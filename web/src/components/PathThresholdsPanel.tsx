@@ -1,9 +1,15 @@
 import { Fragment, useEffect, useState } from 'react'
 import { apiDelete, apiGet } from '../api'
 import { fmtAgo } from '../format'
+import { mergeLayers } from '../severity'
+import type { Caps } from '../caps'
+import { canWriteRow } from '../caps'
+import type { PlaneChoice } from '../plane'
+import { initialPlane, planeReady } from '../plane'
 import type { PathThresholdOverride, SettingsResponse, SitesResponse } from '../types'
 import ConfirmButton from './ConfirmButton'
 import PathThresholdEditor, { pathThresholdURL } from './PathThresholdEditor'
+import PlaneField from './PlaneField'
 
 // Management table for the per-site-pair threshold overrides carried on
 // GET /settings. Rows expand to the shared PathThresholdEditor; the add
@@ -15,22 +21,31 @@ import PathThresholdEditor, { pathThresholdURL } from './PathThresholdEditor'
 const pairKey = (a: string, b: string, network = '') =>
   (a < b ? a + '\u0000' + b : b + '\u0000' + a) + '\u0000' + network
 
-function valueCell(us: number | null, unit: 'ms' | '%', globalValue: number) {
+// An empty field inherits the next layer out, which since the per-network
+// defaults shipped is no longer always the global row: a pair override on a
+// plane that states its own defaults inherits THOSE. Reporting the global
+// value here would tell the operator the pair grades against a number it
+// does not actually use.
+function valueCell(us: number | null, unit: 'ms' | '%', inheritedValue: number) {
   const scale = unit === 'ms' ? 1000 : 1
   if (us == null) {
-    return <span className="hint">inherits {globalValue / scale + ' ' + unit}</span>
+    return <span className="hint">inherits {inheritedValue / scale + ' ' + unit}</span>
   }
   return <>{us / scale + ' ' + unit}</>
 }
 
 export default function PathThresholdsPanel({
   settings,
-  isAdmin,
+  caps,
+  canWrite,
+  plane,
   onChanged,
   onAuthError,
 }: {
   settings: SettingsResponse
-  isAdmin: boolean
+  caps: Caps
+  canWrite: boolean
+  plane: PlaneChoice
   onChanged: () => void
   onAuthError: (err: unknown) => void
 }) {
@@ -38,24 +53,38 @@ export default function PathThresholdsPanel({
   const [editKey, setEditKey] = useState<string | null>(null)
   const [addA, setAddA] = useState('')
   const [addB, setAddB] = useState('')
+  const [addNetworkDraft, setAddNetwork] = useState<string | null>(null)
+  const addNetwork = addNetworkDraft ?? initialPlane(plane)
   const [adding, setAdding] = useState(false)
   const [rowError, setRowError] = useState('')
 
-  // Site names feed the add-override selects only; admins are the only
-  // audience, and a one-shot fetch is enough — a site created mid-visit
-  // appears after a tab switch like every other config panel.
+  // Site names feed the add-override selects only; whoever may write an
+  // override is the audience, and a one-shot fetch is enough — a site
+  // created mid-visit appears after a tab switch like every other config
+  // panel. /api/v1/sites is any-session and already scope-filtered, so a
+  // network admin sees exactly the sites its own planes reach.
   useEffect(() => {
-    if (!isAdmin) return
+    if (!canWrite) return
     apiGet<SitesResponse>('/api/v1/sites')
       // Sorting the fresh array .map just returned (toSorted needs the
       // ES2023 lib — same note as WorldMap's ordered sites).
       // oxlint-disable-next-line unicorn/no-array-sort
       .then((res) => setSiteNames(res.sites.map((s) => s.name).sort()))
       .catch(onAuthError)
-  }, [isAdmin, onAuthError])
+  }, [canWrite, onAuthError])
 
   const overrides = settings.overrides
   const global = settings.thresholds
+  // What a row's empty fields fall through to. This must mirror
+  // buildThresholdResolver exactly (severity.ts), minus the row itself:
+  // a plane-qualified pair row inherits the SAME pair's all-planes row
+  // before that plane's defaults, so folding only the network layer would
+  // report a number the pair does not actually grade against — and would
+  // make the editor's inversion check disagree with the server's.
+  const networkDefaults = new Map(settings.network_defaults.map((d) => [d.network, d]))
+  const allPlanePairs = new Map(settings.overrides.filter((o) => o.network === '').map((o) => [pairKey(o.a, o.b), o]))
+  const inherited = (a: string, b: string, network: string) =>
+    network === '' ? global : mergeLayers(global, allPlanePairs.get(pairKey(a, b)), networkDefaults.get(network))
   const overridden = new Set(overrides.map((o) => pairKey(o.a, o.b, o.network)))
 
   const remove = async (o: PathThresholdOverride) => {
@@ -69,8 +98,12 @@ export default function PathThresholdsPanel({
     }
   }
 
-  const addReady = addA !== '' && addB !== '' && addA !== addB && !overridden.has(pairKey(addA, addB))
-  const addDuplicate = addA !== '' && addB !== '' && addA !== addB && overridden.has(pairKey(addA, addB))
+  const addPicked = addA !== '' && addB !== '' && addA !== addB
+  // A scoped caller cannot write the all-planes row, so an unresolved plane
+  // ('' with no global rights) is not a valid target for the add flow.
+  const addPlaneOk = canWriteRow(caps, addNetwork) && planeReady(plane)
+  const addDuplicate = addPicked && overridden.has(pairKey(addA, addB, addNetwork))
+  const addReady = addPicked && addPlaneOk && !addDuplicate
 
   const siteSelect = (value: string, set: (v: string) => void, label: string) => (
     <label className="threshold-field">
@@ -121,7 +154,7 @@ export default function PathThresholdsPanel({
                 <th>Loss degraded</th>
                 <th>Loss critical</th>
                 <th>Updated</th>
-                {isAdmin && (
+                {canWrite && (
                   <th className="actions-col">
                     <span className="sr-only">Actions</span>
                   </th>
@@ -131,6 +164,7 @@ export default function PathThresholdsPanel({
             <tbody>
               {overrides.map((o) => {
                 const key = pairKey(o.a, o.b, o.network)
+                const base = inherited(o.a, o.b, o.network)
                 return (
                   <Fragment key={key}>
                     <tr>
@@ -138,39 +172,43 @@ export default function PathThresholdsPanel({
                         {o.a} ↔ {o.b}
                         {o.network !== '' && <span className="hint"> · {o.network}</span>}
                       </td>
-                      <td data-label="Latency degraded">
-                        {valueCell(o.latency_warn_us, 'ms', global.latency_warn_us)}
-                      </td>
-                      <td data-label="Latency critical">
-                        {valueCell(o.latency_crit_us, 'ms', global.latency_crit_us)}
-                      </td>
-                      <td data-label="Loss degraded">{valueCell(o.loss_warn_pct, '%', global.loss_warn_pct)}</td>
-                      <td data-label="Loss critical">{valueCell(o.loss_crit_pct, '%', global.loss_crit_pct)}</td>
+                      <td data-label="Latency degraded">{valueCell(o.latency_warn_us, 'ms', base.latency_warn_us)}</td>
+                      <td data-label="Latency critical">{valueCell(o.latency_crit_us, 'ms', base.latency_crit_us)}</td>
+                      <td data-label="Loss degraded">{valueCell(o.loss_warn_pct, '%', base.loss_warn_pct)}</td>
+                      <td data-label="Loss critical">{valueCell(o.loss_crit_pct, '%', base.loss_crit_pct)}</td>
                       <td data-label="Updated">
                         {fmtAgo(o.updated_at)}
                         {o.updated_by ? ` by ${o.updated_by}` : ''}
                       </td>
-                      {isAdmin && (
+                      {canWrite && (
                         <td data-label="Actions" className="config-actions">
-                          <button
-                            type="button"
-                            className="secondary-button"
-                            aria-expanded={editKey === key}
-                            onClick={() => setEditKey(editKey === key ? null : key)}
-                          >
-                            {editKey === key ? 'Close' : 'Edit'}
-                          </button>
-                          <ConfirmButton
-                            label="Delete"
-                            confirmLabel="Confirm? Pair returns to global thresholds"
-                            onConfirm={() => void remove(o)}
-                          />
+                          {canWriteRow(caps, o.network) ? (
+                            <>
+                              <button
+                                type="button"
+                                className="secondary-button"
+                                aria-expanded={editKey === key}
+                                onClick={() => setEditKey(editKey === key ? null : key)}
+                              >
+                                {editKey === key ? 'Close' : 'Edit'}
+                              </button>
+                              <ConfirmButton
+                                label="Delete"
+                                confirmLabel="Confirm? Pair returns to inherited thresholds"
+                                onConfirm={() => void remove(o)}
+                              />
+                            </>
+                          ) : (
+                            // The all-planes row grades every tenant, so it
+                            // belongs to a global admin.
+                            <span className="hint">all networks</span>
+                          )}
                         </td>
                       )}
                     </tr>
                     {editKey === key && (
                       <tr className="config-edit-row">
-                        <td colSpan={isAdmin ? 7 : 6}>
+                        <td colSpan={canWrite ? 7 : 6}>
                           <div className="config-form">
                             <h3 className="eyebrow">
                               Edit override · {o.a} ↔ {o.b}
@@ -181,10 +219,12 @@ export default function PathThresholdsPanel({
                               b={o.b}
                               network={o.network}
                               override={o}
-                              global={global}
-                              isAdmin={isAdmin}
-                              onChanged={() => {
-                                setEditKey(null)
+                              global={base}
+                              canWrite={canWriteRow(caps, o.network)}
+                              onChanged={(warnings) => {
+                                // Stay open when the server had something to
+                                // say; the editor is where it is shown.
+                                if (warnings.length === 0) setEditKey(null)
                                 onChanged()
                               }}
                               onAuthError={onAuthError}
@@ -200,7 +240,7 @@ export default function PathThresholdsPanel({
           </table>
         </div>
       )}
-      {isAdmin && (
+      {canWrite && (
         <div className="config-form">
           {!adding ? (
             <button
@@ -223,6 +263,16 @@ export default function PathThresholdsPanel({
               <div className="config-form-grid">
                 {siteSelect(addA, setAddA, 'Site A')}
                 {siteSelect(addB, setAddB, 'Site B')}
+                {/* Which plane the override grades. The all-planes row
+                  applies to every tenant, so the server reserves it to a
+                  global admin and offers it here only to one. */}
+                <PlaneField
+                  choice={plane}
+                  value={addNetwork}
+                  onChange={setAddNetwork}
+                  label="Applies to"
+                  hint="all networks grades every plane at this pair"
+                />
               </div>
               {addA !== '' && addA === addB && (
                 <ul className="error threshold-errors">
@@ -231,18 +281,22 @@ export default function PathThresholdsPanel({
               )}
               {addDuplicate && (
                 <ul className="error threshold-errors">
-                  <li>this pair already has an override — edit it in the table above</li>
+                  <li>
+                    this pair already has an override
+                    {addNetwork === '' ? ' for all networks' : ` on ${addNetwork}`} — edit it in the table above
+                  </li>
                 </ul>
               )}
               {addReady && (
                 <PathThresholdEditor
                   a={addA}
                   b={addB}
+                  network={addNetwork}
                   override={null}
-                  global={global}
-                  isAdmin={isAdmin}
-                  onChanged={() => {
-                    setAdding(false)
+                  global={inherited(addA, addB, addNetwork)}
+                  canWrite={canWrite}
+                  onChanged={(warnings) => {
+                    if (warnings.length === 0) setAdding(false)
                     onChanged()
                   }}
                   onAuthError={onAuthError}

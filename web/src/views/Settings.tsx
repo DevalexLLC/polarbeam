@@ -1,11 +1,15 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { apiGet } from '../api'
-import type { SettingsTab } from '../App'
+import type { Caps } from '../caps'
+import { planeChoice } from '../plane'
+import { SETTINGS_TABS, visibleTabs } from '../settingsTabs'
+import type { SettingsTab } from '../settingsTabs'
 import BannerSettingsPanel from '../components/BannerSettingsPanel'
 import EnrollmentPanel from '../components/EnrollmentPanel'
 import MeshesPanel from '../components/MeshesPanel'
 import NetworksPanel from '../components/NetworksPanel'
 import OIDCSettingsPanel from '../components/OIDCSettingsPanel'
+import NetworkThresholdsPanel from '../components/NetworkThresholdsPanel'
 import PathThresholdsPanel from '../components/PathThresholdsPanel'
 import ProbesPanel from '../components/ProbesPanel'
 import SitesPanel from '../components/SitesPanel'
@@ -16,47 +20,38 @@ import type { SettingsResponse, UIBanner } from '../types'
 
 const POLL_MS = 30_000
 
-const TABS: Array<{ tab: SettingsTab; href: string; label: string }> = [
-  { tab: 'thresholds', href: '#/settings', label: 'Thresholds' },
-  { tab: 'sites', href: '#/settings/sites', label: 'Sites' },
-  { tab: 'networks', href: '#/settings/networks', label: 'Networks' },
-  { tab: 'targets', href: '#/settings/targets', label: 'Targets' },
-  { tab: 'meshes', href: '#/settings/meshes', label: 'Meshes' },
-  { tab: 'probes', href: '#/settings/probes', label: 'Probes' },
-  { tab: 'enrollment', href: '#/settings/enrollment', label: 'Enrollment' },
-  { tab: 'users', href: '#/settings/users', label: 'Users' },
-  { tab: 'authentication', href: '#/settings/authentication', label: 'Authentication' },
-  { tab: 'banner', href: '#/settings/banner', label: 'Banner' },
-]
-
-const TAB_INTRO: Record<SettingsTab, string> = {
-  thresholds: 'Shared thresholds used to classify network health across the dashboard.',
-  sites: 'The locations agents enroll into, with optional map placement and display metadata.',
-  networks: 'Connectivity planes. Agents join one at enrollment; meshes and direct probes measure within exactly one.',
-  targets: 'External hosts and URLs that site agents probe.',
-  meshes: 'Site groups whose members probe each other in both directions.',
-  probes: 'The measurement workload pushed to every affected agent within ~30 seconds.',
-  enrollment: 'Single-use join tokens that enroll new agents into a site.',
-  users: 'Dashboard accounts across local and single sign-on, with sign-in activity.',
-  authentication: 'Optional single sign-on via an OpenID Connect provider. Local accounts always keep working.',
-  banner: 'An optional marking shown at the top and bottom of every screen, the sign-in page included.',
-}
-
 export default function Settings({
   tab,
-  isAdmin,
+  caps,
+  networks,
   username,
   onAuthError,
   onBannerSaved,
 }: {
   tab: SettingsTab
-  isAdmin: boolean
+  caps: Caps
+  // null while this session's network list is still loading or failed.
+  // Plane pickers must refuse to guess rather than treat it as one network.
+  networks: string[] | null
   username: string
   onAuthError: (err: unknown) => void
   onBannerSaved: (b: UIBanner) => void
 }) {
   const [settings, setSettings] = useState<SettingsResponse | null>(null)
   const [error, setError] = useState('')
+
+  const tabs = useMemo(() => visibleTabs(caps), [caps])
+
+  // Resolved once, so "which plane does this write name" has exactly one
+  // definition. The workload surfaces always belong to a plane; targets and
+  // the all-planes threshold override additionally have an operator-owned
+  // "no plane" row, which is what allowGlobal offers — to a global caller
+  // only, since those rows are adminWrite.
+  const workloadPlane = useMemo(() => planeChoice(caps, networks), [caps, networks])
+  const ownedPlane = useMemo(() => planeChoice(caps, networks, { allowGlobal: true }), [caps, networks])
+  // Panels that only need the raw list (admin-only surfaces) can treat
+  // not-yet-loaded as empty; the plane pickers above cannot.
+  const knownNetworks = networks ?? []
 
   // Poll like every other view: a transient failure retries on the next
   // tick, and another admin's change converges here ≤30 s. The panel keeps
@@ -90,11 +85,11 @@ export default function Settings({
         <div>
           <div className="eyebrow">Administration</div>
           <h1>Settings</h1>
-          <p>{TAB_INTRO[tab]}</p>
+          <p>{SETTINGS_TABS.find((t) => t.tab === tab)?.intro}</p>
         </div>
       </div>
       <nav className="settings-tabs" aria-label="Settings sections">
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <a
             key={t.tab}
             href={t.href}
@@ -105,24 +100,34 @@ export default function Settings({
           </a>
         ))}
       </nav>
+      {/* Every panel's gate is named here, on one screen, so the client-side
+        dispositions can be read against httpapi.go's route table at a
+        glance. adminWrite and networkWrite are the server's own wrapper
+        names; a panel never sees `caps` and so cannot pick the wrong one. */}
       {tab === 'authentication' ? (
-        <OIDCSettingsPanel isAdmin={isAdmin} onAuthError={onAuthError} />
+        <OIDCSettingsPanel caps={caps} canWrite={caps.adminWrite} networks={knownNetworks} onAuthError={onAuthError} />
       ) : tab === 'banner' ? (
-        <BannerSettingsPanel isAdmin={isAdmin} onAuthError={onAuthError} onSaved={onBannerSaved} />
+        <BannerSettingsPanel caps={caps} canWrite={caps.adminWrite} onAuthError={onAuthError} onSaved={onBannerSaved} />
       ) : tab === 'users' ? (
-        <UsersPanel isAdmin={isAdmin} currentUsername={username} onAuthError={onAuthError} />
+        <UsersPanel
+          caps={caps}
+          canWrite={caps.adminWrite}
+          networks={knownNetworks}
+          currentUsername={username}
+          onAuthError={onAuthError}
+        />
       ) : tab === 'networks' ? (
-        <NetworksPanel isAdmin={isAdmin} onAuthError={onAuthError} />
+        <NetworksPanel canWrite={caps.adminWrite} onAuthError={onAuthError} />
       ) : tab === 'sites' ? (
-        <SitesPanel isAdmin={isAdmin} onAuthError={onAuthError} />
+        <SitesPanel canWrite={caps.adminWrite} onAuthError={onAuthError} />
       ) : tab === 'enrollment' ? (
-        <EnrollmentPanel isAdmin={isAdmin} onAuthError={onAuthError} />
+        <EnrollmentPanel caps={caps} canWrite={caps.networkWrite} plane={workloadPlane} onAuthError={onAuthError} />
       ) : tab === 'targets' ? (
-        <TargetsPanel isAdmin={isAdmin} onAuthError={onAuthError} />
+        <TargetsPanel caps={caps} canWrite={caps.networkWrite} plane={ownedPlane} onAuthError={onAuthError} />
       ) : tab === 'meshes' ? (
-        <MeshesPanel isAdmin={isAdmin} onAuthError={onAuthError} />
+        <MeshesPanel canWrite={caps.networkWrite} plane={workloadPlane} onAuthError={onAuthError} />
       ) : tab === 'probes' ? (
-        <ProbesPanel isAdmin={isAdmin} onAuthError={onAuthError} />
+        <ProbesPanel canWrite={caps.networkWrite} plane={workloadPlane} onAuthError={onAuthError} />
       ) : error && !settings ? (
         <div className="state-panel state-error">
           <h2>Settings unavailable</h2>
@@ -154,13 +159,31 @@ export default function Settings({
             </p>
             <ThresholdSettingsPanel
               settings={settings}
-              isAdmin={isAdmin}
+              canWrite={caps.adminWrite}
               onSaved={setSettings}
               onAuthError={onAuthError}
               variant="page"
             />
           </section>
-          <PathThresholdsPanel settings={settings} isAdmin={isAdmin} onChanged={load} onAuthError={onAuthError} />
+          {/* Ordered as the resolver folds them: global, then per-network,
+            then per-pair — most general first, so the page reads the way a
+            severity is actually decided. */}
+          <NetworkThresholdsPanel
+            settings={settings}
+            caps={caps}
+            canWrite={caps.networkWrite}
+            plane={ownedPlane}
+            onChanged={load}
+            onAuthError={onAuthError}
+          />
+          <PathThresholdsPanel
+            settings={settings}
+            caps={caps}
+            canWrite={caps.networkWrite}
+            plane={ownedPlane}
+            onChanged={load}
+            onAuthError={onAuthError}
+          />
         </>
       )}
     </>

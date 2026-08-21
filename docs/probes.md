@@ -112,6 +112,17 @@ run between or on agents of their own network. Deployments with one flat
 network can ignore the dimension — everything lives on the seeded `default`
 network and behaves exactly as described below.
 
+The network also decides *who may configure* a probe, not just which agents
+run it. Alongside the global `admin` and `viewer` roles, a dashboard account
+can be scoped to a set of networks: a `network_admin` creates and edits
+meshes, direct probes, targets, and enrollment tokens on its own networks
+only, and a `network_viewer` reads them. Nothing about assignment or
+expansion changes for such an account — the rules below are the same rules —
+it simply cannot see or touch another network's configuration, and a request
+naming one is refused as though it did not exist. Sites remain shared
+vocabulary managed by a global admin, so a tenant needing a new site asks
+for one. See `docs/install.md` for creating scoped accounts.
+
 ### Mesh probes
 
 A mesh groups sites that should probe one another over one network. A probe
@@ -148,6 +159,16 @@ silently start running from another plane's hardware the day its first agent
 enrolls at a shared site. Enrollment-managed agent targets cannot be selected
 directly; use a mesh for peer agents.
 
+External targets carry an owner. A target created without a network is
+global: published by the operator, probeable from every plane, and editable
+only by a global admin. A target created with one belongs to that network
+and is the tenant's to edit — a scoped account must name a network, since it
+cannot publish the shared kind. Names stay unique across the whole
+deployment either way, so a tenant reusing a global target's name gets a
+conflict rather than a second row. A direct probe may point at a global
+target or at one of its own network's; deleting a network is refused while
+it still owns targets.
+
 External targets contain a unique name and one or both of these endpoint
 forms:
 
@@ -171,7 +192,7 @@ Every probe has the following settings:
 | Setting | Meaning |
 |---|---|
 | Assignment | A mesh, or a source site plus external target |
-| Network | The plane the probe measures: a direct probe's own setting; mesh probes inherit the mesh's |
+| Network | The plane the probe measures: a direct probe's own setting; mesh probes inherit the mesh's. It also bounds who may configure the probe — see *Assignment models* |
 | Type | One of the eight supported types |
 | Interval | Time between scheduled runs |
 | Timeout | Maximum duration of one run |

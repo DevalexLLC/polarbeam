@@ -2501,6 +2501,77 @@ button.primary:disabled {
   text-transform: uppercase;
 }
 
+/* One ordered claim-to-role mapping per row: value, role, the networks it
+   grants, and its remove button. Collapses to stacked blocks on narrow
+   screens, where the horizontal rhythm stops helping. */
+.oidc-role-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.4rem 0;
+}
+
+.oidc-role-rule {
+  display: grid;
+  align-items: center;
+  gap: 0.5rem;
+  grid-template-columns: minmax(8rem, 1fr) auto minmax(0, 2fr) auto;
+}
+
+.oidc-role-rule .chips {
+  gap: 0.3rem;
+  margin: 0;
+}
+
+.oidc-role-rule .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+}
+
+.oidc-role-rule .chip input {
+  margin: 0;
+}
+
+@media (max-width: 720px) {
+  .oidc-role-rule {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Checkbox chips for assigning a scoped account's networks. The chip class
+   supplies the pill; this only has to seat the box beside its name. */
+.users-network-picker .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+}
+
+.users-network-picker input {
+  margin: 0;
+}
+
+/* A scoped account's planes, under its role. Lower-case and unspaced: it
+   is a list of names, not a label like the role above it, and a long list
+   must wrap rather than push the popover wide. */
+.user-menu-scope {
+  color: var(--ink-3);
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+  text-transform: none !important;
+}
+
+/* The static plane indicator a single-plane tenant gets in place of the
+   filter popover: same slot in the top bar, but nothing to open. */
+.topbar-plane {
+  align-self: center;
+  white-space: nowrap;
+}
+
 .user-menu-popover > a,
 .user-menu-popover > button {
   display: block;
