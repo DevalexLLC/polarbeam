@@ -1,6 +1,6 @@
 module github.com/devalexllc/polarbeam
 
-go 1.26.6
+go 1.27.0
 
 require (
 	codeberg.org/miekg/dns v0.6.90

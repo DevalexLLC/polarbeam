@@ -90,6 +90,10 @@ with a pointer here, so please read this list first.
   security-relevant and must be reviewed as such. pnpm itself is pinned by
   version and integrity hash in `web/package.json`'s `packageManager`
   field.
+- **CI's `CodeQL` workflow uses GitHub-hosted analysis services.** Its setup
+  steps obtain the pinned Go toolchain and CodeQL bundle, and its final step
+  uploads analysis results to GitHub. The traced PolarBEAM build itself stays
+  offline with `GOPROXY=off`, `GOTOOLCHAIN=local`, and committed `vendor/`.
 
   To be precise about the air-gap guarantee, because it is narrower than
   it sounds: `offline-build` proves the Go binaries compile and test with
