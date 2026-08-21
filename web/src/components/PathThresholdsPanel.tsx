@@ -295,6 +295,7 @@ export default function PathThresholdsPanel({
                   override={null}
                   global={inherited(addA, addB, addNetwork)}
                   canWrite={canWrite}
+                  onCancel={() => setAdding(false)}
                   onChanged={(warnings) => {
                     if (warnings.length === 0) setAdding(false)
                     onChanged()
@@ -302,12 +303,14 @@ export default function PathThresholdsPanel({
                   onAuthError={onAuthError}
                 />
               )}
-              <div className="threshold-foot">
-                <span className="hint" />
-                <button type="button" className="secondary-button" onClick={() => setAdding(false)}>
-                  Cancel
-                </button>
-              </div>
+              {!addReady && (
+                <div className="threshold-foot">
+                  <span className="hint" />
+                  <button type="button" className="secondary-button" onClick={() => setAdding(false)}>
+                    Cancel
+                  </button>
+                </div>
+              )}
             </>
           )}
         </div>
