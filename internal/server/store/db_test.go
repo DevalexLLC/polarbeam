@@ -171,6 +171,73 @@ func TestLastAdminGuard(t *testing.T) {
 	}
 }
 
+// TestLastAdminGuardIgnoresScopedRoles pins the property the tenant roles
+// rest on: "admin" means the global role exactly, so the two network-scoped
+// roles neither count as a backup admin nor inherit the lockout protection.
+//
+// The failure this guards against is a lockout. If a network_admin were
+// counted as a backup, an operator could disable or delete the real last
+// global admin — the control plane would believe a customer's login was its
+// own spare key — and Users, Authentication, Networks, and Sites would be
+// unreachable without container CLI access, which is exactly what the guard
+// exists to prevent.
+//
+// Worth knowing before trusting this test too far: the exactness is checked
+// in three places (the SQL lock predicate and two Go comparisons in
+// lockUserAndActiveAdmins/SetUserDisabled), and they are redundant rather
+// than independent. Broadening any ONE of them leaves behavior unchanged —
+// verified by injecting each in turn, all still green. Only broadening both
+// the SQL predicate and the row counter together produces the vulnerable
+// state, which this test does fail on. A future refactor that collapses
+// those three sites into one would make this test the sole line of defense,
+// so do not let it be deleted as redundant.
+func TestLastAdminGuardIgnoresScopedRoles(t *testing.T) {
+	ctx, s := newStore(t)
+	netID := createNetwork(t, ctx, s, "tenant-a")
+	root := createUser(t, ctx, s, "root", store.RoleAdmin)
+
+	// createUser passes no networks, which the scoped roles require.
+	scoped := func(username, role string) uuid.UUID {
+		t.Helper()
+		id, err := s.CreateUser(ctx, username, "$argon2id$test-hash", role, []uuid.UUID{netID})
+		if err != nil {
+			t.Fatalf("create %s %q: %v", role, username, err)
+		}
+		return id
+	}
+	tenantAdmin := scoped("tenant-admin", store.RoleNetworkAdmin)
+	tenantViewer := scoped("tenant-viewer", store.RoleNetworkViewer)
+
+	// Neither scoped role is a backup for the sole global admin.
+	if err := s.SetUserDisabled(ctx, root, true); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("disable sole admin alongside scoped roles: err = %v, want ErrConflict", err)
+	}
+	if err := s.DeleteUser(ctx, root); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("delete sole admin alongside scoped roles: err = %v, want ErrConflict", err)
+	}
+
+	// And neither carries protection of its own, even as the only account
+	// holding that role: a tenant is always removable.
+	if err := s.SetUserDisabled(ctx, tenantAdmin, true); err != nil {
+		t.Errorf("disable sole network_admin: %v", err)
+	}
+	if err := s.SetUserDisabled(ctx, tenantAdmin, false); err != nil {
+		t.Fatalf("re-enable network_admin: %v", err)
+	}
+	if err := s.DeleteUser(ctx, tenantAdmin); err != nil {
+		t.Errorf("delete sole network_admin: %v", err)
+	}
+	if err := s.DeleteUser(ctx, tenantViewer); err != nil {
+		t.Errorf("delete sole network_viewer: %v", err)
+	}
+
+	// Removing them leaves the global admin exactly as protected as before:
+	// the scoped accounts never participated in the count either way.
+	if err := s.DeleteUser(ctx, root); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("delete last admin after removing scoped accounts: err = %v, want ErrConflict", err)
+	}
+}
+
 // TestLastAdminGuardRace exercises the write-skew scenario the FOR UPDATE
 // lock set exists for: two admins concurrently disabling each other. Without
 // locking the whole enabled-admin set, both transactions would count the
