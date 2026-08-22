@@ -2,8 +2,8 @@ package uplink
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
+	"crypto"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -59,14 +59,15 @@ func TestRetryIntervalFor(t *testing.T) {
 
 // testPKI builds an enrolled state dir (self-signed cert doubling as CA —
 // the renewer never validates chains, only file plumbing matters here).
-func testPKI(t *testing.T) (enroll.PKI, *ecdsa.PrivateKey, *x509.Certificate) {
+// ML-DSA keys, matching what enrollment produces by default.
+func testPKI(t *testing.T) (enroll.PKI, crypto.Signer, *x509.Certificate) {
 	t.Helper()
 	stateDir := t.TempDir()
 	dir := filepath.Join(stateDir, "pki")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, err := mldsa.GenerateKey(mldsa.MLDSA65())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +80,7 @@ func testPKI(t *testing.T) (enroll.PKI, *ecdsa.PrivateKey, *x509.Certificate) {
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
 	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,12 +88,12 @@ func testPKI(t *testing.T) (enroll.PKI, *ecdsa.PrivateKey, *x509.Certificate) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	keyDER, err := x509.MarshalECPrivateKey(key)
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for name, blk := range map[string]*pem.Block{
-		"agent.key": {Type: "EC PRIVATE KEY", Bytes: keyDER},
+		"agent.key": {Type: "PRIVATE KEY", Bytes: keyDER},
 		"agent.crt": {Type: "CERTIFICATE", Bytes: der},
 		"ca.crt":    {Type: "CERTIFICATE", Bytes: der},
 	} {

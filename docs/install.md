@@ -507,6 +507,14 @@ docker compose run --rm server ca init \
   --config /etc/polarbeam/server.yaml
 ```
 
+The CA signs with ML-DSA-65 (FIPS 204, post-quantum) by default; agent and
+server certificates automatically use the same algorithm. Pass
+`--algorithm ecdsa-p256` to create a classical CA instead — an escape hatch
+you only need if ML-DSA is ever weakened or a non-Go agent's TLS stack
+cannot verify it. The choice is fixed at initialization; changing it later
+means re-initializing the CA and re-enrolling every agent (see
+[Upgrading across a CA algorithm change](#upgrading-across-a-ca-algorithm-change)).
+
 Start the complete control plane:
 
 ```sh
@@ -1273,6 +1281,10 @@ Agents expose no operator-facing management port.
 - Confirm the token is unexpired, unused, and was created for the intended
   site.
 - Confirm the fingerprint exactly matches the one printed with the token.
+- An agent image built before the ML-DSA release cannot verify an ML-DSA CA:
+  enrollment and every reconnect fail at the TLS handshake. Upgrade the
+  agent image first (see
+  [Upgrading across a CA algorithm change](#upgrading-across-a-ca-algorithm-change)).
 - Check middlebox idle timeouts if logs repeatedly show `config stream failed`.
 
 ### Dashboard works but agents do not
@@ -1386,6 +1398,10 @@ backlog; no host reboot is required.
 
 ## Certificate lifecycle
 
+- The built-in CA signs with ML-DSA-65 by default (`ca init --algorithm`
+  selects it; classical `ecdsa-p256` is available). Agent and gRPC server
+  certificates always use the CA's algorithm — agents detect it from the
+  trust anchor at enrollment and never choose independently.
 - Agent certificates are valid for 30 days by default and renew automatically
   at two-thirds of their actual lifetime. No normal operator action is needed.
 - An agent offline longer than its certificate lifetime cannot renew. Its
@@ -1506,7 +1522,9 @@ The image holds only the binary; everything that must survive lives outside
 it — the agent's identity (private key and certificate) and its offline spool
 are in the state volume, and its configuration is in the bind-mounted
 `agent.yaml`. Recreating the container therefore needs no new token and no
-re-enrollment.
+re-enrollment — with one exception: an upgrade that crosses a CA algorithm
+change requires re-enrolling every agent (see
+[Upgrading across a CA algorithm change](#upgrading-across-a-ca-algorithm-change)).
 
 Run these on the agent host. They assume the container name, config path, and
 volume from [section 8](#8-deploy-a-container-agent); substitute your own if
@@ -1612,6 +1630,136 @@ own 10-second default when the key is absent. Never run
 `docker compose down -v` on an agent host: that deletes the identity volume
 and forces a re-enrollment with a fresh token.
 
+### Upgrading across a CA algorithm change
+
+The first release whose built-in CA defaults to ML-DSA-65 changes nothing
+for an existing installation by itself: the existing (ECDSA) CA keeps
+loading, existing agents keep renewing, and freshly enrolled agents get
+ECDSA keys to match it. Moving an **existing** deployment to a post-quantum
+CA is a deliberate cutover, because the CA algorithm cannot be changed in
+place — every enrolled agent chains to the old root and holds a key of the
+old algorithm. Two paths are supported:
+
+- **Fresh install / pre-production:** nothing to migrate. `ca init` creates
+  an ML-DSA-65 root and agents enroll normally.
+- **Clean cutover (below):** re-initialize the CA, then re-enroll every
+  agent. Each agent is dark from its stop until its re-enrollment; results
+  spool to disk in the meantime, so data loss is bounded by spool capacity.
+
+A rolling, no-outage migration (both roots trusted simultaneously, agents
+rekeying at their own pace) is not yet supported; it is tracked upstream as
+a follow-up to the ML-DSA work.
+
+Before starting, note:
+
+- **Upgrade every agent's binary first.** Agent images built before the
+  ML-DSA release cannot verify an ML-DSA CA or enroll against it at all.
+  The normal [agent upgrade](#agents) is safe to do ahead of the cutover:
+  upgraded agents keep their ECDSA identity until re-enrolled. The server
+  also refuses to sign a CSR whose key algorithm does not match the CA,
+  so a stale binary fails loudly at enrollment instead of silently
+  keeping a classical identity under the post-quantum root.
+- The handshake grows by roughly 20 KB each way with ML-DSA certificates.
+  This is negligible for the long-lived gRPC streams; it is only worth
+  knowing on severely constrained links.
+- The nginx proxy needs no changes (SNI passthrough never terminates TLS).
+
+The cutover, on the control-plane host:
+
+1. **Back up** (see [Backup scope](#backup-scope)) — and note that this
+   backup restores the *classical* CA: restoring it after the cutover
+   un-does the migration and orphans every re-enrolled agent.
+
+2. **Retire the old CA and initialize the new one.** `ca init` refuses to
+   overwrite, so move the CA directory aside inside the `server-state`
+   volume (this also retires the old auto-issued gRPC server certificate,
+   which lives in the same directory):
+
+   ```sh
+   docker compose stop server
+   docker compose run --rm --entrypoint sh server \
+     -c 'mv /var/lib/polarbeam-server/ca /var/lib/polarbeam-server/ca.classical-retired'
+   docker compose run --rm server ca init \
+     --config /etc/polarbeam/server.yaml
+   docker compose up -d server
+   ```
+
+   Record the new `sha256:<hex>` fingerprint that `ca init` prints — every
+   re-enrollment below uses it, and every fingerprint recorded before the
+   cutover is now wrong.
+
+   From this moment the whole fleet's uplink is down: existing agent
+   certificates no longer verify. Agents keep probing and spool results
+   locally until re-enrolled.
+
+3. **Re-enroll each agent.** For every site, issue a fresh token
+   (as in [section 7](#7-create-an-enrollment-token)):
+
+   ```sh
+   docker compose exec server polarbeam-server token create \
+     --config /etc/polarbeam/server.yaml --site <site-name> --ttl 24h
+   ```
+
+   Then on the agent host: stop the agent, remove **only** its `pki`
+   directory (the spool stays and drains after re-enrollment), re-enroll
+   with the new fingerprint exactly as in
+   [section 8.2](#82-enroll-into-the-persistent-volume), and recreate the
+   container:
+
+   ```sh
+   docker stop -t 60 polarbeam-agent
+   docker rm polarbeam-agent
+   docker run --rm \
+     --mount type=volume,src=polarbeam-agent-state,dst=/var/lib/polarbeam-agent \
+     --entrypoint sh ghcr.io/devalexllc/polarbeam-agent:<version> \
+     -c 'rm -rf /var/lib/polarbeam-agent/pki'
+   # re-enroll per section 8.2 (new token, NEW fingerprint, same
+   # --probe-address), then recreate the container per section 8.3
+   ```
+
+   Re-enrollment issues a new agent identity: history recorded under the
+   old identity remains queryable, but continues under the new one — the
+   same identity-replacement semantics as any re-enrollment.
+
+4. **Retire the replaced identities.** The old agent rows do not go away
+   on their own, and they are not inert: mesh expansion includes every
+   agent of a member site, so each replaced identity stays in the other
+   agents' probe sets as a permanently dark peer (doubled mesh probes
+   against the same address, phantom down directions, endless
+   agent-offline warnings). There is not yet an agent-retirement CLI; as
+   with revocation, retire each replaced identity in the database. Find
+   the old IDs (every site now has two agents; the old one has the older
+   `last_seen_at`):
+
+   ```sh
+   docker compose exec timescaledb psql -U polarbeam -d polarbeam -c \
+     "SELECT a.id, s.name, a.last_seen_at FROM agents a
+        JOIN sites s ON s.id = a.site_id ORDER BY s.name, a.last_seen_at"
+   ```
+
+   Then, for each **old** agent ID:
+
+   ```sh
+   docker compose exec timescaledb psql -U polarbeam -d polarbeam -c "BEGIN;
+     DELETE FROM certificates WHERE agent_id = '<old-agent-id>';
+     DELETE FROM targets WHERE agent_id = '<old-agent-id>';
+     UPDATE join_tokens SET used_by_agent = NULL WHERE used_by_agent = '<old-agent-id>';
+     DELETE FROM agents WHERE id = '<old-agent-id>';
+     COMMIT;"
+   ```
+
+   Recorded measurement history and events keep the old agent ID and stay
+   queryable; only the live identity, its mesh target, and its
+   certificate records are removed. Double-check the ID before deleting —
+   removing the *new* row takes that agent's fresh identity with it.
+
+5. **Verify** on the dashboard that every site reports again, and confirm
+   the spooled backlog drains (the last-update times catch up). Once the
+   fleet is healthy, the retired `ca.classical-retired` directory inside
+   the `server-state` volume can be deleted; keep it until then as the
+   rollback path (restore it over `ca/` and re-enroll agents against the
+   old fingerprints).
+
 ## Backup scope
 
 A recoverable control-plane backup must include all three persistent Compose
@@ -1630,3 +1778,10 @@ Protect the database, CA, and configuration secrets as one security
 boundary. Restoring the database without the matching built-in CA, or the CA
 without its database certificate records, does not reproduce the original
 agent trust state.
+
+A backup also freezes the CA *algorithm*: a `server-state` volume captured
+before a
+[CA algorithm cutover](#upgrading-across-a-ca-algorithm-change) restores the
+classical CA, silently un-doing the migration and orphaning every agent
+enrolled against the ML-DSA root. After a cutover, retire pre-cutover
+`server-state` backups (or clearly mark them) and take a fresh one.
