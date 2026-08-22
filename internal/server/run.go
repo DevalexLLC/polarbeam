@@ -163,14 +163,16 @@ func Run(ctx context.Context, cfg config.Config) error {
 }
 
 // needsReissue decides whether the auto-issued gRPC server certificate must
-// be replaced: unreadable leaf, hostname mismatch, less than 1/3 of lifetime
-// remaining, or a chain without the CA (fingerprint-pinned enrollment needs
-// the CA served in the handshake).
-func needsReissue(leaf *x509.Certificate, chainLen int, hostname string, now time.Time, lifetime time.Duration) bool {
+// be replaced: unreadable leaf, not signed by the current CA root (the CA
+// was re-initialized, possibly with a new algorithm), hostname mismatch,
+// less than 1/3 of lifetime remaining, or a chain without the CA
+// (fingerprint-pinned enrollment needs the CA served in the handshake).
+func needsReissue(leaf *x509.Certificate, chainLen int, hostname string, now time.Time, lifetime time.Duration, root *x509.Certificate) bool {
 	if lifetime <= 0 {
 		lifetime = ca.ServerCertLifetime
 	}
 	return leaf == nil ||
+		leaf.CheckSignatureFrom(root) != nil ||
 		leaf.VerifyHostname(hostname) != nil ||
 		leaf.NotAfter.Sub(now) <= lifetime/3 ||
 		chainLen < 2
@@ -200,11 +202,11 @@ func ensureGRPCCert(authority *ca.CA, dir, hostname string, lifetime time.Durati
 	certPath := filepath.Join(dir, "grpc-server.crt")
 	keyPath := filepath.Join(dir, "grpc-server.key")
 	if cert, err := tls.LoadX509KeyPair(certPath, keyPath); err == nil {
-		if !needsReissue(cert.Leaf, len(cert.Certificate), hostname, time.Now(), lifetime) {
+		if !needsReissue(cert.Leaf, len(cert.Certificate), hostname, time.Now(), lifetime, authority.Certificate()) {
 			return cert, nil
 		}
 		slog.Info("reissuing gRPC server certificate",
-			"reason", "expiring, hostname change, missing CA in chain, or unreadable leaf")
+			"reason", "expiring, not signed by the current CA, hostname change, missing CA in chain, or unreadable leaf")
 	}
 	return issueGRPCCert(authority, dir, hostname)
 }
@@ -242,7 +244,7 @@ func (p *grpcCertProvider) rotate(ctx context.Context, authority *ca.CA, dir, ho
 		p.mu.RLock()
 		cur := p.cert
 		p.mu.RUnlock()
-		if !needsReissue(cur.Leaf, len(cur.Certificate), hostname, time.Now(), lifetime) {
+		if !needsReissue(cur.Leaf, len(cur.Certificate), hostname, time.Now(), lifetime, authority.Certificate()) {
 			continue
 		}
 		cert, err := issueGRPCCert(authority, dir, hostname)
