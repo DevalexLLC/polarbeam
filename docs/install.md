@@ -1692,12 +1692,24 @@ The cutover, on the control-plane host:
    certificates no longer verify. Agents keep probing and spool results
    locally until re-enrolled.
 
-3. **Re-enroll each agent.** For every site, issue a fresh token
-   (as in [section 7](#7-create-an-enrollment-token)):
+3. **Re-enroll each agent.** For every agent, issue a fresh token for its
+   site **and its original network** (as in
+   [section 7](#7-create-an-enrollment-token)). The token carries the
+   network: omitting `--network` on a multi-network deployment would land
+   the re-enrolled agent on `default`, silently dropping it out of its
+   previous meshes and tenant scope. List the current assignments first:
+
+   ```sh
+   docker compose exec timescaledb psql -U polarbeam -d polarbeam -c \
+     "SELECT s.name AS site, n.name AS network, a.id FROM agents a
+        JOIN sites s ON s.id = a.site_id
+        JOIN networks n ON n.id = a.network_id ORDER BY s.name, n.name"
+   ```
 
    ```sh
    docker compose exec server polarbeam-server token create \
-     --config /etc/polarbeam/server.yaml --site <site-name> --ttl 24h
+     --config /etc/polarbeam/server.yaml \
+     --site <site-name> --network <network-name> --ttl 24h
    ```
 
    Then on the agent host: stop the agent, remove **only** its `pki`
@@ -1721,26 +1733,39 @@ The cutover, on the control-plane host:
    old identity remains queryable, but continues under the new one — the
    same identity-replacement semantics as any re-enrollment.
 
-4. **Retire the replaced identities.** The old agent rows do not go away
+4. **Verify the fleet and let every spool drain.** Confirm on the
+   dashboard that every site reports again and that each agent's spooled
+   backlog has drained (the last-update times catch up and stay current).
+   This step must complete **before** step 5: spooled results reference
+   the probe and target IDs they were measured under, and once a replaced
+   identity's target is retired the server rejects and permanently drops
+   any still-spooled results that reference it.
+
+5. **Retire the replaced identities.** The old agent rows do not go away
    on their own, and they are not inert: mesh expansion includes every
    agent of a member site, so each replaced identity stays in the other
    agents' probe sets as a permanently dark peer (doubled mesh probes
    against the same address, phantom down directions, endless
    agent-offline warnings). There is not yet an agent-retirement CLI; as
    with revocation, retire each replaced identity in the database. Find
-   the old IDs (every site now has two agents; the old one has the older
-   `last_seen_at`):
+   the old IDs (every site now has two agents per network it serves; the
+   old one has the older `last_seen_at`):
 
    ```sh
    docker compose exec timescaledb psql -U polarbeam -d polarbeam -c \
-     "SELECT a.id, s.name, a.last_seen_at FROM agents a
-        JOIN sites s ON s.id = a.site_id ORDER BY s.name, a.last_seen_at"
+     "SELECT a.id, s.name AS site, n.name AS network, a.last_seen_at
+        FROM agents a
+        JOIN sites s ON s.id = a.site_id
+        JOIN networks n ON n.id = a.network_id
+        ORDER BY s.name, n.name, a.last_seen_at"
    ```
 
    Then, for each **old** agent ID:
 
    ```sh
    docker compose exec timescaledb psql -U polarbeam -d polarbeam -c "BEGIN;
+     UPDATE outage_events SET closed_at = now()
+       WHERE agent_id = '<old-agent-id>' AND closed_at IS NULL;
      DELETE FROM certificates WHERE agent_id = '<old-agent-id>';
      DELETE FROM targets WHERE agent_id = '<old-agent-id>';
      UPDATE join_tokens SET used_by_agent = NULL WHERE used_by_agent = '<old-agent-id>';
@@ -1748,17 +1773,19 @@ The cutover, on the control-plane host:
      COMMIT;"
    ```
 
-   Recorded measurement history and events keep the old agent ID and stay
-   queryable; only the live identity, its mesh target, and its
-   certificate records are removed. Double-check the ID before deleting —
-   removing the *new* row takes that agent's fresh identity with it.
+   The `outage_events` update closes the identity's open agent-offline
+   event — the offline sweep only examines rows still present in
+   `agents`, so an event left open here would stay open on the dashboard
+   forever. Recorded measurement history and closed events keep the old
+   agent ID and stay queryable; only the live identity, its mesh target,
+   and its certificate records are removed. Double-check the ID before
+   deleting — removing the *new* row takes that agent's fresh identity
+   with it.
 
-5. **Verify** on the dashboard that every site reports again, and confirm
-   the spooled backlog drains (the last-update times catch up). Once the
-   fleet is healthy, the retired `ca.classical-retired` directory inside
-   the `server-state` volume can be deleted; keep it until then as the
-   rollback path (restore it over `ca/` and re-enroll agents against the
-   old fingerprints).
+6. **Wrap up.** Once the fleet is healthy, the retired
+   `ca.classical-retired` directory inside the `server-state` volume can
+   be deleted; keep it until then as the rollback path (restore it over
+   `ca/` and re-enroll agents against the old fingerprints).
 
 ## Backup scope
 
