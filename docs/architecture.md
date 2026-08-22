@@ -11,7 +11,7 @@ Shape: a central control plane with a lightweight Go agent at each site (shipped
 - **Storage:** PostgreSQL + TimescaleDB; continuous aggregates for raw → hourly → daily; 365-day retention with percentiles.
 - **Dashboard:** custom React/TypeScript SPA embedded in the server binary via `go:embed`.
 - **mTLS:** built-in CA in the control plane; one-time join tokens; auto-rotating client certs.
-- **Protocol:** gRPC over port 443 with mTLS (server-streamed config snapshots, batched result pushes). The gRPC listener enforces TLS 1.3 with hybrid ML-KEM (post-quantum) key exchange only — no classical fallback. Shipped Go agents explicitly offer X25519MLKEM768, SecP256r1MLKEM768, and SecP384r1MLKEM1024 for enrollment and uplink connections; future non-Go agents' TLS stacks must support at least one of those groups.
+- **Protocol:** gRPC over port 443 with mTLS (server-streamed config snapshots, batched result pushes). The gRPC listener enforces TLS 1.3 with hybrid ML-KEM (post-quantum) key exchange only — no classical fallback. Shipped Go agents explicitly offer X25519MLKEM768, SecP256r1MLKEM768, and SecP384r1MLKEM1024 for enrollment and uplink connections; future non-Go agents' TLS stacks must support at least one of those groups. Authentication is post-quantum too: the built-in CA issues ML-DSA-65 (FIPS 204) certificates by default (`ca init --algorithm ecdsa-p256` remains as a classical escape hatch), so both halves of the transport resist a future quantum adversary. The dashboard listener stays classical — operators bring their own certificates and browsers do not support ML-DSA.
 - **Language:** Go for both binaries.
 - **Agent form factor:** a **single static Go binary** (`polarbeam-agent`, built with `CGO_ENABLED=0`) — no runtime dependencies, no sidecars; it ships as a container image, and its only on-disk footprint is a config file plus `/var/lib/polarbeam-agent/{pki,spool}` which it creates itself.
 - **Control plane deployment:** everything runs in containers (proxy + server + TimescaleDB) via compose; no bare-metal server install.
@@ -29,7 +29,7 @@ polarbeam/
 ├── go.mod, Makefile, LICENSE (AGPL-3.0-only), buf.yaml, buf.gen.yaml
 ├── proto/polarbeam/v1/{common,enrollment,agent}.proto
 ├── internal/pb/polarbeamv1/            # committed generated code
-├── cmd/polarbeam-server/               # subcommands: serve, ca init, migrate, user add (--admin | --role/--network), token create
+├── cmd/polarbeam-server/               # subcommands: serve, ca init (--algorithm), migrate, user add (--admin | --role/--network), token create
 ├── cmd/polarbeam-agent/                # subcommands: run, enroll, selfcheck
 ├── internal/server/
 │   ├── config/      # strict YAML + preflight (fail-loud: unknown keys = fatal)
@@ -120,7 +120,7 @@ Dispositions are four: open (no session), any-session reads (scope-filtered serv
 
 ## CA / cert lifecycle
 
-- ECDSA P-256 CA, 10-year self-signed root via `polarbeam-server ca init` (refuses overwrite); preflight fails loud if serving without a CA.
+- ML-DSA-65 CA by default (`ca init --algorithm mldsa65|ecdsa-p256`), 10-year self-signed root via `polarbeam-server ca init` (refuses overwrite); preflight fails loud if serving without a CA. Issued leaf keys mirror the root's algorithm — agents derive theirs from the trust anchor at enrollment, and the CA refuses CSRs whose key algorithm differs from the root's (a classical leaf under a PQ root would silently weaken that identity). Keys are stored as PKCS#8, with pre-cutover SEC1 ECDSA keys still readable. ML-DSA-65 grows the handshake by roughly 20 KB each way (~5.5 KB certs, 3.3 KB signatures) — negligible for long-lived gRPC streams, worth knowing on constrained links. Note `crypto/mldsa` is unavailable under the FIPS 140-3 Go module v1.0.0 (needs v1.26.0+), relevant only if `GOFIPS140` builds ever happen.
 - Agent certs: 30-day lifetime, identity in URI SAN `polarbeam://agent/<uuid>`; server signs CSRs — private keys never leave the agent.
 - Enrollment: `polarbeam-server token create --site nyc --network corp --ttl 24h` prints `<id>.<secret>` once (DB stores sha256, single-use; `--network` optional, default `default`, must already exist — networks are never auto-created) → `polarbeam-agent enroll --server host:443 --token …` writes cert + CA bundle. The agent inherits the token's network and never chooses it — no wire change, and the assignment is unforgeable by the enrollee.
 - Rotation: renew at 2/3 lifetime via `RenewCert` on the existing mTLS channel, retry daily; fully expired (dark >30 d) → re-enroll with fresh token, by design.

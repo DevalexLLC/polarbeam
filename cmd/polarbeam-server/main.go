@@ -31,7 +31,7 @@ Usage:
   polarbeam-server serve   --config <file>          run the control plane
   polarbeam-server migrate --config <file> [--timeout 30m]
                                                      apply database migrations
-  polarbeam-server ca init --config <file> [--if-missing]
+  polarbeam-server ca init --config <file> [--algorithm mldsa65|ecdsa-p256] [--if-missing]
                                                      create the built-in CA
   polarbeam-server token create --config <file> --site <name> [--network <name>] [--ttl 24h] [--quiet]
                                                      issue an agent join token
@@ -151,22 +151,32 @@ func cmdMigrate(args []string) error {
 
 func cmdCA(args []string) error {
 	if len(args) < 1 || args[0] != "init" {
-		return fmt.Errorf("usage: polarbeam-server ca init --config <file> [--if-missing]")
+		return fmt.Errorf("usage: polarbeam-server ca init --config <file> [--algorithm mldsa65|ecdsa-p256] [--if-missing]")
 	}
 	fs := flag.NewFlagSet("ca init", flag.ExitOnError)
 	ifMissing := fs.Bool("if-missing", false, "succeed as a no-op when a CA already exists")
+	algFlag := fs.String("algorithm", string(ca.DefaultAlgorithm),
+		"CA key algorithm: mldsa65 (post-quantum, default) or ecdsa-p256 (classical)")
 	cfg, err := loadConfig(fs, args[1:])
 	if err != nil {
 		return err
 	}
-	if err := ca.Init(cfg.CA.Dir, *ifMissing); err != nil {
+	alg, err := ca.ParseAlgorithm(*algFlag)
+	if err != nil {
+		return err
+	}
+	if err := ca.Init(cfg.CA.Dir, alg, *ifMissing); err != nil {
 		return err
 	}
 	authority, err := ca.Load(cfg.CA.Dir, caLifetimes(cfg))
 	if err != nil {
 		return err
 	}
-	fmt.Printf("CA ready in %s\nfingerprint sha256:%s\n", cfg.CA.Dir, authority.Fingerprint())
+	// Report the loaded CA's algorithm, not the requested one: with
+	// --if-missing on an existing CA the two can differ, and the operator
+	// should see which algorithm is actually in force.
+	fmt.Printf("CA ready in %s (algorithm %s)\nfingerprint sha256:%s\n",
+		cfg.CA.Dir, authority.Algorithm(), authority.Fingerprint())
 	return nil
 }
 
