@@ -1,8 +1,10 @@
 package ca
 
 import (
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -196,18 +198,43 @@ func TestSignAgentCSRRejectsGarbage(t *testing.T) {
 	}
 }
 
-// TestSignAgentCSRRejectsAlgorithmMismatch: a classical key under an ML-DSA
-// root (or the reverse) would silently weaken that identity's
-// authentication, so the CA refuses to sign it.
+// TestSignAgentCSRRejectsAlgorithmMismatch: a leaf key differing from the
+// root's exact algorithm and strength would silently diverge from the
+// operator's choice, so the CA refuses to sign it. Same-family weaker
+// parameters matter too: ML-DSA-44 and ML-DSA-65 both report x509.MLDSA,
+// and every ECDSA curve reports x509.ECDSA.
 func TestSignAgentCSRRejectsAlgorithmMismatch(t *testing.T) {
-	cases := []struct{ caAlg, csrAlg Algorithm }{
-		{AlgMLDSA65, AlgECDSAP256},
-		{AlgECDSAP256, AlgMLDSA65},
+	genCSRFromKey := func(t *testing.T, key crypto.Signer) []byte {
+		t.Helper()
+		csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return csrDER
+	}
+	mldsa44Key, err := mldsa.GenerateKey(mldsa.MLDSA44())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p384Key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name   string
+		caAlg  Algorithm
+		csrDER func(t *testing.T) []byte
+	}{
+		{"ecdsa csr under mldsa ca", AlgMLDSA65, func(t *testing.T) []byte { return genCSR(t, AlgECDSAP256) }},
+		{"mldsa csr under ecdsa ca", AlgECDSAP256, func(t *testing.T) []byte { return genCSR(t, AlgMLDSA65) }},
+		{"mldsa44 csr under mldsa65 ca", AlgMLDSA65, func(t *testing.T) []byte { return genCSRFromKey(t, mldsa44Key) }},
+		{"p384 csr under p256 ca", AlgECDSAP256, func(t *testing.T) []byte { return genCSRFromKey(t, p384Key) }},
 	}
 	for _, tc := range cases {
-		t.Run(string(tc.caAlg)+"-ca", func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			c := initAndLoadAlg(t, tc.caAlg)
-			_, _, _, err := c.SignAgentCSR(genCSR(t, tc.csrAlg), uuid.New(), "h")
+			_, _, _, err := c.SignAgentCSR(tc.csrDER(t), uuid.New(), "h")
 			if err == nil || !strings.Contains(err.Error(), "does not match the CA algorithm") {
 				t.Fatalf("mismatched CSR: err = %v, want algorithm-mismatch rejection", err)
 			}

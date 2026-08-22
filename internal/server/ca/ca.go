@@ -291,10 +291,10 @@ func (c *CA) SignAgentCSR(csrDER []byte, agentID uuid.UUID, hostname string) (de
 	// authentication classical (and vice versa breaks the escape hatch).
 	// Shipped agents derive their key from the CA, so a mismatch is a
 	// stale or foreign client.
-	if csr.PublicKeyAlgorithm != c.cert.PublicKeyAlgorithm {
+	if !c.leafKeyAllowed(csr.PublicKey) {
 		return nil, nil, time.Time{}, fmt.Errorf(
-			"CSR key algorithm %v does not match the CA algorithm %v (agents derive their key algorithm from the CA at enrollment; upgrade or re-enroll the agent)",
-			csr.PublicKeyAlgorithm, c.cert.PublicKeyAlgorithm)
+			"CSR key does not match the CA algorithm %s (agents derive their key algorithm from the CA at enrollment; upgrade or re-enroll the agent)",
+			c.Algorithm())
 	}
 	serial, err = randomSerial()
 	if err != nil {
@@ -354,6 +354,25 @@ func (c *CA) IssueServerCert(hostname string) (certPEM, keyPEM []byte, err error
 	certPEM = append(certPEM, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.cert.Raw})...)
 	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 	return certPEM, keyPEM, nil
+}
+
+// leafKeyAllowed reports whether pub matches the root key's exact
+// algorithm AND strength. x509.PublicKeyAlgorithm alone is not enough:
+// all three ML-DSA parameter sets report x509.MLDSA, and every ECDSA
+// curve reports x509.ECDSA — an ML-DSA-44 or P-384 leaf under an
+// ML-DSA-65 or P-256 root would still silently diverge from the
+// operator's choice.
+func (c *CA) leafKeyAllowed(pub crypto.PublicKey) bool {
+	switch root := c.cert.PublicKey.(type) {
+	case *mldsa.PublicKey:
+		leaf, ok := pub.(*mldsa.PublicKey)
+		return ok && leaf.Parameters() == root.Parameters()
+	case *ecdsa.PublicKey:
+		leaf, ok := pub.(*ecdsa.PublicKey)
+		return ok && leaf.Curve == root.Curve
+	default:
+		return false
+	}
 }
 
 // leafKey generates a fresh leaf key with the same algorithm as the root,
