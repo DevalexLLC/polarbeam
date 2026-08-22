@@ -7,8 +7,9 @@ package enroll
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
-	"crypto/elliptic"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
@@ -94,6 +95,12 @@ func Run(ctx context.Context, cfg config.Config, opts Options) error {
 	if err != nil {
 		return err
 	}
+	// The agent's key algorithm mirrors the CA it was told to trust — the
+	// server operator's choice at `ca init`, never the agent's.
+	caCert, err := trustAnchor(ctx, cfg, opts, tlsCfg)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(p.Dir, 0o700); err != nil {
 		return fmt.Errorf("create pki dir: %w", err)
 	}
@@ -102,7 +109,7 @@ func Run(ctx context.Context, cfg config.Config, opts Options) error {
 	// if the server commits the enrollment but the response is lost, the
 	// retry presents the identical CSR and the server treats it as an
 	// idempotent replay instead of a consumed token.
-	key, csrDER, err := p.stageKeyAndCSR()
+	key, csrDER, err := p.stageKeyAndCSR(caCert)
 	if err != nil {
 		return err
 	}
@@ -137,14 +144,51 @@ func Run(ctx context.Context, cfg config.Config, opts Options) error {
 	return nil
 }
 
-// parseStagedPair returns the staged private key iff the key parses, the
-// CSR parses with a valid signature, and the CSR was made with that key.
-func parseStagedPair(keyPEM, csrDER []byte) *ecdsa.PrivateKey {
+// newAgentKey generates a private key whose algorithm mirrors the CA's, so
+// the escape-hatch choice made at `ca init` holds end to end.
+func newAgentKey(caCert *x509.Certificate) (crypto.Signer, error) {
+	switch pub := caCert.PublicKey.(type) {
+	case *mldsa.PublicKey:
+		return mldsa.GenerateKey(pub.Parameters())
+	case *ecdsa.PublicKey:
+		return ecdsa.GenerateKey(pub.Curve, rand.Reader)
+	default:
+		return nil, fmt.Errorf("unsupported CA public key algorithm %v; this agent supports ML-DSA and ECDSA",
+			caCert.PublicKeyAlgorithm)
+	}
+}
+
+// parsePrivateKeyPEM reads a PKCS#8 "PRIVATE KEY" block (what enrollment
+// writes) or a legacy SEC1 "EC PRIVATE KEY" block (agents enrolled before
+// the ML-DSA default).
+func parsePrivateKeyPEM(keyPEM []byte) (crypto.Signer, error) {
 	block, _ := pem.Decode(keyPEM)
 	if block == nil {
-		return nil
+		return nil, errors.New("expected a PRIVATE KEY or EC PRIVATE KEY PEM block")
 	}
-	key, err := x509.ParseECPrivateKey(block.Bytes)
+	switch block.Type {
+	case "PRIVATE KEY":
+		parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		key, ok := parsed.(crypto.Signer)
+		if !ok {
+			return nil, fmt.Errorf("%T cannot sign", parsed)
+		}
+		return key, nil
+	case "EC PRIVATE KEY":
+		return x509.ParseECPrivateKey(block.Bytes)
+	default:
+		return nil, fmt.Errorf("expected a PRIVATE KEY or EC PRIVATE KEY PEM block, got %s", block.Type)
+	}
+}
+
+// parseStagedPair returns the staged private key iff the key parses, the
+// CSR parses with a valid signature, the CSR was made with that key, and
+// the key's algorithm matches what the trusted CA calls for.
+func parseStagedPair(keyPEM, csrDER []byte, want x509.PublicKeyAlgorithm) crypto.Signer {
+	key, err := parsePrivateKeyPEM(keyPEM)
 	if err != nil {
 		return nil
 	}
@@ -152,8 +196,11 @@ func parseStagedPair(keyPEM, csrDER []byte) *ecdsa.PrivateKey {
 	if err != nil || csr.CheckSignature() != nil {
 		return nil
 	}
-	pub, ok := csr.PublicKey.(*ecdsa.PublicKey)
-	if !ok || !pub.Equal(&key.PublicKey) {
+	if csr.PublicKeyAlgorithm != want {
+		return nil
+	}
+	pub, ok := key.Public().(interface{ Equal(crypto.PublicKey) bool })
+	if !ok || !pub.Equal(csr.PublicKey) {
 		return nil
 	}
 	return key
@@ -161,22 +208,23 @@ func parseStagedPair(keyPEM, csrDER []byte) *ecdsa.PrivateKey {
 
 // stageKeyAndCSR returns the staged key+CSR from an interrupted prior
 // attempt, or generates and persists fresh ones.
-func (p PKI) stageKeyAndCSR() (*ecdsa.PrivateKey, []byte, error) {
+func (p PKI) stageKeyAndCSR(caCert *x509.Certificate) (crypto.Signer, []byte, error) {
 	keyPath := filepath.Join(p.Dir, keyFile)
 	csrPath := filepath.Join(p.Dir, csrStageFile)
 
 	keyPEM, keyErr := os.ReadFile(keyPath)
 	csrDER, csrErr := os.ReadFile(csrPath)
 	if keyErr == nil && csrErr == nil {
-		if key := parseStagedPair(keyPEM, csrDER); key != nil {
+		if key := parseStagedPair(keyPEM, csrDER, caCert.PublicKeyAlgorithm); key != nil {
 			return key, csrDER, nil
 		}
-		// Corrupt or mismatched staging state (crash mid-write, stray
-		// files): regenerate both rather than retrying garbage forever or
+		// Corrupt, mismatched, or wrong-algorithm staging state (crash
+		// mid-write, stray files, a CA cut over between attempts):
+		// regenerate both rather than retrying garbage forever or
 		// enrolling a certificate that does not match our key.
 	}
 
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, err := newAgentKey(caCert)
 	if err != nil {
 		return nil, nil, fmt.Errorf("generate key: %w", err)
 	}
@@ -184,12 +232,12 @@ func (p PKI) stageKeyAndCSR() (*ecdsa.PrivateKey, []byte, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("create CSR: %w", err)
 	}
-	keyDER, err := x509.MarshalECPrivateKey(key)
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal key: %w", err)
 	}
 	if err := os.WriteFile(keyPath,
-		pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
+		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
 		return nil, nil, fmt.Errorf("stage key: %w", err)
 	}
 	if err := os.WriteFile(csrPath, csrDER, 0o600); err != nil {
@@ -202,8 +250,8 @@ func (p PKI) stageKeyAndCSR() (*ecdsa.PrivateKey, []byte, error) {
 // (Enrolled checks it), so it is written LAST and atomically via rename: a
 // failure part-way (full disk, crash) leaves no certificate file and the
 // enrollment can simply be retried instead of wedging half-enrolled.
-func (p PKI) write(key *ecdsa.PrivateKey, resp *pb.EnrollResponse) error {
-	keyDER, err := x509.MarshalECPrivateKey(key)
+func (p PKI) write(key crypto.Signer, resp *pb.EnrollResponse) error {
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
 		return fmt.Errorf("marshal key: %w", err)
 	}
@@ -212,7 +260,7 @@ func (p PKI) write(key *ecdsa.PrivateKey, resp *pb.EnrollResponse) error {
 		data []byte
 		mode os.FileMode
 	}{
-		{keyFile, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600},
+		{keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600},
 		{caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: resp.GetCaBundleDer()}), 0o644},
 		{agentIDFile, []byte(resp.GetAgentId() + "\n"), 0o644},
 	}
@@ -259,13 +307,9 @@ func (p PKI) RenewalCSR() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("agent key unusable (re-enroll?): %w", err)
 	}
-	block, _ := pem.Decode(keyPEM)
-	if block == nil {
-		return nil, fmt.Errorf("%s: expected an EC PRIVATE KEY PEM block", filepath.Join(p.Dir, keyFile))
-	}
-	key, err := x509.ParseECPrivateKey(block.Bytes)
+	key, err := parsePrivateKeyPEM(keyPEM)
 	if err != nil {
-		return nil, fmt.Errorf("parse agent key: %w", err)
+		return nil, fmt.Errorf("parse agent key %s: %w", filepath.Join(p.Dir, keyFile), err)
 	}
 	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, key)
 	if err != nil {
@@ -329,6 +373,65 @@ func (p PKI) ClientTLS(cfg config.Config) (*tls.Config, error) {
 		RootCAs:    pool,
 		ServerName: serverName(cfg),
 	}, nil
+}
+
+// trustAnchor returns the CA certificate the operator told the agent to
+// trust: the --ca-cert file, or for --fingerprint the pinned chain member
+// fetched over one preflight handshake. bootstrapTLS has already validated
+// that exactly one of the two options is set.
+func trustAnchor(ctx context.Context, cfg config.Config, opts Options, tlsCfg *tls.Config) (*x509.Certificate, error) {
+	if opts.CACertFile != "" {
+		data, err := os.ReadFile(opts.CACertFile)
+		if err != nil {
+			return nil, fmt.Errorf("--ca-cert: %w", err)
+		}
+		for block, rest := pem.Decode(data); block != nil; block, rest = pem.Decode(rest) {
+			if block.Type != "CERTIFICATE" {
+				continue
+			}
+			cert, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				return nil, fmt.Errorf("--ca-cert %s: %w", opts.CACertFile, err)
+			}
+			return cert, nil
+		}
+		return nil, fmt.Errorf("--ca-cert %s contains no certificates", opts.CACertFile)
+	}
+	want, err := parseFingerprint(opts.Fingerprint)
+	if err != nil {
+		return nil, err
+	}
+	return fetchPinnedCA(ctx, cfg.Server.Address, tlsCfg, want)
+}
+
+// fetchPinnedCA dials once with the bootstrap config — whose verify callback
+// enforces the pin — and returns the presented chain member matching the
+// pinned fingerprint. The server always serves the CA in the handshake
+// (IssueServerCert sends leaf+CA) precisely so pinned enrollment can find it.
+func fetchPinnedCA(ctx context.Context, addr string, tlsCfg *tls.Config, want [32]byte) (*x509.Certificate, error) {
+	// Bound the preflight like the enrollment RPC that follows it — the
+	// caller's context typically has no deadline of its own.
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	cfg := tlsCfg.Clone()
+	// Offer ALPN "h2" so this preflight is indistinguishable from the gRPC
+	// dial that follows it — grpc-go servers may enforce ALPN, and a
+	// middlebox should see no difference between the two connections.
+	cfg.NextProtos = []string{"h2"}
+	d := tls.Dialer{Config: cfg}
+	conn, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("fetch pinned CA certificate from %s: %w", addr, err)
+	}
+	defer conn.Close()
+	for _, c := range conn.(*tls.Conn).ConnectionState().PeerCertificates {
+		if sha256.Sum256(c.Raw) == want {
+			return c, nil
+		}
+	}
+	// Unreachable in practice: the verify callback already required the
+	// pinned certificate in the chain for the handshake to succeed.
+	return nil, errors.New("server did not present a certificate matching the pinned fingerprint")
 }
 
 // bootstrapTLS builds the server-verification config used before the agent

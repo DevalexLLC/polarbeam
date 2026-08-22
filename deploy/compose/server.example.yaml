@@ -25,7 +25,9 @@ tls:
   key_file: /etc/polarbeam/tls/server.key
 
 ca:
-  # Built-in CA for agent client certificates (created by `ca init`).
+  # Built-in CA for agent client certificates (created by `ca init`, which
+  # signs with post-quantum ML-DSA-65 by default; `--algorithm ecdsa-p256`
+  # selects a classical CA at initialization time).
   dir: /var/lib/polarbeam-server/ca
   # Issued-certificate lifetimes. Agents renew at 2/3 of the leaf's actual
   # validity; the gRPC server certificate is reissued past 2/3. Shortening
