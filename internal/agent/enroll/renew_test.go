@@ -1,8 +1,10 @@
 package enroll
 
 import (
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -14,17 +16,39 @@ import (
 	"time"
 )
 
-// enrolledPKI builds an enrolled-looking state dir: a hand-rolled CA plus a
-// leaf issued to the agent key (the server ca package is deliberately not
-// imported into the agent tree).
-func enrolledPKI(t *testing.T, validity time.Duration) (PKI, *ecdsa.PrivateKey, *x509.Certificate) {
+func enrolledPKI(t *testing.T, validity time.Duration) (PKI, crypto.Signer, *x509.Certificate) {
+	t.Helper()
+	return enrolledPKIAlg(t, x509.MLDSA, validity)
+}
+
+// enrolledPKIAlg builds an enrolled-looking state dir: a hand-rolled CA plus
+// a leaf issued to the agent key (the server ca package is deliberately not
+// imported into the agent tree). The ECDSA variant writes the key in the
+// legacy SEC1 format, so it doubles as coverage for state enrolled before
+// the ML-DSA default.
+func enrolledPKIAlg(t *testing.T, alg x509.PublicKeyAlgorithm, validity time.Duration) (PKI, crypto.Signer, *x509.Certificate) {
 	t.Helper()
 	p := PKI{Dir: t.TempDir()}
 
-	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
+	genKey := func() crypto.Signer {
+		t.Helper()
+		var key crypto.Signer
+		var err error
+		switch alg {
+		case x509.MLDSA:
+			key, err = mldsa.GenerateKey(mldsa.MLDSA65())
+		case x509.ECDSA:
+			key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		default:
+			t.Fatalf("unsupported test algorithm %v", alg)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return key
 	}
+
+	caKey := genKey()
 	caTmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "test CA"},
@@ -34,7 +58,7 @@ func enrolledPKI(t *testing.T, validity time.Duration) (PKI, *ecdsa.PrivateKey, 
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign,
 	}
-	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, caKey.Public(), caKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,15 +67,23 @@ func enrolledPKI(t *testing.T, validity time.Duration) (PKI, *ecdsa.PrivateKey, 
 		t.Fatal(err)
 	}
 
-	agentKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leafDER := issueLeaf(t, caCert, caKey, &agentKey.PublicKey, validity)
+	agentKey := genKey()
+	leafDER := issueLeaf(t, caCert, caKey, agentKey.Public(), validity)
 
-	keyDER, err := x509.MarshalECPrivateKey(agentKey)
-	if err != nil {
-		t.Fatal(err)
+	var keyBlock *pem.Block
+	if ec, ok := agentKey.(*ecdsa.PrivateKey); ok {
+		// Legacy on-disk format from pre-cutover agent binaries.
+		keyDER, err := x509.MarshalECPrivateKey(ec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		keyBlock = &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}
+	} else {
+		keyDER, err := x509.MarshalPKCS8PrivateKey(agentKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		keyBlock = &pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}
 	}
 	write := func(name string, block *pem.Block, mode os.FileMode) {
 		t.Helper()
@@ -59,7 +91,7 @@ func enrolledPKI(t *testing.T, validity time.Duration) (PKI, *ecdsa.PrivateKey, 
 			t.Fatal(err)
 		}
 	}
-	write(keyFile, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}, 0o600)
+	write(keyFile, keyBlock, 0o600)
 	write(caFile, &pem.Block{Type: "CERTIFICATE", Bytes: caDER}, 0o644)
 	write(certFile, &pem.Block{Type: "CERTIFICATE", Bytes: leafDER}, 0o644)
 
@@ -70,7 +102,7 @@ func enrolledPKI(t *testing.T, validity time.Duration) (PKI, *ecdsa.PrivateKey, 
 	return p, caKey, leaf
 }
 
-func issueLeaf(t *testing.T, caCert *x509.Certificate, caKey *ecdsa.PrivateKey, pub *ecdsa.PublicKey, validity time.Duration) []byte {
+func issueLeaf(t *testing.T, caCert *x509.Certificate, caKey crypto.Signer, pub crypto.PublicKey, validity time.Duration) []byte {
 	t.Helper()
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(time.Now().UnixNano()),
@@ -106,24 +138,31 @@ func TestLeafUnenrolledNamesRemedy(t *testing.T) {
 }
 
 func TestRenewalCSRUsesExistingKey(t *testing.T) {
-	p, _, _ := enrolledPKI(t, time.Hour)
-	csrDER, err := p.RenewalCSR()
-	if err != nil {
-		t.Fatal(err)
-	}
-	csr, err := x509.ParseCertificateRequest(csrDER)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := csr.CheckSignature(); err != nil {
-		t.Fatalf("CSR signature invalid: %v", err)
-	}
-	leaf, err := p.Leaf()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !csr.PublicKey.(*ecdsa.PublicKey).Equal(leaf.PublicKey) {
-		t.Error("renewal CSR does not use the enrolled key — commit would produce a mismatched pair")
+	// The ECDSA leg renews from a legacy SEC1 key file; the ML-DSA leg from
+	// the PKCS#8 format enrollment writes today.
+	for _, alg := range []x509.PublicKeyAlgorithm{x509.MLDSA, x509.ECDSA} {
+		t.Run(alg.String(), func(t *testing.T) {
+			p, _, _ := enrolledPKIAlg(t, alg, time.Hour)
+			csrDER, err := p.RenewalCSR()
+			if err != nil {
+				t.Fatal(err)
+			}
+			csr, err := x509.ParseCertificateRequest(csrDER)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := csr.CheckSignature(); err != nil {
+				t.Fatalf("CSR signature invalid: %v", err)
+			}
+			leaf, err := p.Leaf()
+			if err != nil {
+				t.Fatal(err)
+			}
+			pub, ok := csr.PublicKey.(interface{ Equal(crypto.PublicKey) bool })
+			if !ok || !pub.Equal(leaf.PublicKey) {
+				t.Error("renewal CSR does not use the enrolled key — commit would produce a mismatched pair")
+			}
+		})
 	}
 }
 
@@ -144,7 +183,7 @@ func TestCommitRenewalSwapsCertOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	newDER := issueLeaf(t, caCert, caKey, oldLeaf.PublicKey.(*ecdsa.PublicKey), 2*time.Hour)
+	newDER := issueLeaf(t, caCert, caKey, oldLeaf.PublicKey, 2*time.Hour)
 
 	if err := p.CommitRenewal(newDER, caPEM.Bytes); err != nil {
 		t.Fatal(err)
@@ -188,7 +227,7 @@ func TestCommitRenewalEmptyBundleKeepsCA(t *testing.T) {
 	caBefore, _ := os.ReadFile(filepath.Join(p.Dir, caFile))
 	caPEM, _ := pem.Decode(caBefore)
 	caCert, _ := x509.ParseCertificate(caPEM.Bytes)
-	newDER := issueLeaf(t, caCert, caKey, oldLeaf.PublicKey.(*ecdsa.PublicKey), 2*time.Hour)
+	newDER := issueLeaf(t, caCert, caKey, oldLeaf.PublicKey, 2*time.Hour)
 
 	if err := p.CommitRenewal(newDER, nil); err != nil {
 		t.Fatal(err)
