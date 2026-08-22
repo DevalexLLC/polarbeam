@@ -1,8 +1,7 @@
 # Advanced CodeQL setup. GitHub's default Go autobuild selected a toolchain
 # that could not read the Go 1.27 module. Keep default setup disabled and build
-# Go explicitly with the repository's pin. CodeQL's published language support
-# currently stops at Go 1.26, so do not adopt Go 1.27-only syntax until that
-# support advances.
+# Go explicitly with the repository's pin. CodeQL's Go support now covers
+# Go 1.27, so 1.27-only syntax is fine.
 name: CodeQL
 
 on:

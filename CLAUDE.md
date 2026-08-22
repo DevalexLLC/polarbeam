@@ -64,9 +64,8 @@ Full design + milestone plan: `docs/architecture.md`.
 - CodeQL uses advanced setup with a manual, offline Go build so analysis uses
   the exact toolchain pinned in `go.mod`. Keep default CodeQL setup disabled
   and do not replace the explicit build with autobuild. Its checks are
-  advisory under the current ruleset. Do not adopt Go 1.27-only syntax until
-  CodeQL's published language support includes it, and review reported alerts
-  before merging.
+  advisory under the current ruleset; review reported alerts before
+  merging.
 - Regenerate protos: `make proto` — buf + protoc-gen-go{,-grpc} are pinned
   in go.mod's `tool` block and run from `vendor/`, no host tooling — and
   commit the diff under `internal/pb/` (the `offline-build` CI job
