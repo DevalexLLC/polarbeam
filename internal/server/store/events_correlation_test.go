@@ -70,6 +70,14 @@ func TestCorrelateIncidentRoutes(t *testing.T) {
 	if !incidentRouteMatches(base, differentProbe) {
 		t.Error("different failure/traceroute probe IDs hid an exact agent+target route")
 	}
+	targetlessLegacy := base
+	targetlessLegacy.TargetID = nil
+	if !incidentRouteMatches(targetlessLegacy, nearestOpen) {
+		t.Error("legacy targetless outage did not match its exact probe ID")
+	}
+	if incidentRouteMatches(targetlessLegacy, differentProbe) {
+		t.Error("legacy targetless outage fell back past a usable mismatched probe ID")
+	}
 	wrongTarget := differentProbe
 	wrongTargetID := uuid.New()
 	wrongTarget.TargetID = &wrongTargetID

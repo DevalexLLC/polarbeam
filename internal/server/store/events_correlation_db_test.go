@@ -69,8 +69,8 @@ func TestListOutagesStableIdentitiesAndRelatedRoutes(t *testing.T) {
 	// Neither resource exists, so only the event tables' stable IDs can join
 	// this deleted-resource history.
 	insertPathQueryEvent(t, ctx, s, orphanRoute, base.Add(4*time.Hour+time.Minute), orphanAgent, orphanProbe, orphanTarget, `[]`, `[]`)
-	// A legacy outage missing probe_id falls back to its still-stable source
-	// and external-target labels.
+	// A legacy outage missing probe_id still correlates by its exact
+	// agent+target identity.
 	insertPathQueryEvent(t, ctx, s, legacyRoute, base.Add(6*time.Hour+time.Minute), f.aDef, legacyRouteProbe, serviceTarget, `[]`, `[]`)
 
 	outages, err := s.ListOutages(ctx, 24*time.Hour, nil, true)
@@ -105,7 +105,7 @@ func TestListOutagesStableIdentitiesAndRelatedRoutes(t *testing.T) {
 	}
 	legacy := byID[legacyOutage]
 	if legacy.ProbeID != nil || !slices.Contains(pathEventIDs(legacy.RelatedRoutes), legacyRoute) {
-		t.Errorf("legacy label fallback routes = %+v", legacy.RelatedRoutes)
+		t.Errorf("legacy missing-probe routes = %+v", legacy.RelatedRoutes)
 	}
 	withoutRoutes, err := s.ListOutages(ctx, 24*time.Hour, nil, false)
 	if err != nil {
