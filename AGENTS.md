@@ -60,6 +60,12 @@ when query mode is off, narrow nonempty explicit networks through
 and pagination in SQL. `/api/v1/users` retains its established, separate
 inventory contract.
 
+Path-event query mode caps the newest 500 SQL matches before applying its
+requested presentation sort and page. Keep its `time DESC, id DESC` index,
+stable ID tie breakers, SQL-side changed-TTL calculation, capped `page.total`,
+and `truncated` signal aligned; `window`-only requests retain the legacy JSON
+shape and newest-500 behavior.
+
 ## Coding Style & Naming Conventions
 
 Format Go with `gofmt`; use tabs, lowercase packages, and conventional

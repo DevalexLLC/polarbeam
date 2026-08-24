@@ -412,21 +412,35 @@ export interface Hop {
 export interface PathEvent {
   id: string
   time: string
+  // Query mode adds stable identities and the normalized changed-TTL count;
+  // legacy window-only responses omit them.
+  agent_id?: string
+  probe_id?: string
   agent: string
   network: string // '' once the agent row is deleted
   src_site: string
   dst_site: string | null
   target: string | null
-  target_id: string | null // null once the target row is deleted
+  target_id: string | null // query mode retains this after display-row deletion
   old_path_hash: string
   new_path_hash: string
   old_hops: Hop[]
   new_hops: Hop[]
+  changed_hops?: number
+}
+
+export interface ListPage {
+  limit: number
+  offset: number
+  total: number
+  has_more: boolean
 }
 
 export interface PathEventsResponse {
   window: string
   events: PathEvent[]
+  page?: ListPage
+  truncated?: boolean
 }
 
 export interface CurrentPath {

@@ -61,6 +61,8 @@ func (a *api) handleOutages(w http.ResponseWriter, r *http.Request) {
 type pathEventJSON struct {
 	ID          string          `json:"id"`
 	Time        time.Time       `json:"time"`
+	AgentID     string          `json:"agent_id,omitempty"`
+	ProbeID     string          `json:"probe_id,omitempty"`
 	Agent       string          `json:"agent"`
 	Network     string          `json:"network"` // "" once the agent row is deleted
 	SrcSite     string          `json:"src_site"`
@@ -71,6 +73,13 @@ type pathEventJSON struct {
 	NewPathHash string          `json:"new_path_hash"`
 	OldHops     json.RawMessage `json:"old_hops"`
 	NewHops     json.RawMessage `json:"new_hops"`
+	ChangedHops *int            `json:"changed_hops,omitempty"`
+}
+
+var pathEventListSpec = listQuerySpec{
+	Sorts:        []string{"time", "agent", "source", "destination", "changes"},
+	DefaultSort:  "time",
+	DefaultOrder: "desc",
 }
 
 func (a *api) handlePathEvents(w http.ResponseWriter, r *http.Request) {
@@ -79,11 +88,43 @@ func (a *api) handlePathEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "unknown window (want 24h|7d|30d|90d|365d)")
 		return
 	}
-	events, err := a.db.ListPathEvents(r.Context(), spec.Window, scopeIDs(r.Context()))
-	if err != nil {
-		internalError(w, "list path events", err)
+	query, ok := readListQuery(w, r, pathEventListSpec)
+	if !ok {
 		return
 	}
+	if !query.Mode {
+		events, err := a.db.ListPathEvents(r.Context(), spec.Window, scopeIDs(r.Context()))
+		if err != nil {
+			internalError(w, "list path events", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"window": windowName(r),
+			"events": toPathEventJSON(events, false),
+		})
+		return
+	}
+	scope, ok := a.listQueryScope(w, r, query)
+	if !ok {
+		return
+	}
+	events, total, truncated, err := a.db.QueryPathEvents(r.Context(), spec.Window, store.PathEventFilter{
+		Query: query.Query, Sort: query.Sort, Order: query.Order,
+		Limit: query.Limit, Offset: query.Offset, Networks: scope,
+	})
+	if err != nil {
+		internalError(w, "query path events", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"window":    windowName(r),
+		"events":    toPathEventJSON(events, true),
+		"page":      query.page(total),
+		"truncated": truncated,
+	})
+}
+
+func toPathEventJSON(events []store.PathEventInfo, queryMode bool) []pathEventJSON {
 	out := make([]pathEventJSON, len(events))
 	for i, e := range events {
 		var targetID *string
@@ -91,7 +132,7 @@ func (a *api) handlePathEvents(w http.ResponseWriter, r *http.Request) {
 			s := e.TargetID.String()
 			targetID = &s
 		}
-		out[i] = pathEventJSON{
+		row := pathEventJSON{
 			ID: e.ID.String(), Time: e.Time, Agent: e.AgentHostname, Network: e.Network, SrcSite: e.SrcSite,
 			DstSite: e.DstSite, Target: e.TargetName, TargetID: targetID,
 			OldPathHash: hex.EncodeToString(e.OldPathHash),
@@ -99,11 +140,15 @@ func (a *api) handlePathEvents(w http.ResponseWriter, r *http.Request) {
 			OldHops:     json.RawMessage(e.OldHops),
 			NewHops:     json.RawMessage(e.NewHops),
 		}
+		if queryMode {
+			row.AgentID = e.AgentID.String()
+			row.ProbeID = e.ProbeID.String()
+			changed := e.ChangedHops
+			row.ChangedHops = &changed
+		}
+		out[i] = row
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"window": windowName(r),
-		"events": out,
-	})
+	return out
 }
 
 type currentPathJSON struct {
