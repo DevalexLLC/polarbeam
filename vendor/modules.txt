@@ -73,7 +73,7 @@ buf.build/go/standard/xstrings
 # cel.dev/expr v0.25.3
 ## explicit; go 1.23.0
 cel.dev/expr
-# codeberg.org/miekg/dns v0.6.90
+# codeberg.org/miekg/dns v0.6.101
 ## explicit; go 1.25.0
 codeberg.org/miekg/dns
 codeberg.org/miekg/dns/deleg

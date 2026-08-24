@@ -57,18 +57,20 @@ func UnmarshalJSON(data []byte) ([]RR, error) {
 	if err := json.Unmarshal(data, jrr); err != nil {
 		return nil, err
 	}
-	rrs := []RR{}
+	rrs := make([]RR, 1)
 	if len(jrr.RRset) > 0 {
 		rrs = make([]RR, len(jrr.RRset))
 	}
 
+	var ok bool
 	newfn := func() RR { return nil }
 	switch {
 	case jrr.Type > 0:
-		newfn = TypeToRR[jrr.Type]
+		newfn, ok = TypeToRR[jrr.Type]
 	case jrr.TypeName != "":
-		newfn = TypeToRR[StringToType[jrr.TypeName]]
-	default:
+		newfn, ok = TypeToRR[StringToType[jrr.TypeName]]
+	}
+	if !ok {
 		return nil, fmt.Errorf("bad RR type")
 	}
 
@@ -112,7 +114,7 @@ func UnmarshalJSON(data []byte) ([]RR, error) {
 			rrs[i].Header().TTL = jrr.TTL
 			rrs[i].Header().Class = class
 
-			if l := hex.DecodedLen(len(jrr.RdataHex)); cap(buf) < l {
+			if l := hex.DecodedLen(len(jrr.RRset[i].RdataHex)); cap(buf) < l {
 				buf = make([]byte, l)
 			}
 

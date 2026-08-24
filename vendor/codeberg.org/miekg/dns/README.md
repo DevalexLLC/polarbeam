@@ -19,10 +19,13 @@ We try to keep the "main" branch as sane as possible and at the bleeding edge of
 changes wherever reasonable. But because this version is young, we allow ourselves some more headroom for
 making backwards incompatible changes.
 
-Example programs are included _and_ benchmarked in `cmd`.
+Example programs are included _and_ benchmarked in
+[`cmd`](https://codeberg.org/miekg/dns/src/branch/main/cmd). And
 [`cmd/atomdns`](https://codeberg.org/miekg/dns/src/branch/main/cmd/atomdns/README.md) is a full blown
 production ready name server. Because of these we are depending on a lot more external packages - at some
 point these servers will be split off.
+
+Also [see the Go documentation](https://pkg.go.dev/codeberg.org/miekg/dns).
 
 This new version will not soon see a v1.0.0 release because I want to be able to still make changes. In a
 year or two (2028?) when things have stabilized it will be blessed with a v1.0.0.
@@ -53,7 +56,7 @@ For developers please read the
 
 - KISS.
 - Everything is a resource record, EDNS0 pseudo RRs included.
-  - Easy way to access RR's header and resource data (rdata).
+  - Easy way to access RR's header and resource data (_rdata_ package).
 - Small API.
   - Package _dnsutil_ contains functions that help programmers, but are not necessarily in scope the _dns_ package.
   - Package _dnstest_ contains functions and types that help you test, similar to the _httptest_ package.
@@ -76,7 +79,7 @@ For developers please read the
 
 A not-so-up-to-date-list-that-may-be-actually-current:
 
-- atomdns - included in cmd/atomdns - a high performance DNS server, based on the principles of CoreDNS, but
+- atomdns - included in [`cmd/atomdns`](https://codeberg.org/miekg/dns/src/branch/main/cmd/atomdns/) - a high performance DNS server, based on the principles of CoreDNS, but
   faster and simpler.
 - [dnscrypt-proxy](https://github.com/DNSCrypt/dnscrypt-proxy) - a flexible DNS proxy, with support for
   encrypted DNS protocols such as DNSCrypt v2, DOH, Anonymized DNSCrypt and
@@ -117,7 +120,6 @@ What users say:
 - DNS over HTTP (DOH), see the _dnshttp_ package.
 - Improved naming by embracing sub-packages.
 - Improved RRs, by having the rdata specified in an _rdata_ package.
-- Examples included the cmd/ directory.
 - Escapes (\DDD and \x) in domain names is not supported (anymore) - the overhead (50-100%) was too high.
 - Easy way for custom RRs and EDNS0 pseudo RRs.
 
@@ -150,8 +152,8 @@ developed in tandem with the library.
 
 _all of them_ and _then some_
 
-- 103{4,5} - DNS standard
-- 1348 - NSAP record (removed the record)
+- 103{3,4,5} - DNS standard
+- <s>1348 - NSAP record</s>
 - 1982 - Serial Arithmetic
 - 1876 - LOC record
 - 1995 - IXFR

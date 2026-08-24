@@ -43,4 +43,4 @@ type RRset struct {
 }
 
 // Pool pools allocations to encode/decode to wire format.
-var Pool = pool.New(512)
+var Pool = pool.New(8192)
