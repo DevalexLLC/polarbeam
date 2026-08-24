@@ -68,7 +68,17 @@ they probe. Starting points, assuming the suggested workload from
 
 Database storage dominates the control-plane numbers and plateaus at a
 steady state set by retention, so disk is a one-time provisioning decision
-rather than open-ended growth. On the agent host, keep free space above the
+rather than open-ended growth. The retention horizons are fixed by the
+shipped migrations and are not configurable:
+
+| Data | Kept for |
+|---|---|
+| Raw probe results | 14 days |
+| Hourly aggregates (latency and stage breakdown) | 100 days |
+| Daily aggregates (latency and stage breakdown) | 400 days |
+| Agent health strips (30-minute buckets) | 14 days |
+
+On the agent host, keep free space above the
 result-spool cap (256 MiB by default): the agent deliberately exits rather
 than drop measurements when its state volume cannot be written.
 `docs/sizing.md` explains the sizing model behind these figures and how to
@@ -1446,8 +1456,9 @@ Work from the compose directory on the control-plane host:
 1. **Back up the database** (see [Backup scope](#backup-scope)). The
    upgrade steps themselves modify no stored measurements or users, but a
    migration can install *retention policies* that later delete history
-   past the documented horizons (raw results after 14 days, hourly
-   aggregates after 100, daily after 400 — installed by migration 0010).
+   past the documented horizons (see the retention table in section 1:
+   raw results after 14 days, hourly aggregates after 100, daily after
+   400 — installed by migrations 0004, 0010, and 0016).
    If your upgrade crosses a release that adds retention, this backup
    becomes the only copy of anything older, so take it seriously.
 
