@@ -4,8 +4,10 @@ import { apiGet } from '../api'
 import Chart from '../components/Chart'
 import PathGraph, { isWidePath } from '../components/PathGraph'
 import { useNetworkFilter } from '../networkFilter'
+import { inheritRouteNetwork } from '../routeState'
 import { useTheme } from '../theme'
 import { useTimezone } from '../timezone'
+import { useRouteParam } from '../useRouteState'
 import {
   fmtAgo,
   fmtLatency,
@@ -119,7 +121,7 @@ function DirectionCard({ title, s, dir }: { title: string; s: DirectionSummary; 
                 key={`${check.type}-${index}`}
                 className={cls}
                 title={chipTitle + ' · open target detail'}
-                href={'#/target/' + encodeURIComponent(check.target_id)}
+                href={inheritRouteNetwork('#/target/' + encodeURIComponent(check.target_id))}
               >
                 {body}
               </a>
@@ -235,8 +237,12 @@ export default function PairDetail({
   b: string
   onAuthError: (err: unknown) => void
 }) {
-  const [win, setWin] = useState<Window>('24h')
-  const [metric, setMetric] = useState<Metric>('latency')
+  const [windowParam, setWindowParam] = useRouteParam('window', '24h')
+  const [metricParam, setMetricParam] = useRouteParam('metric', 'latency')
+  const win = windowParam as Window
+  const metric = metricParam as Metric
+  const setWin = (value: Window) => setWindowParam(value)
+  const setMetric = (value: Metric) => setMetricParam(value)
   // The global top-bar filter; '' = all planes (the pre-networks fold). A
   // filtered plane the pair does not span renders honestly stale/empty —
   // same as the matrix — rather than silently falling back to the fold.
@@ -438,7 +444,7 @@ export default function PairDetail({
       <div className="page-head page-head-primary">
         <div>
           <div className="eyebrow">
-            <a href="#/">Overview</a> / Pair detail
+            <a href={inheritRouteNetwork('#/')}>Overview</a> / Pair detail
           </div>
           <h1>
             {a} ⇄ {b}

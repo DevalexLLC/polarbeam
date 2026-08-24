@@ -34,6 +34,12 @@ reported alerts before merging.
 After starting the stack, use `cd web && pnpm run dev` for Vite. Never run
 the base Compose file alone for development.
 
+Dashboard operational state is encoded in query parameters inside the hash
+route and canonicalized by `web/src/routeState.ts`. New filters, pagination,
+sorts, or row selections must use that module rather than component state or
+local storage: discrete actions push history, debounced text input replaces
+the current entry, and default or invalid values are omitted.
+
 ## Coding Style & Naming Conventions
 
 Format Go with `gofmt`; use tabs, lowercase packages, and conventional

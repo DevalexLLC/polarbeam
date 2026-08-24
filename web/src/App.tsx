@@ -3,6 +3,13 @@ import { ApiError, apiGet, apiPost, setCsrfToken } from './api'
 import { capsOf, roleLabel } from './caps'
 import { PRIMARY_NAVIGATION, SETTINGS_NAVIGATION, navigationItemIsCurrent } from './navigation'
 import { reconcileNetworkFilter } from './networkFilter'
+import {
+  inheritRouteNetwork,
+  replaceCanonicalRoute,
+  routeParam,
+  subscribeRouteState,
+  updateRouteParams,
+} from './routeState'
 import { canOpenSettings, resolveTab } from './settingsTabs'
 import type { AuthProviders, LoginResponse, NetworksConfigResponse, UIBanner, User } from './types'
 import BannerFrame from './components/BannerFrame'
@@ -50,7 +57,7 @@ function decodeSegment(s: string): string {
 }
 
 function parseHash(hash: string): Route {
-  const parts = hash.replace(/^#\/?/, '').split('/')
+  const parts = hash.replace(/^#\/?/, '').split('?')[0].split('/')
   if (parts[0] === 'pair' && parts[1] && parts[2]) {
     return { view: 'pair', a: decodeSegment(parts[1]), b: decodeSegment(parts[2]) }
   }
@@ -62,16 +69,14 @@ function parseHash(hash: string): Route {
   }
   if (parts[0] === 'incidents' || parts[0] === 'outages') return { view: 'incidents' }
   if (parts[0] === 'routes' || parts[0] === 'paths') return { view: 'routes' }
-  // #/agents/<id> deep-links to that agent's expanded detail; the hash is
-  // the single source of truth for which row is open (see Agents.tsx).
-  if (parts[0] === 'agents') return { view: 'agents', agent: parts[1] ? decodeSegment(parts[1]) : null }
+  if (parts[0] === 'agents') return { view: 'agents', agent: routeParam(hash, 'agent') || null }
   if (parts[0] === 'about') return { view: 'about' }
   if (parts[0] === 'settings') {
-    // #/settings/<tab>, kept raw. Which tabs exist AND which this caller may
+    // The section is kept raw. Which tabs exist AND which this caller may
     // open is a question only answerable once the session is known, so it is
     // resolved at render (resolveTab) rather than here: parseHash runs from
     // a useState initializer before /auth/me returns.
-    return { view: 'settings', tab: decodeSegment(parts[1] ?? '') }
+    return { view: 'settings', tab: routeParam(hash, 'section') || decodeSegment(parts[1] ?? '') }
   }
   // #/connectivity and #/sightlines land here too: the map/matrix switch
   // lives on the Overview now, so those bookmarks alias to it.
@@ -105,9 +110,11 @@ export default function App() {
   const initialRouteRef = useRef(true)
 
   useEffect(() => {
-    const onHash = () => setRoute(parseHash(location.hash))
-    window.addEventListener('hashchange', onHash)
-    return () => window.removeEventListener('hashchange', onHash)
+    const onRoute = () => {
+      setRoute(parseHash(replaceCanonicalRoute({}, false)))
+    }
+    onRoute()
+    return subscribeRouteState(onRoute)
   }, [])
 
   // Navigation moves keyboard focus to the new page's heading. Views that
@@ -212,7 +219,7 @@ export default function App() {
   // The network list decides whether the top-bar filter renders at all
   // (single-network installs never see it). Fetch on login and poll so an
   // admin adding or deleting a plane converges everywhere within 30s; each
-  // fetch also reconciles a persisted filter that may have gone stale. A
+  // fetch also reconciles a URL filter that may have gone stale. A
   // failure keeps the last known list — filtering must never block the app.
   useEffect(() => {
     // Drop the previous session's list before fetching this one's. The
@@ -260,8 +267,9 @@ export default function App() {
   const caps = useMemo(() => (user ? capsOf(user) : null), [user])
   const primaryNavigation = PRIMARY_NAVIGATION.map((item) => ({
     ...item,
+    href: inheritRouteNetwork(item.href),
     current: navigationItemIsCurrent(item.href, route.view),
-    sameRoute: item.href === (location.hash || '#/') || JSON.stringify(parseHash(item.href)) === routeKey,
+    sameRoute: JSON.stringify(parseHash(item.href)) === routeKey,
   }))
   const mobileNavigation =
     caps !== null && canOpenSettings(caps)
@@ -269,10 +277,9 @@ export default function App() {
           ...primaryNavigation,
           {
             ...SETTINGS_NAVIGATION,
+            href: inheritRouteNetwork(SETTINGS_NAVIGATION.href),
             current: navigationItemIsCurrent(SETTINGS_NAVIGATION.href, route.view),
-            sameRoute:
-              SETTINGS_NAVIGATION.href === location.hash ||
-              JSON.stringify(parseHash(SETTINGS_NAVIGATION.href)) === routeKey,
+            sameRoute: JSON.stringify(parseHash(SETTINGS_NAVIGATION.href)) === routeKey,
           },
         ]
       : primaryNavigation
@@ -284,8 +291,7 @@ export default function App() {
   useEffect(() => {
     if (route.view !== 'settings' || settingsTab === null) return
     if (route.tab === settingsTab) return
-    const href = settingsTab === 'thresholds' ? '#/settings' : `#/settings/${settingsTab}`
-    history.replaceState(null, '', href)
+    updateRouteParams({ section: settingsTab === 'thresholds' ? null : settingsTab }, 'replace')
     setRoute({ view: 'settings', tab: settingsTab })
   }, [route, settingsTab])
 
@@ -336,7 +342,7 @@ export default function App() {
           Skip to content
         </button>
         <header className="topbar">
-          <a className="brand" href="#/">
+          <a className="brand" href={inheritRouteNetwork('#/')}>
             <LogoMark className="logo-mark logo-mark-header" />
             <span className="brand-name">PolarBEAM</span>
           </a>
@@ -378,7 +384,7 @@ export default function App() {
                 </div>
                 {caps !== null && canOpenSettings(caps) && (
                   <a
-                    href="#/settings"
+                    href={inheritRouteNetwork('#/settings')}
                     aria-current={route.view === 'settings' ? 'page' : undefined}
                     onClick={(event) => event.currentTarget.closest('details')?.removeAttribute('open')}
                   >
@@ -388,7 +394,7 @@ export default function App() {
                 {/* Not admin-gated, unlike Settings: provenance and the server
                   build are useful to every role. */}
                 <a
-                  href="#/about"
+                  href={inheritRouteNetwork('#/about')}
                   aria-current={route.view === 'about' ? 'page' : undefined}
                   onClick={(event) => event.currentTarget.closest('details')?.removeAttribute('open')}
                 >

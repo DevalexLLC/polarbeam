@@ -1,6 +1,7 @@
 import { cellSeverity, SEVERITY_LABEL, type Severity, type ThresholdResolver } from '../severity'
 import type { MatrixCell, Site } from '../types'
 import { fmtLatency } from '../format'
+import { inheritRouteNetwork } from '../routeState'
 
 // Matrix cells grade through the same cellSeverity fold as the map and
 // Overview — the raw API status alone would call a threshold-violating
@@ -61,7 +62,7 @@ function Cell({ cell, thresholds }: { cell: MatrixCell; thresholds: ThresholdRes
   return (
     <td className={'cell status-' + cls}>
       <a
-        href={`#/pair/${encodeURIComponent(cell.src)}/${encodeURIComponent(cell.dst)}`}
+        href={inheritRouteNetwork(`#/pair/${encodeURIComponent(cell.src)}/${encodeURIComponent(cell.dst)}`)}
         title={`${cell.src} → ${cell.dst} · ${CLASS_LABEL[cls]} · ${detail}`}
         aria-label={`${cell.src} to ${cell.dst}: ${CLASS_LABEL[cls]}. ${checksLong}${worstLossLong}. ${detail}`}
       >

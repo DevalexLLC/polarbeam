@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import { MAP_DOTS, MAP_VIEW_H, MAP_VIEW_W } from '../assets/mapGeo'
 import { fmtLatency } from '../format'
 import { projectMap } from '../geo'
+import { inheritRouteNetwork } from '../routeState'
 import { bubbleRadius, declutter, type DeclutterNode } from '../mapLayout'
 import {
   cellSeverity,
@@ -385,7 +386,9 @@ export default function WorldMap({
                   {shownStats.peers.map((peer) => (
                     <a
                       key={peer}
-                      href={`#/pair/${encodeURIComponent(shownSite.name)}/${encodeURIComponent(peer)}`}
+                      href={inheritRouteNetwork(
+                        `#/pair/${encodeURIComponent(shownSite.name)}/${encodeURIComponent(peer)}`,
+                      )}
                       aria-label={`Open pair detail for ${shownSite.name} and ${peer}`}
                     >
                       {shownSite.name} ⇄ {peer}

@@ -5,8 +5,10 @@ import Chart from '../components/Chart'
 import HealthStrip, { stripStats, UptimeValue } from '../components/HealthStrip'
 import PathGraph, { isWidePath } from '../components/PathGraph'
 import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
+import { inheritRouteNetwork } from '../routeState'
 import { useTheme } from '../theme'
 import { useTimezone } from '../timezone'
+import { useRouteParam } from '../useRouteState'
 import {
   fmtAgo,
   fmtLatency,
@@ -203,10 +205,14 @@ function StripRows({
   probes,
   bucketS,
   multiNetwork,
+  selectedProbe,
+  onSelectProbe,
 }: {
   probes: TargetHealthProbe[]
   bucketS: number
   multiNetwork: boolean
+  selectedProbe: string
+  onSelectProbe: (probe: string) => void
 }) {
   const nowS = Date.now() / 1000
   // Sorting a freshly-spread copy, same as Agents' probe sort (toSorted
@@ -215,12 +221,27 @@ function StripRows({
   const sorted = [...probes].sort((x, y) => probeSortKey(x).localeCompare(probeSortKey(y)))
   return (
     <div className="probe-strip-list">
-      {sorted.map((p) => {
+      {sorted.map((p, index) => {
         const s = stripStats(p.buckets, bucketS, nowS)
         return (
-          <div key={p.agent_id + ':' + p.probe_id} className="probe-strip-row">
+          <div
+            key={p.agent_id + ':' + p.probe_id}
+            id={
+              index === sorted.findIndex((probe) => probe.probe_id === p.probe_id)
+                ? 'target-probe-' + p.probe_id
+                : undefined
+            }
+            className={'probe-strip-row' + (selectedProbe === p.probe_id ? ' selected-row' : '')}
+          >
             <div className="probe-strip-label">
-              <span className="mono">{p.type}</span>
+              <button
+                type="button"
+                className="linklike mono"
+                aria-pressed={selectedProbe === p.probe_id}
+                onClick={() => onSelectProbe(selectedProbe === p.probe_id ? '' : p.probe_id)}
+              >
+                {p.type}
+              </button>
               <span>
                 {multiNetwork ? `${p.site} · ${p.network}` : p.site} · {p.hostname}
               </span>
@@ -267,8 +288,13 @@ function StripRows({
 }
 
 export default function TargetDetail({ id, onAuthError }: { id: string; onAuthError: (err: unknown) => void }) {
-  const [win, setWin] = useState<Window>('24h')
-  const [metric, setMetric] = useState<Metric>('latency')
+  const [windowParam, setWindowParam] = useRouteParam('window', '24h')
+  const [metricParam, setMetricParam] = useRouteParam('metric', 'latency')
+  const [selectedProbe, setSelectedProbe] = useRouteParam('probe')
+  const win = windowParam as Window
+  const metric = metricParam as Metric
+  const setWin = (value: Window) => setWindowParam(value)
+  const setMetric = (value: Metric) => setMetricParam(value)
   const { resolved } = useTheme()
   // Also covers the fmtTime tooltips below; mode reaches the charts through
   // the options factories so axis ticks and legends follow the toggle.
@@ -284,6 +310,28 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
   const [paths, setPaths] = useState<TargetPathsResponse | null>(null)
   const [settings, setSettings] = useState<SettingsResponse | null>(null)
   const [error, setError] = useState('')
+  const scrolledProbe = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!selectedProbe) {
+      scrolledProbe.current = null
+      return
+    }
+    if (!health) return
+    if (
+      health.probes.some((probe) => probe.probe_id === selectedProbe && matchesNetworkFilter(network, probe.network))
+    ) {
+      const key = `${network}\u0000${selectedProbe}`
+      if (scrolledProbe.current !== key) {
+        const row = document.getElementById('target-probe-' + selectedProbe)
+        if (!row) return
+        row.scrollIntoView({ block: 'nearest' })
+        scrolledProbe.current = key
+      }
+      return
+    }
+    setSelectedProbe('', 'replace')
+  }, [health, network, selectedProbe, setSelectedProbe])
 
   // Same load discipline as PairDetail: settings ride along so threshold
   // changes and chart redraws land together, and the generation counter
@@ -499,7 +547,7 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
       <div className="page-head page-head-primary">
         <div>
           <div className="eyebrow">
-            <a href="#/">Overview</a> / Target detail
+            <a href={inheritRouteNetwork('#/')}>Overview</a> / Target detail
           </div>
           <h1>{title}</h1>
           <p>
@@ -563,7 +611,7 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
                 label={srcLabel(s.site, s.network)}
                 pairHref={
                   target.kind === 'agent' && target.dst_site && target.dst_site !== s.site
-                    ? `#/pair/${encodeURIComponent(s.site)}/${encodeURIComponent(target.dst_site)}`
+                    ? inheritRouteNetwork(`#/pair/${encodeURIComponent(s.site)}/${encodeURIComponent(target.dst_site)}`)
                     : null
                 }
               />
@@ -576,7 +624,13 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
               <span className="hint">per probe series, last 24 h — click a slot for its failures</span>
             </div>
             {health && shownHealthProbes.length > 0 ? (
-              <StripRows probes={shownHealthProbes} bucketS={health.bucket_s || 1800} multiNetwork={multiNetwork} />
+              <StripRows
+                probes={shownHealthProbes}
+                bucketS={health.bucket_s || 1800}
+                multiNetwork={multiNetwork}
+                selectedProbe={selectedProbe}
+                onSelectProbe={setSelectedProbe}
+              />
             ) : (
               <div className="empty-state">
                 <strong>No probe series yet</strong>

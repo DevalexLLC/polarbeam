@@ -1,0 +1,74 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { canonicalizeRouteHash, inheritRouteNetwork, routeNumberParam, routeParam } from '../src/routeState.ts'
+
+test('canonical state omits defaults, unknown keys, and invalid values', () => {
+  assert.equal(
+    canonicalizeRouteHash('#/incidents?window=24h&status=nope&page=3&q=router&network=blue&junk=1').hash,
+    '#/incidents?network=blue&q=router',
+  )
+  assert.equal(canonicalizeRouteHash('#/routes?page=01&sort=nope&order=asc').hash, '#/routes?order=asc')
+  assert.equal(canonicalizeRouteHash('#/target/a%2Fb?metric=nope&window=7d').hash, '#/target/a%2Fb?window=7d')
+})
+
+test('legacy route paths canonicalize without losing selection', () => {
+  assert.equal(canonicalizeRouteHash('#/outages?status=resolved').hash, '#/incidents?status=resolved')
+  assert.equal(canonicalizeRouteHash('#/paths?q=ny').hash, '#/routes?q=ny')
+  assert.equal(canonicalizeRouteHash('#/agents/a%2Fb').hash, '#/agents?agent=a%2Fb')
+  assert.equal(canonicalizeRouteHash('#/settings/probes').hash, '#/settings?section=probes')
+})
+
+test('network is URL-only and reconciles against accessible planes', () => {
+  const hash = '#/agents?network=secret&health=attention'
+  assert.equal(canonicalizeRouteHash(hash).hash, hash)
+  assert.equal(canonicalizeRouteHash(hash, { knownNetworks: ['blue', 'green'] }).hash, '#/agents?health=attention')
+  assert.equal(canonicalizeRouteHash('#/agents?network=blue', { knownNetworks: ['blue'] }).hash, '#/agents')
+  assert.equal(
+    inheritRouteNetwork('#/incidents?status=resolved', '#/agents?network=blue'),
+    '#/incidents?network=blue&status=resolved',
+  )
+  assert.equal(
+    inheritRouteNetwork('#/target/t1?probe=p1', '#/agents?network=blue'),
+    '#/target/t1?network=blue&probe=p1',
+  )
+})
+
+test('route schemas preserve each supported view state in stable order', () => {
+  assert.equal(canonicalizeRouteHash('#/?topology=matrix&network=blue').hash, '#/?network=blue&topology=matrix')
+  assert.equal(
+    canonicalizeRouteHash('#/incidents?incident=i1&slice=1720000000000&q=dns&status=resolved&window=7d').hash,
+    '#/incidents?window=7d&status=resolved&q=dns&slice=1720000000000&incident=i1',
+  )
+  assert.equal(
+    canonicalizeRouteHash('#/routes?event=e2&page=3&order=asc&sort=changes&q=x&window=30d&network=blue').hash,
+    '#/routes?network=blue&window=30d&q=x&sort=changes&order=asc&page=3&event=e2',
+  )
+  assert.equal(
+    canonicalizeRouteHash('#/targets?page=2&status=incident&kind=external&sort=probes&order=desc').hash,
+    '#/targets?kind=external&status=incident&sort=probes&order=desc&page=2',
+  )
+  assert.equal(
+    canonicalizeRouteHash('#/agents?probe=p1&agent=a1&page=4&order=desc&sort=site&health=attention&q=ny').hash,
+    '#/agents?q=ny&health=attention&sort=site&order=desc&page=4&agent=a1&probe=p1',
+  )
+  assert.equal(
+    canonicalizeRouteHash('#/pair/ny/lon?metric=loss&window=90d').hash,
+    '#/pair/ny/lon?window=90d&metric=loss',
+  )
+  assert.equal(
+    canonicalizeRouteHash('#/target/t1?probe=p1&metric=loss&window=30d').hash,
+    '#/target/t1?window=30d&metric=loss&probe=p1',
+  )
+  assert.equal(canonicalizeRouteHash('#/pair/ny/lon?window=365d').hash, '#/pair/ny/lon?window=365d')
+  assert.equal(
+    canonicalizeRouteHash('#/settings?probe=p1&site=s1&subsection=direct&section=probes').hash,
+    '#/settings?section=probes&subsection=direct&probe=p1',
+  )
+})
+
+test('typed readers use canonical values and safe integer fallbacks', () => {
+  assert.equal(routeParam('#/pair/a/b?metric=loss', 'metric'), 'loss')
+  assert.equal(routeParam('#/pair/a/b?metric=bogus', 'metric'), '')
+  assert.equal(routeNumberParam('#/routes?page=7', 'page', 1), 7)
+  assert.equal(routeNumberParam('#/routes?page=999999999999999999999', 'page', 1), 1)
+})

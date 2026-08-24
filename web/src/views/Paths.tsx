@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { apiGet } from '../api'
 import DisclosureChevron from '../components/DisclosureChevron'
 import PathGraph from '../components/PathGraph'
 import { fmtAgo, fmtTime } from '../format'
 import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
+import { inheritRouteNetwork, updateRouteParams } from '../routeState'
 import { useTimezone } from '../timezone'
+import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
 import type { Hop, PathEvent, PathEventsResponse, Window } from '../types'
 import { WINDOWS } from '../types'
 
@@ -66,8 +68,7 @@ function changedHopCount(oldHops: Hop[], newHops: Hop[]): number {
   return changed
 }
 
-function EventRow({ e }: { e: PathEvent }) {
-  const [expanded, setExpanded] = useState(false)
+function EventRow({ e, expanded, onToggle }: { e: PathEvent; expanded: boolean; onToggle: () => void }) {
   const count = changedHopCount(e.old_hops, e.new_hops)
   const detailsID = `path-event-${e.id}`
   // Destination links: site→site events go to the pair page, external
@@ -75,12 +76,14 @@ function EventRow({ e }: { e: PathEvent }) {
   // plain text.
   const dst = e.dst_site ? (
     e.src_site ? (
-      <a href={`#/pair/${encodeURIComponent(e.src_site)}/${encodeURIComponent(e.dst_site)}`}>{e.dst_site}</a>
+      <a href={inheritRouteNetwork(`#/pair/${encodeURIComponent(e.src_site)}/${encodeURIComponent(e.dst_site)}`)}>
+        {e.dst_site}
+      </a>
     ) : (
       e.dst_site
     )
   ) : e.target && e.target_id ? (
-    <a href={`#/target/${encodeURIComponent(e.target_id)}`}>{e.target}</a>
+    <a href={inheritRouteNetwork(`#/target/${encodeURIComponent(e.target_id)}`)}>{e.target}</a>
   ) : (
     (e.target ?? '?')
   )
@@ -96,7 +99,7 @@ function EventRow({ e }: { e: PathEvent }) {
         className="path-event-head"
         onClick={(ev) => {
           if ((ev.target as Element).closest('button, a')) return
-          setExpanded(!expanded)
+          onToggle()
         }}
       >
         <span className="mono">
@@ -113,7 +116,7 @@ function EventRow({ e }: { e: PathEvent }) {
           className="incident-toggle path-toggle"
           aria-expanded={expanded}
           aria-controls={detailsID}
-          onClick={() => setExpanded(!expanded)}
+          onClick={onToggle}
         >
           {expanded ? 'Hide details' : 'View details'}
           <DisclosureChevron expanded={expanded} />
@@ -153,11 +156,15 @@ function EventRow({ e }: { e: PathEvent }) {
 export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => void }) {
   useTimezone() // re-render fmtTime tooltips on UTC/local toggle
   const { network } = useNetworkFilter()
-  const [win, setWin] = useState<Window>('24h')
+  const [windowParam] = useRouteParam('window', '24h')
+  const [sort] = useRouteParam('sort', 'time')
+  const [order] = useRouteParam('order', 'desc')
+  const [page, setPage] = useRouteNumber('page', 1)
+  const [expandedEvent, setExpandedEvent] = useRouteParam('event')
+  const win = windowParam as Window
   const [data, setData] = useState<PathEventsResponse | null>(null)
   const [error, setError] = useState('')
-  const [query, setQuery] = useState('')
-  const [visibleLimit, setVisibleLimit] = useState(ROUTE_PAGE)
+  const [query, setQuery] = useRouteSearch()
 
   useEffect(() => {
     let cancelled = false
@@ -189,29 +196,63 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
   )
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase()
-    if (!needle) return events
+    let filtered = events
     // "src -> dst" filters by direction; either side may be empty ("lon ->",
     // "-> ny"). "→" is accepted so a copied row header works as a query.
     const parts = needle.split(/->|→/)
-    if (parts.length > 1) {
+    if (needle && parts.length > 1) {
       const src = parts[0].trim()
       const dst = parts.slice(1).join('->').trim()
-      return events.filter((event) => {
+      filtered = events.filter((event) => {
         const srcMatch = !src || event.src_site.toLowerCase().includes(src)
         const dstMatch =
           !dst ||
           [event.dst_site, event.target].filter(Boolean).some((value) => String(value).toLowerCase().includes(dst))
         return srcMatch && dstMatch
       })
+    } else if (needle) {
+      filtered = events.filter((event) =>
+        [event.src_site, event.dst_site, event.target, event.agent]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(needle)),
+      )
     }
-    return events.filter((event) =>
-      [event.src_site, event.dst_site, event.target, event.agent]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(needle)),
-    )
-  }, [events, query])
+    // oxlint-disable-next-line unicorn/no-array-sort
+    return [...filtered].sort((a, b) => {
+      const value = (event: PathEvent): string | number => {
+        if (sort === 'source') return event.src_site
+        if (sort === 'destination') return event.dst_site ?? event.target ?? ''
+        if (sort === 'changes') return changedHopCount(event.old_hops, event.new_hops)
+        return Date.parse(event.time)
+      }
+      const x = value(a)
+      const y = value(b)
+      const comparison = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y))
+      return order === 'asc' ? comparison : -comparison
+    })
+  }, [events, order, query, sort])
 
-  useEffect(() => setVisibleLimit(ROUTE_PAGE), [query, win, network])
+  const pageCount = Math.max(1, Math.ceil(visible.length / ROUTE_PAGE))
+  const positionedEvent = useRef<string | null>(null)
+  useEffect(() => {
+    if (page > pageCount) setPage(pageCount, 'replace')
+  }, [page, pageCount, setPage])
+  useEffect(() => {
+    if (!expandedEvent || !data) return
+    if (events.some((event) => event.id === expandedEvent)) return
+    setExpandedEvent('', 'replace')
+  }, [data, events, expandedEvent, setExpandedEvent])
+  useEffect(() => {
+    if (!expandedEvent) {
+      positionedEvent.current = null
+      return
+    }
+    if (positionedEvent.current === expandedEvent) return
+    const index = visible.findIndex((event) => event.id === expandedEvent)
+    if (index === -1) return
+    positionedEvent.current = expandedEvent
+    setPage(Math.floor(index / ROUTE_PAGE) + 1, 'replace')
+  }, [expandedEvent, setPage, visible])
 
   if (error && !data)
     return (
@@ -259,9 +300,34 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
             onChange={(e) => setQuery(e.target.value)}
           />
         </label>
+        <label className="compact-select">
+          <span>Sort</span>
+          <select
+            value={sort}
+            onChange={(event) => updateRouteParams({ sort: event.target.value, page: null, event: null })}
+          >
+            <option value="time">Time</option>
+            <option value="source">Source</option>
+            <option value="destination">Destination</option>
+            <option value="changes">Changed hops</option>
+          </select>
+        </label>
+        <button
+          type="button"
+          className="secondary-button"
+          aria-label={`Change to ${order === 'asc' ? 'descending' : 'ascending'} order; currently ${order === 'asc' ? 'ascending' : 'descending'}`}
+          onClick={() => updateRouteParams({ order: order === 'asc' ? null : 'asc', page: null })}
+        >
+          {order === 'asc' ? 'Ascending' : 'Descending'}
+        </button>
         <div className="control-group" role="group" aria-label="Window">
           {WINDOWS.map((w) => (
-            <button key={w} className={win === w ? 'active' : ''} aria-pressed={win === w} onClick={() => setWin(w)}>
+            <button
+              key={w}
+              className={win === w ? 'active' : ''}
+              aria-pressed={win === w}
+              onClick={() => updateRouteParams({ window: w === '24h' ? null : w, page: null, event: null })}
+            >
               {w}
             </button>
           ))}
@@ -290,19 +356,24 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
           </div>
         ) : (
           <>
-            {visible.slice(0, visibleLimit).map((e) => (
-              <EventRow key={e.id} e={e} />
+            {visible.slice((page - 1) * ROUTE_PAGE, page * ROUTE_PAGE).map((e) => (
+              <EventRow
+                key={e.id}
+                e={e}
+                expanded={expandedEvent === e.id}
+                onToggle={() => setExpandedEvent(expandedEvent === e.id ? '' : e.id)}
+              />
             ))}
-            {visibleLimit < visible.length && (
+            {pageCount > 1 && (
               <div className="progressive-footer">
                 <span className="hint">
-                  Showing {visibleLimit} of {visible.length} route changes
+                  Page {page} of {pageCount} · {visible.length} route changes
                 </span>
-                <button
-                  className="secondary-button"
-                  onClick={() => setVisibleLimit((limit) => Math.min(visible.length, limit + ROUTE_PAGE))}
-                >
-                  Show {Math.min(ROUTE_PAGE, visible.length - visibleLimit)} more
+                <button className="secondary-button" disabled={page === 1} onClick={() => setPage(page - 1)}>
+                  Previous
+                </button>
+                <button className="secondary-button" disabled={page === pageCount} onClick={() => setPage(page + 1)}>
+                  Next
                 </button>
               </div>
             )}

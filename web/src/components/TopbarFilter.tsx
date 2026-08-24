@@ -17,7 +17,7 @@ export default function TopbarFilter({ networks, scope }: { networks: string[]; 
   }
   // Single-network installs never filter: no control, top bar unchanged.
   // But an ACTIVE filter always keeps the control (and "All networks")
-  // reachable — a persisted filter applies before the networks list loads,
+  // reachable — a URL filter applies before the networks list loads,
   // and if that fetch fails the user must still be able to clear it.
   if (networks.length <= 1 && network === '') return null
   const options = ['', ...networks]

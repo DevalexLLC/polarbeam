@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { apiDelete, apiGet, apiPost, apiPut } from '../api'
 import { fmtAgo } from '../format'
 import type {
@@ -191,10 +191,14 @@ function paramsSummary(p: ProbeConfig): string {
 export default function ProbesPanel({
   canWrite,
   plane,
+  selectedProbe,
+  onSelectedProbe,
   onAuthError,
 }: {
   canWrite: boolean
   plane: PlaneChoice
+  selectedProbe: string
+  onSelectedProbe: (probe: string, mode?: 'push' | 'replace') => void
   onAuthError: (err: unknown) => void
 }) {
   const [data, setData] = useState<ProbesConfigResponse | null>(null)
@@ -217,6 +221,7 @@ export default function ProbesPanel({
   const [editID, setEditID] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState<ProbeDraft | null>(null)
   const [editErrors, setEditErrors] = useState<string[]>([])
+  const scrolledProbe = useRef<string | null>(null)
 
   // The registry is static per server version: one fetch, no poll.
   useEffect(() => {
@@ -316,6 +321,7 @@ export default function ProbesPanel({
       setWarnings(res.warnings ?? [])
       setEditID(null)
       setEditDraft(null)
+      onSelectedProbe('', 'replace')
       await reload()
     } catch (err) {
       onAuthError(err)
@@ -355,6 +361,7 @@ export default function ProbesPanel({
     setRowError('')
     try {
       await apiDelete('/api/v1/config/probes/' + p.id)
+      if (selectedProbe === p.id) onSelectedProbe('', 'replace')
       await reload()
     } catch (err) {
       onAuthError(err)
@@ -368,6 +375,39 @@ export default function ProbesPanel({
   const shown = useMemo(() => probes.slice(0, visible), [probes, visible])
   // Single-network installs never see the network picker or labels.
   const multiNetwork = plane.kind !== 'implicit'
+
+  useEffect(() => {
+    if (!selectedProbe) {
+      scrolledProbe.current = null
+      if (editID !== null) {
+        setEditID(null)
+        setEditDraft(null)
+      }
+      return
+    }
+    if (!data) return
+    const selectedIndex = data.probes.findIndex((probe) => probe.id === selectedProbe)
+    const selected = data.probes[selectedIndex]
+    if (!selected) {
+      onSelectedProbe('', 'replace')
+      return
+    }
+    if (selectedIndex >= visible) {
+      setVisible(Math.ceil((selectedIndex + 1) / PROBE_PAGE) * PROBE_PAGE)
+      return
+    }
+    if (editID !== selectedProbe) {
+      setEditID(selectedProbe)
+      setEditDraft(draftFrom(selected))
+      setEditErrors([])
+    }
+    if (scrolledProbe.current !== selectedProbe) {
+      const row = document.getElementById('settings-probe-' + selectedProbe)
+      if (!row) return
+      row.scrollIntoView({ block: 'nearest' })
+      scrolledProbe.current = selectedProbe
+    }
+  }, [data, editID, onSelectedProbe, selectedProbe, visible])
 
   if (error && !data) {
     return (
@@ -579,7 +619,11 @@ export default function ProbesPanel({
               <tbody>
                 {shown.map((p) => (
                   <>
-                    <tr key={p.id} className={p.enabled ? '' : 'probe-disabled'}>
+                    <tr
+                      key={p.id}
+                      id={'settings-probe-' + p.id}
+                      className={(p.enabled ? '' : 'probe-disabled') + (selectedProbe === p.id ? ' selected-row' : '')}
+                    >
                       <td data-label="Type" className="mono">
                         {p.type}
                       </td>
@@ -612,10 +656,12 @@ export default function ProbesPanel({
                               if (editID === p.id) {
                                 setEditID(null)
                                 setEditDraft(null)
+                                onSelectedProbe('')
                               } else {
                                 setEditID(p.id)
                                 setEditDraft(draftFrom(p))
                                 setEditErrors([])
+                                onSelectedProbe(p.id)
                               }
                             }}
                           >
