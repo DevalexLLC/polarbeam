@@ -6,7 +6,9 @@ import PageError from '../components/PageError'
 import { fmtAgo } from '../format'
 import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
 import { inheritRouteNetwork } from '../routeState'
+import { buildSiteTopology, topologyUrgentSites } from '../siteTopology'
 import { buildThresholdResolver, cellSeverity } from '../severity'
+import { resolveTopologyMode } from '../topologyMode'
 import { useRouteParam } from '../useRouteState'
 import type {
   AgentHealthResponse,
@@ -19,6 +21,19 @@ import type {
 } from '../types'
 
 const POLL_MS = 30_000
+const NARROW_TOPOLOGY = '(max-width: 640px)'
+
+function useNarrowTopology(): boolean {
+  const [narrow, setNarrow] = useState(() => window.matchMedia(NARROW_TOPOLOGY).matches)
+  useEffect(() => {
+    const query = window.matchMedia(NARROW_TOPOLOGY)
+    const update = () => setNarrow(query.matches)
+    query.addEventListener('change', update)
+    update()
+    return () => query.removeEventListener('change', update)
+  }, [])
+  return narrow
+}
 
 // dropped_results is a lifetime running total that never resets, so it must
 // not flag attention forever — only drops recent enough to still be
@@ -84,8 +99,9 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
   const [outages, setOutages] = useState<OutagesResponse | null>(null)
   const [settings, setSettings] = useState<SettingsResponse | null>(null)
   const [health, setHealth] = useState<AgentHealthResponse | null>(null)
-  const [topology, setTopology] = useRouteParam('topology', 'map')
-  const connMode = topology as ConnectivityMode
+  const [explicitTopology, setTopology] = useRouteParam('topology')
+  const narrowTopology = useNarrowTopology()
+  const connMode: ConnectivityMode = resolveTopologyMode(explicitTopology, narrowTopology)
   // The global top-bar filter; '' = all planes folded together — the
   // pre-networks view. Every stat tile and card on this page honors it.
   const { network: netFilter } = useNetworkFilter()
@@ -160,6 +176,14 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
   const active = useMemo(
     () => outages?.outages.filter((o) => o.closed_at == null && matchesNetworkFilter(netFilter, o.network)) ?? [],
     [outages, netFilter],
+  )
+  const urgentSites = useMemo(() => {
+    const offline = shownAgents.filter((agent) => agent.offline).map((agent) => agent.site)
+    return topologyUrgentSites(offline, active)
+  }, [active, shownAgents])
+  const siteTopology = useMemo(
+    () => buildSiteTopology(shownSites, shownCells, resolveThresholds, urgentSites),
+    [resolveThresholds, shownCells, shownSites, urgentSites],
   )
   const activeGroups = useMemo(() => {
     const groups = new Map<string, { key: string; cause: string; probe: string; events: OutageEvent[] }>()
@@ -297,6 +321,7 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
           sites={shownSites}
           cells={shownCells}
           thresholds={resolveThresholds}
+          topology={siteTopology}
           mode={connMode}
           onModeChange={setTopology}
         />

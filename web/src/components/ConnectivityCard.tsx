@@ -1,11 +1,14 @@
 import MatrixTable from './MatrixTable'
+import TopologySites from './TopologySites'
 import WorldMap from './WorldMap'
 import type { ThresholdResolver } from '../severity'
+import type { SiteTopology } from '../siteTopology'
+import type { TopologyMode } from '../topologyMode'
 import type { MatrixCell, MatrixResponse, Site } from '../types'
 
-export type ConnectivityMode = 'map' | 'matrix'
+export type ConnectivityMode = TopologyMode
 
-// The connectivity card owns the map/matrix switch in its own header (the
+// The connectivity card owns the Sites/Map/Matrix switch in its own header (the
 // retired Connectivity page's toolbar, moved in-card). Mode is lifted to the
 // caller so other Overview elements — the "Healthy directions" tile — can
 // flip straight to the matrix. The global top-bar network filter scopes this
@@ -16,6 +19,7 @@ export default function ConnectivityCard({
   sites,
   cells,
   thresholds,
+  topology,
   mode,
   onModeChange,
 }: {
@@ -23,6 +27,7 @@ export default function ConnectivityCard({
   sites: Site[]
   cells: MatrixCell[]
   thresholds: ThresholdResolver
+  topology: SiteTopology[]
   mode: ConnectivityMode
   onModeChange: (mode: ConnectivityMode) => void
 }) {
@@ -36,6 +41,13 @@ export default function ConnectivityCard({
         <div className="card-head-actions">
           <span className="freshness">Latest {Math.round(matrix.horizon_s / 60)}-minute probe horizon</span>
           <div className="control-group" role="group" aria-label="Connectivity view">
+            <button
+              className={mode === 'sites' ? 'active' : ''}
+              aria-pressed={mode === 'sites'}
+              onClick={() => onModeChange('sites')}
+            >
+              Sites
+            </button>
             <button
               className={mode === 'map' ? 'active' : ''}
               aria-pressed={mode === 'map'}
@@ -53,8 +65,10 @@ export default function ConnectivityCard({
           </div>
         </div>
       </div>
-      {mode === 'map' ? (
-        <WorldMap sites={sites} cells={cells} thresholds={thresholds} />
+      {mode === 'sites' ? (
+        <TopologySites topology={topology} />
+      ) : mode === 'map' ? (
+        <WorldMap topology={topology} />
       ) : (
         <MatrixTable sites={sites} cells={cells} thresholds={thresholds} />
       )}

@@ -27,10 +27,9 @@ const PAD = 8
 // jitter).
 const ITERATIONS = 24
 
-// How far a marker may drift from its true projection. ~20 viewBox px is
-// under 2% of map width — beyond that the map would lie about geography,
-// so the cap wins over full separation in pathological pileups (leader
-// marks and keyboard focus keep buried sites reachable there).
+// Default maximum drift from the true projection. The responsive map may
+// raise this to its screen-derived pointer radius so touch targets can still
+// satisfy the no-buried-core invariant; leader marks preserve geography.
 const MAX_SHIFT = 20
 
 // Repulsion direction for exactly coincident sites, where the separation
@@ -42,7 +41,11 @@ const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5))
 // deterministic: same input array (order included) always yields the same
 // output — the caller must pass nodes in a stable order (sorted by site
 // name), never API response order.
-export function declutter(nodes: DeclutterNode[], view: { w: number; h: number }): { x: number; y: number }[] {
+export function declutter(
+  nodes: DeclutterNode[],
+  view: { w: number; h: number },
+  maxShift = MAX_SHIFT,
+): { x: number; y: number }[] {
   const pos = nodes.map((n) => ({ x: n.x, y: n.y }))
   for (let sweep = 0; sweep < ITERATIONS; sweep++) {
     // Accumulate-then-apply (Jacobi style): all pairwise displacements are
@@ -82,9 +85,9 @@ export function declutter(nodes: DeclutterNode[], view: { w: number; h: number }
       const sx = x - nodes[i].x
       const sy = y - nodes[i].y
       const shift = Math.hypot(sx, sy)
-      if (shift > MAX_SHIFT) {
-        x = nodes[i].x + (sx / shift) * MAX_SHIFT
-        y = nodes[i].y + (sy / shift) * MAX_SHIFT
+      if (shift > maxShift) {
+        x = nodes[i].x + (sx / shift) * maxShift
+        y = nodes[i].y + (sy / shift) * maxShift
       }
       // A nudge must never push a marker's hit area off-canvas.
       const { hitR } = nodes[i]

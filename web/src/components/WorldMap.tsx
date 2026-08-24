@@ -1,26 +1,39 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { MAP_DOTS, MAP_VIEW_H, MAP_VIEW_W } from '../assets/mapGeo'
 import { fmtLatency } from '../format'
 import { projectMap } from '../geo'
+import {
+  fitMapViewport,
+  FULL_MAP_VIEWPORT,
+  layoutMapLabels,
+  mapHitRadius,
+  mapZoomPercent,
+  panMapViewport,
+  revealMapPoint,
+  zoomMapViewport,
+  type MapViewport,
+} from '../mapViewport'
 import { inheritRouteNetwork } from '../routeState'
 import { bubbleRadius, declutter, type DeclutterNode } from '../mapLayout'
-import {
-  cellSeverity,
-  directionSeverity,
-  SEVERITY_LABEL,
-  worst,
-  type Severity,
-  type ThresholdResolver,
-} from '../severity'
-import type { MatrixCell, Site } from '../types'
-
-// Site names are unrestricted text (spaces included); NUL cannot appear in
-// Postgres text, so it is the one collision-free separator.
-const pairKey = (a: string, b: string) => a + '\u0000' + b
+import { SEVERITY_LABEL, type Severity } from '../severity'
+import type { SiteTopology } from '../siteTopology'
 
 // warn and crit are both publicly "Degraded"; crit keeps a stronger visual
 // intensity via its own class, never a different label.
 const SEVERITIES: Severity[] = ['ok', 'warn', 'crit', 'down', 'stale']
+const LARGE_MAP_TARGET = '(max-width: 760px), (pointer: coarse)'
+
+function useMapTargetPixels(): number {
+  const [large, setLarge] = useState(() => window.matchMedia(LARGE_MAP_TARGET).matches)
+  useEffect(() => {
+    const query = window.matchMedia(LARGE_MAP_TARGET)
+    const update = () => setLarge(query.matches)
+    query.addEventListener('change', update)
+    update()
+    return () => query.removeEventListener('change', update)
+  }, [])
+  return large ? 44 : 24
+}
 
 // The dot-matrix landmass: one path of zero-length round-capped segments,
 // computed once — the geometry never changes at runtime.
@@ -30,30 +43,8 @@ for (let i = 0; i < MAP_DOTS.length; i += 2) {
 }
 const DOT_GRID_D = dotGrid
 
-interface SiteStats {
-  degree: number // monitored unordered pairs touching this site
-  bestLatencyUs: number | null
-  directions: number // configured directions (cells) touching this site
-  dirCounts: Record<Severity, number>
-  // healthy/total directions per plane, from the cells' sub-cell breakdown;
-  // rendered in the info card only when the site spans more than one plane.
-  netCounts: Map<string, { ok: number; total: number }>
-  peers: string[] // the other end of each monitored pair, for pair links
-}
-
-function newStats(): SiteStats {
-  return {
-    degree: 0,
-    bestLatencyUs: null,
-    directions: 0,
-    dirCounts: { ok: 0, warn: 0, crit: 0, down: 0, stale: 0 },
-    netCounts: new Map(),
-    peers: [],
-  }
-}
-
 interface PlacedSite {
-  site: Site
+  topology: SiteTopology
   x: number // display center after declutter — markers AND the info card use this
   y: number
   anchorX: number // true projection — what the leader mark points back to
@@ -63,17 +54,23 @@ interface PlacedSite {
   displaced: boolean // shifted far enough to warrant an anchor mark
 }
 
-export default function WorldMap({
-  sites,
-  cells,
-  thresholds,
-}: {
-  sites: Site[]
-  cells: MatrixCell[]
-  thresholds: ThresholdResolver
-}) {
+export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
   const [pinned, setPinned] = useState<string | null>(null)
   const [hovered, setHovered] = useState<string | null>(null)
+  const [viewport, setViewport] = useState<MapViewport>(FULL_MAP_VIEWPORT)
+  const [dragging, setDragging] = useState(false)
+  const [renderedMapWidth, setRenderedMapWidth] = useState(0)
+  const svgRef = useRef<SVGSVGElement>(null)
+  const targetPixels = useMapTargetPixels()
+  const targetRadius = mapHitRadius(targetPixels, renderedMapWidth || MAP_VIEW_W)
+  const drag = useRef<{
+    pointerID: number
+    clientX: number
+    clientY: number
+    viewport: MapViewport
+    moved: boolean
+  } | null>(null)
+  const suppressBackgroundClick = useRef(false)
   // The info card is interactive (pair links), so leaving a bubble clears
   // the hover on a short delay — long enough to cross onto the card, which
   // cancels the clear. Pinning holds the card open regardless.
@@ -88,83 +85,11 @@ export default function WorldMap({
     setHovered(name)
   }
 
-  // The locals below deliberately carry the same names the memo result is
-  // destructured into — they are the same values, and renaming either side
-  // would only invent a second vocabulary for one concept.
-  /* oxlint-disable no-shadow */
-  const { placed, unplaced, siteSeverity, siteStats } = useMemo(() => {
-    const withCoords = sites.filter((s) => s.latitude != null && s.longitude != null)
-    const unplaced = sites.filter((s) => s.latitude == null || s.longitude == null)
+  const { placed, unplaced } = useMemo(() => {
+    const withCoords = topology.filter((entry) => entry.site.latitude != null && entry.site.longitude != null)
+    const missingCoordinates = topology.filter((entry) => entry.site.latitude == null || entry.site.longitude == null)
 
-    // Every site's severity folds all cells touching it in either direction,
-    // so an unplaced site's chip is as honest as a placed site's bubble.
-    // Sites no cell touches read back as stale below — a site with no
-    // measurements must not claim OK.
-    const siteSeverity = new Map<string, Severity>()
-    const siteStats = new Map<string, SiteStats>()
-    for (const site of sites) siteStats.set(site.name, newStats())
-    for (const c of cells) {
-      const sev = cellSeverity(c, thresholds)
-      for (const name of [c.src, c.dst]) {
-        const prev = siteSeverity.get(name)
-        siteSeverity.set(name, prev === undefined ? sev : worst(prev, sev))
-        const stats = siteStats.get(name)
-        if (stats) {
-          stats.directions++
-          stats.dirCounts[sev]++
-        }
-      }
-      // Per-plane rollup from the same sub-cells the matrix filter uses; a
-      // sub-cell grades with the direction rule, so the breakdown can never
-      // disagree with a filtered view of the same plane.
-      for (const sub of c.networks) {
-        const subSev = directionSeverity({ ...c, ...sub }, thresholds(c.src, c.dst, sub.network))
-        for (const name of [c.src, c.dst]) {
-          const stats = siteStats.get(name)
-          if (!stats) continue
-          const entry = stats.netCounts.get(sub.network) ?? { ok: 0, total: 0 }
-          entry.total++
-          if (subSev === 'ok') entry.ok++
-          stats.netCounts.set(sub.network, entry)
-        }
-      }
-    }
-
-    // Link count and best latency cover every monitored pair — a placed site
-    // probing an unplaced peer still has that link (only drawing needs
-    // coordinates, and bubbles need only their own). One grouping pass keeps
-    // this linear in cells; filtering per pair would go quadratic on large
-    // meshes.
-    const byPair = new Map<string, { x: string; y: string; cells: MatrixCell[] }>()
-    for (const c of cells) {
-      const [x, y] = c.src < c.dst ? [c.src, c.dst] : [c.dst, c.src]
-      const key = pairKey(x, y)
-      let entry = byPair.get(key)
-      if (!entry) byPair.set(key, (entry = { x, y, cells: [] }))
-      entry.cells.push(c)
-    }
-    for (const { x, y, cells: pairCells } of byPair.values()) {
-      const liveLatencies = pairCells
-        .filter((cell) => cell.status === 'ok' || cell.status === 'degraded')
-        .map((cell) => cell.latency_us)
-        .filter((latency): latency is number => latency != null)
-      for (const [name, peer] of [
-        [x, y],
-        [y, x],
-      ]) {
-        const stats = siteStats.get(name)
-        if (!stats) continue
-        stats.degree++
-        stats.peers.push(peer)
-        if (liveLatencies.length > 0) {
-          const best = Math.min(...liveLatencies)
-          stats.bestLatencyUs = stats.bestLatencyUs == null ? best : Math.min(stats.bestLatencyUs, best)
-        }
-      }
-    }
-    for (const stats of siteStats.values()) stats.peers.sort()
-
-    // Declutter layout, last because radii need each site's degree. The
+    // Declutter layout uses the shared site's link count. The
     // name sort is the determinism anchor: declutter's output must not
     // depend on API response ordering. Stability across refreshes is free —
     // degree comes from pair topology, not per-refresh measurements, so
@@ -172,20 +97,20 @@ export default function WorldMap({
     // toSorted would be cleaner but needs the ES2023 lib; sorting a fresh
     // copy mutates nothing the caller sees.
     // oxlint-disable-next-line unicorn/no-array-sort
-    const ordered = [...withCoords].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-    const nodes: DeclutterNode[] = ordered.map((s) => {
-      const { x, y } = projectMap(s.longitude!, s.latitude!)
-      return { x, y, hitR: Math.max(12, bubbleRadius(siteStats.get(s.name)!.degree)) }
+    const ordered = [...withCoords].sort((a, b) => (a.site.name < b.site.name ? -1 : a.site.name > b.site.name ? 1 : 0))
+    const nodes: DeclutterNode[] = ordered.map((entry) => {
+      const { x, y } = projectMap(entry.site.longitude!, entry.site.latitude!)
+      return { x, y, hitR: Math.max(targetRadius, bubbleRadius(entry.stats.degree)) }
     })
-    const laidOut = declutter(nodes, { w: MAP_VIEW_W, h: MAP_VIEW_H })
+    const laidOut = declutter(nodes, { w: MAP_VIEW_W, h: MAP_VIEW_H }, Math.max(20, targetRadius))
     const layoutByName = new Map<string, PlacedSite>()
-    ordered.forEach((s, i) => {
-      const r = bubbleRadius(siteStats.get(s.name)!.degree)
+    ordered.forEach((entry, i) => {
+      const r = bubbleRadius(entry.stats.degree)
       // The 3 px threshold keeps sub-visible nudges and float noise from
       // sprouting anchor marks.
       const displaced = Math.hypot(laidOut[i].x - nodes[i].x, laidOut[i].y - nodes[i].y) > 3
-      layoutByName.set(s.name, {
-        site: s,
+      layoutByName.set(entry.site.name, {
+        topology: entry,
         x: laidOut[i].x,
         y: laidOut[i].y,
         anchorX: nodes[i].x,
@@ -196,13 +121,22 @@ export default function WorldMap({
       })
     })
     // Back in the original sites order so DOM and tab order are unchanged.
-    const placed = withCoords.map((s) => layoutByName.get(s.name)!)
-    return { placed, unplaced, siteSeverity, siteStats }
-  }, [sites, cells, thresholds])
-  /* oxlint-enable no-shadow */
+    const placedEntries = withCoords.map((entry) => layoutByName.get(entry.site.name)!)
+    return { placed: placedEntries, unplaced: missingCoordinates }
+  }, [targetRadius, topology])
 
-  // Sites the matrix has never measured read as stale, never as OK.
-  const sevOf = (name: string): Severity => siteSeverity.get(name) ?? 'stale'
+  useEffect(() => {
+    const svg = svgRef.current
+    if (!svg) return
+    const measure = () => {
+      const width = svg.getBoundingClientRect().width
+      if (width > 0) setRenderedMapWidth((current) => (Math.abs(current - width) > 0.5 ? width : current))
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(svg)
+    return () => observer.disconnect()
+  }, [placed.length])
 
   const missingStrip = unplaced.length > 0 && (
     // Fail loud: sites without coordinates never silently vanish, and they
@@ -211,12 +145,11 @@ export default function WorldMap({
       <span className="hint">
         Not on the map — set coordinates with <code>polarbeam-server site set</code>:
       </span>
-      {unplaced.map((s) => {
-        const sev = sevOf(s.name)
+      {unplaced.map(({ site, severity }) => {
         return (
-          <span key={s.name} className="chip">
-            <span className={`dot swatch sev-${sev}`} />
-            {s.display_name || s.name} · {SEVERITY_LABEL[sev]}
+          <span key={site.name} className="chip">
+            <span className={`dot swatch sev-${severity}`} />
+            {site.display_name || site.name} · {SEVERITY_LABEL[severity]}
           </span>
         )
       })}
@@ -249,26 +182,138 @@ export default function WorldMap({
   }
 
   const togglePin = (name: string) => setPinned((p) => (p === name ? null : name))
+  const pan = (horizontal: number, vertical: number) => {
+    setViewport((current) => panMapViewport(current, current.width * horizontal, current.height * vertical))
+  }
+  const beginPointerPan = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (event.button !== 0) return
+    suppressBackgroundClick.current = false
+    event.currentTarget.setPointerCapture(event.pointerId)
+    drag.current = {
+      pointerID: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      viewport,
+      moved: false,
+    }
+  }
+  const movePointerPan = (event: ReactPointerEvent<SVGSVGElement>) => {
+    const start = drag.current
+    if (!start || start.pointerID !== event.pointerId) return
+    const bounds = event.currentTarget.getBoundingClientRect()
+    if (bounds.width === 0 || bounds.height === 0) return
+    const dx = ((event.clientX - start.clientX) / bounds.width) * start.viewport.width
+    const dy = ((event.clientY - start.clientY) / bounds.height) * start.viewport.height
+    if (Math.hypot(event.clientX - start.clientX, event.clientY - start.clientY) > 3) {
+      start.moved = true
+      setDragging(true)
+    }
+    setViewport(panMapViewport(start.viewport, -dx, -dy))
+  }
+  const endPointerPan = (event: ReactPointerEvent<SVGSVGElement>) => {
+    const start = drag.current
+    if (!start || start.pointerID !== event.pointerId) return
+    suppressBackgroundClick.current = start.moved
+    drag.current = null
+    setDragging(false)
+  }
   // The pinned site holds the info card open; hover previews another site.
   // The card anchors to the DISPLAY position, not the raw projection — a
   // decluttered bubble may sit a nudge away from its city, and the card
   // must stay attached to the bubble the pointer is on.
-  const shown = placed.find((p) => p.site.name === (hovered ?? pinned)) ?? null
-  const shownSite = shown ? shown.site : null
+  const shown = placed.find((p) => p.topology.site.name === (hovered ?? pinned)) ?? null
+  const shownSite = shown ? shown.topology.site : null
   const shownPoint = shown ? { x: shown.x, y: shown.y } : null
-  const shownStats = shown ? siteStats.get(shown.site.name) : null
-  const shownSev = shown ? sevOf(shown.site.name) : null
+  const shownStats = shown ? shown.topology.stats : null
+  const shownSev = shown ? shown.topology.severity : null
+  const zoomPercent = mapZoomPercent(viewport)
+  const resetDisabled = zoomPercent === 100 && viewport.x === 0 && viewport.y === 0
+  const shownLeft = shownPoint ? ((shownPoint.x - viewport.x) / viewport.width) * 100 : 0
+  const shownTop = shownPoint ? ((shownPoint.y - viewport.y) / viewport.height) * 100 : 0
+  const shownInViewport = shownLeft >= 0 && shownLeft <= 100 && shownTop >= 0 && shownTop <= 100
+  const labeledSites = placed.filter(({ topology: entry }) => entry.severity !== 'ok' || pinned === entry.site.name)
+  const mapLabels = layoutMapLabels(
+    labeledSites.map((placedSite) => ({ id: placedSite.topology.site.name, x: placedSite.x, y: placedSite.y })),
+    viewport,
+  )
+  const placedByName = new Map(placed.map((placedSite) => [placedSite.topology.site.name, placedSite]))
 
   return (
     <>
+      <div className="map-viewport-toolbar" role="group" aria-label="Map viewport controls">
+        <button type="button" aria-label="Pan map left" title="Pan left" onClick={() => pan(-0.2, 0)}>
+          ←
+        </button>
+        <button type="button" aria-label="Pan map up" title="Pan up" onClick={() => pan(0, -0.2)}>
+          ↑
+        </button>
+        <button type="button" aria-label="Pan map down" title="Pan down" onClick={() => pan(0, 0.2)}>
+          ↓
+        </button>
+        <button type="button" aria-label="Pan map right" title="Pan right" onClick={() => pan(0.2, 0)}>
+          →
+        </button>
+        <button
+          type="button"
+          aria-label="Zoom map out"
+          title="Zoom out"
+          disabled={zoomPercent === 100}
+          onClick={() => setViewport((current) => zoomMapViewport(current, 1.4))}
+        >
+          −
+        </button>
+        <button
+          type="button"
+          aria-label="Zoom map in"
+          title="Zoom in"
+          disabled={zoomPercent >= 800}
+          onClick={() => setViewport((current) => zoomMapViewport(current, 0.7))}
+        >
+          +
+        </button>
+        <button
+          type="button"
+          onClick={() => setViewport(fitMapViewport(placed.map((site) => ({ x: site.anchorX, y: site.anchorY }))))}
+        >
+          Fit sites
+        </button>
+        <button type="button" disabled={resetDisabled} onClick={() => setViewport(FULL_MAP_VIEWPORT)}>
+          Reset
+        </button>
+        <span className="map-zoom-readout" aria-hidden="true">
+          {zoomPercent}%
+        </span>
+      </div>
+      <span className="sr-only" role="status" aria-live="polite">
+        Map viewport at {zoomPercent}% zoom.
+      </span>
       <div className="worldmap-shell">
         <svg
-          className="worldmap"
-          viewBox={`0 0 ${MAP_VIEW_W} ${MAP_VIEW_H}`}
-          role="img"
-          aria-label={`World map of ${placed.length} monitored ${placed.length === 1 ? 'site' : 'sites'}`}
+          ref={svgRef}
+          className={'worldmap' + (dragging ? ' map-dragging' : '')}
+          viewBox={`${viewport.x} ${viewport.y} ${viewport.width} ${viewport.height}`}
+          role="group"
+          aria-label={`World map of ${placed.length} monitored ${placed.length === 1 ? 'site' : 'sites'}, ${zoomPercent}% zoom. Drag to pan or use the labeled viewport controls.`}
+          onPointerDown={beginPointerPan}
+          onPointerDownCapture={() => {
+            suppressBackgroundClick.current = false
+          }}
+          onPointerMove={movePointerPan}
+          onPointerUp={endPointerPan}
+          onPointerCancel={endPointerPan}
         >
-          <rect className="map-bg" width={MAP_VIEW_W} height={MAP_VIEW_H} onClick={() => setPinned(null)} />
+          <rect
+            className="map-bg"
+            width={MAP_VIEW_W}
+            height={MAP_VIEW_H}
+            onClick={() => {
+              if (suppressBackgroundClick.current) {
+                suppressBackgroundClick.current = false
+                return
+              }
+              setPinned(null)
+            }}
+          />
           <path className="map-dotgrid" d={DOT_GRID_D} />
           {/* A nudged bubble no longer sits exactly on its city; the anchor
               dot keeps the map honest about the true projected location.
@@ -278,15 +323,32 @@ export default function WorldMap({
             {placed
               .filter((p) => p.displaced)
               .map((p) => (
-                <g key={p.site.name}>
+                <g key={p.topology.site.name}>
                   <line className="map-leader" x1={p.anchorX} y1={p.anchorY} x2={p.x} y2={p.y} />
                   <circle className="map-anchor-dot" cx={p.anchorX} cy={p.anchorY} r={1.8} />
                 </g>
               ))}
           </g>
+          <g className="map-label-leaders" aria-hidden="true">
+            {mapLabels.map((label) => {
+              const placedSite = placedByName.get(label.id)!
+              const desiredTop = ((placedSite.y - viewport.y) / viewport.height) * 100
+              if (Math.abs(desiredTop - label.top) < 1) return null
+              return (
+                <line
+                  key={label.id}
+                  className="map-label-leader"
+                  x1={placedSite.x}
+                  y1={placedSite.y}
+                  x2={placedSite.x}
+                  y2={viewport.y + (label.top / 100) * viewport.height}
+                />
+              )
+            })}
+          </g>
           {placed.map((p) => {
-            const { site: s, x, y, r } = p
-            const sev = sevOf(s.name)
+            const { site: s, severity: sev } = p.topology
+            const { x, y, r } = p
             const title = `${s.display_name || s.name} · ${SEVERITY_LABEL[sev]}${s.location ? ` · ${s.location}` : ''}`
             return (
               <g
@@ -297,9 +359,13 @@ export default function WorldMap({
                 aria-pressed={pinned === s.name}
                 aria-label={`${title}. Select to keep the site details open.`}
                 onClick={() => togglePin(s.name)}
+                onPointerDown={(event) => event.stopPropagation()}
                 onMouseEnter={() => hoverSite(s.name)}
                 onMouseLeave={scheduleHoverClear}
-                onFocus={() => hoverSite(s.name)}
+                onFocus={() => {
+                  hoverSite(s.name)
+                  setViewport((current) => revealMapPoint(current, { x, y }))
+                }}
                 onBlur={scheduleHoverClear}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
@@ -317,20 +383,38 @@ export default function WorldMap({
             )
           })}
         </svg>
-        {legend}
+        {mapLabels.map((label) => {
+          const placedSite = placedByName.get(label.id)!
+          const { site, severity } = placedSite.topology
+          return (
+            <span
+              key={site.name}
+              className={
+                'map-site-label' +
+                (pinned === site.name ? ' selected' : '') +
+                (label.align === 'right' ? ' map-site-label-right' : '')
+              }
+              style={{ left: `${label.left}%`, top: `${label.top}%` }}
+              aria-hidden="true"
+            >
+              {site.display_name || site.name} · {SEVERITY_LABEL[severity]}
+            </span>
+          )
+        })}
         {shownSite &&
           shownPoint &&
           shownStats &&
-          shownSev && (
+          shownSev &&
+          shownInViewport && (
             // The handlers below keep this hover card open while the pointer or
             // keyboard focus is inside it; they add no interaction of their own,
             // so the card stays a live region rather than becoming a control.
             // oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
             <div
-              className={'map-tip' + (shownPoint.x > MAP_VIEW_W * 0.72 ? ' map-tip-left' : '')}
+              className={'map-tip' + (shownLeft > 72 ? ' map-tip-left' : '')}
               style={{
-                left: `${(shownPoint.x / MAP_VIEW_W) * 100}%`,
-                top: `${(shownPoint.y / MAP_VIEW_H) * 100}%`,
+                left: `${shownLeft}%`,
+                top: `${shownTop}%`,
               }}
               role="status"
               onMouseEnter={cancelHoverClear}
@@ -402,6 +486,7 @@ export default function WorldMap({
             </div>
           )}
       </div>
+      {legend}
       {missingStrip}
     </>
   )

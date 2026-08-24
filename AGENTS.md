@@ -47,6 +47,13 @@ toast and confirmation services, and compare a freshly fetched server value
 with the loaded snapshot immediately before a full-state update. Never merge
 or force-save a concurrent edit; offer the confirmed server-version reload.
 
+Overview topology modes share health and ordering through
+`web/src/siteTopology.ts`; do not reimplement site severity in an individual
+view. An omitted `topology` route parameter is responsive (Sites on narrow
+screens, Map otherwise), while every explicit Sites, Map, or Matrix choice
+must remain URL-backed. Keep SVG viewport math pure in
+`web/src/mapViewport.ts` and preserve keyboard-operable controls.
+
 Pair and target uPlot charts share investigation-range behavior through
 `web/src/components/Chart.tsx` and pure reconciliation in
 `web/src/chartRange.ts`. Every caller must pass a context key containing all
