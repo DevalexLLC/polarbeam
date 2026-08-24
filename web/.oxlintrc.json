@@ -12,6 +12,9 @@
     // tsconfig sets "jsx": "react-jsx" (the automatic runtime), so JSX never
     // expands to React.createElement and React need not be in scope.
     "react/react-in-jsx-scope": "off",
+    // DataTable columns, disclosures, and action menus are explicit render
+    // props. They do not define stateful child component types.
+    "react/no-unstable-nested-components": ["warn", { "allowAsProps": true }],
     // Bundled stylesheets are imported for their side effect and have
     // nothing to bind (src/main.tsx pulls in styles.css and uPlot's CSS).
     "import/no-unassigned-import": "off",

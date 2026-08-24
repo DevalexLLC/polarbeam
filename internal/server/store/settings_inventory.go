@@ -119,7 +119,8 @@ func (s *Store) QuerySitesConfig(ctx context.Context, f SiteConfigFilter) ([]Sit
 	cte := `WITH site_rows AS MATERIALIZED (` + siteConfigRowsSQL + `),
 		filtered AS MATERIALIZED (
 			SELECT * FROM site_rows
-			 WHERE $2 = '' OR name ILIKE '%' || $2 || '%'
+			 WHERE $2 = '' OR id::text = $2
+			    OR name ILIKE '%' || $2 || '%'
 			    OR display_name ILIKE '%' || $2 || '%'
 			    OR location ILIKE '%' || $2 || '%'
 		)`
@@ -228,7 +229,8 @@ func (s *Store) QueryTargetsConfig(ctx context.Context, f TargetConfigFilter) ([
 	cte := `WITH target_rows AS MATERIALIZED (` + targetConfigRowsSQL + `),
 		filtered AS MATERIALIZED (
 			SELECT * FROM target_rows
-			 WHERE ($2 = '' OR name ILIKE '%' || $2 || '%'
+			 WHERE ($2 = '' OR id::text = $2
+			        OR name ILIKE '%' || $2 || '%'
 			        OR address ILIKE '%' || $2 || '%'
 			        OR port::text ILIKE '%' || $2 || '%'
 			        OR url ILIKE '%' || $2 || '%')
@@ -366,7 +368,8 @@ func (s *Store) QueryProbeConfigs(ctx context.Context, f ProbeConfigFilter) ([]P
 	cte := `WITH probe_rows AS MATERIALIZED (` + probeConfigRowsSQL + `),
 		filtered AS MATERIALIZED (
 			SELECT * FROM probe_rows
-			 WHERE ($4 = '' OR site ILIKE '%' || $4 || '%'
+			 WHERE ($4 = '' OR id::text = $4
+			        OR site ILIKE '%' || $4 || '%'
 			        OR assignment ILIKE '%' || $4 || '%'
 			        OR type_name ILIKE '%' || $4 || '%')
 			   AND ($5 = '' OR mode = $5)

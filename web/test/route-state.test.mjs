@@ -84,6 +84,16 @@ test('route schemas preserve each supported view state in stable order', () => {
     canonicalizeRouteHash('#/settings?probe=p1&site=s1&subsection=direct&section=probes').hash,
     '#/settings?section=probes&subsection=direct&probe=p1',
   )
+  assert.equal(
+    canonicalizeRouteHash(
+      '#/settings?section=probes&type=dns&enabled=false&mode=direct&page=3&order=desc&sort=updated&q=ny&probe=p1',
+    ).hash,
+    '#/settings?section=probes&q=ny&page=3&order=desc&sort=updated&mode=direct&enabled=false&type=dns&probe=p1',
+  )
+  assert.equal(
+    canonicalizeRouteHash('#/settings?section=sites&site=site-id&page=2&sort=agents&q=lon').hash,
+    '#/settings?section=sites&q=lon&page=2&sort=agents&site=site-id',
+  )
 })
 
 test('incident route links preserve plane and window and select the event', () => {

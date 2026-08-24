@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { apiGet } from '../api'
+import DataTable, { type DataTableColumn } from '../components/DataTable'
 import PageError from '../components/PageError'
 import { fmtAgo, fmtTime } from '../format'
 import { useNetworkFilter } from '../networkFilter'
@@ -41,6 +42,7 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
   const [sort] = useRouteParam('sort', 'name')
   const [order] = useRouteParam('order', 'asc')
   const [page, setPage] = useRouteNumber('page', 1)
+  const [expandedRow, setExpandedRow] = useState<string | null>(null)
   const { network } = useNetworkFilter()
 
   useEffect(() => {
@@ -76,10 +78,6 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
   }, [kind, network, onAuthError, order, page, queryParam, retryKey, sort, status])
 
   const pageCount = Math.max(1, Math.ceil((data?.page.total ?? 0) / TARGET_PAGE))
-  const visible = {
-    externals: (data?.targets ?? []).filter((target) => target.kind === 'external'),
-    sites: (data?.targets ?? []).filter((target) => target.kind === 'agent'),
-  }
   useEffect(() => {
     if (page > pageCount) setPage(pageCount, 'replace')
   }, [page, pageCount, setPage])
@@ -106,6 +104,77 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
   const externalCount = data.scope_summary.external
   const siteCount = data.scope_summary.agent
   const troubledCount = data.scope_summary.incident
+  const columns: DataTableColumn<OperationalTarget>[] = [
+    {
+      key: 'status',
+      label: 'Status',
+      sortKey: 'status',
+      priority: 'status',
+      render: (target) => <StatusCell t={target} />,
+    },
+    {
+      key: 'name',
+      label: 'Target',
+      sortKey: 'name',
+      priority: 'identity',
+      className: 'mono',
+      render: (target) => (
+        <a href={targetDetailHref(target.id)}>
+          {target.kind === 'agent' ? (target.agent_site ?? target.name) : target.name}
+        </a>
+      ),
+    },
+    {
+      key: 'kind',
+      label: 'Kind',
+      priority: 'primary',
+      render: (target) => (target.kind === 'agent' ? 'site destination' : 'external'),
+    },
+    {
+      key: 'evidence',
+      label: 'Primary evidence',
+      priority: 'primary',
+      render: (target) =>
+        target.kind === 'agent' ? (
+          (target.agent_hostname ?? <span className="hint">deleted agent</span>)
+        ) : (
+          <span className="mono">
+            {target.url ? target.url : target.port ? `${target.address}:${target.port}` : target.address}
+          </span>
+        ),
+    },
+    {
+      key: 'probes',
+      label: 'Probes',
+      sortKey: 'probes',
+      priority: 'secondary',
+      render: (target) =>
+        target.enabled_probe_count === target.probe_count
+          ? target.probe_count
+          : `${target.enabled_probe_count} of ${target.probe_count} enabled`,
+    },
+    {
+      key: 'from',
+      label: 'Probed from',
+      priority: 'secondary',
+      className: 'mono',
+      render: (target) => target.probing_sites.join(', ') || '—',
+    },
+    {
+      key: 'network',
+      label: 'Network',
+      priority: 'secondary',
+      className: 'mono',
+      render: (target) => target.network || 'all networks',
+    },
+    {
+      key: 'created',
+      label: 'Created',
+      sortKey: 'created',
+      priority: 'secondary',
+      render: (target) => <span title={fmtTime(target.created_at)}>{fmtAgo(target.created_at)}</span>,
+    },
+  ]
 
   return (
     <>
@@ -181,153 +250,47 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
         </button>
       </div>
 
-      {kind !== 'agent' && (
-        <div className="card">
-          <div className="card-head">
-            <div>
-              <span className="eyebrow">Probe destinations</span>
-              <h2>External targets</h2>
-            </div>
-            <span className="hint">status reflects open incidents · admins manage these in Settings → Targets</span>
+      <div className="card">
+        <div className="card-head">
+          <div>
+            <span className="eyebrow">Probe destinations</span>
+            <h2>Target inventory</h2>
           </div>
-          {visible.externals.length === 0 ? (
-            <div className="empty-state">
-              <strong>
-                {externalCount === 0
-                  ? 'No external targets'
-                  : data.summary.external === 0
-                    ? 'No external targets match current filters'
-                    : 'No external targets on this page'}
-              </strong>
-              <span>
-                {externalCount === 0
-                  ? 'An admin can add hosts and URLs to probe in Settings → Targets.'
-                  : data.summary.external === 0
-                    ? 'Change the status filter or search query.'
-                    : 'This page contains site destinations; use the pagination controls to move through all targets.'}
-              </span>
-            </div>
-          ) : (
-            <div className="scroll-x">
-              <table className="events">
-                <thead>
-                  <tr>
-                    <th>Status</th>
-                    <th>Name</th>
-                    <th>Endpoint</th>
-                    <th>Probes</th>
-                    <th>Probed from</th>
-                    <th>Created</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visible.externals.map((t) => (
-                    <tr key={t.id}>
-                      <td data-label="Status">
-                        <StatusCell t={t} />
-                      </td>
-                      <td data-label="Name" className="mono">
-                        <a href={targetDetailHref(t.id)}>{t.name}</a>
-                      </td>
-                      <td data-label="Endpoint" className="mono">
-                        {t.url ? t.url : t.port ? `${t.address}:${t.port}` : t.address}
-                      </td>
-                      <td data-label="Probes">
-                        {t.enabled_probe_count === t.probe_count
-                          ? t.probe_count
-                          : `${t.enabled_probe_count} of ${t.probe_count} enabled`}
-                      </td>
-                      <td data-label="Probed from" className="mono">
-                        {t.probing_sites.join(', ') || '—'}
-                      </td>
-                      <td data-label="Created" title={fmtTime(t.created_at)}>
-                        {fmtAgo(t.created_at)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <span className="hint">status reflects open incidents · admins manage external targets in Settings</span>
         </div>
-      )}
-
-      {kind !== 'external' && (
-        <div className="card">
-          <div className="card-head">
-            <div>
-              <span className="eyebrow">Agent mesh</span>
-              <h2>Site destinations</h2>
-            </div>
-            <span className="hint">each site's agent as a probe destination — inbound metrics per source site</span>
-          </div>
-          {visible.sites.length === 0 ? (
-            <div className="empty-state">
-              <strong>
-                {siteCount === 0
-                  ? 'No agents enrolled yet'
-                  : data.summary.agent === 0
-                    ? 'No site destinations match current filters'
-                    : 'No site destinations on this page'}
-              </strong>
-              <span>
-                {siteCount === 0
-                  ? 'Enroll an agent and its destination appears here.'
-                  : data.summary.agent === 0
-                    ? 'Change the status filter or search query.'
-                    : 'This page contains external targets; use the pagination controls to move through all targets.'}
-              </span>
-            </div>
-          ) : (
-            <div className="scroll-x">
-              <table className="events">
-                <thead>
-                  <tr>
-                    <th>Status</th>
-                    <th>Site</th>
-                    <th>Agent</th>
-                    <th>Created</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visible.sites.map((t) => {
-                    return (
-                      <tr key={t.id}>
-                        <td data-label="Status">
-                          <StatusCell t={t} />
-                        </td>
-                        <td data-label="Site" className="mono">
-                          <a href={targetDetailHref(t.id)}>{t.agent_site ?? t.name}</a>
-                        </td>
-                        <td data-label="Agent" className="mono">
-                          {t.agent_hostname ?? <span className="hint">deleted agent</span>}
-                        </td>
-                        <td data-label="Created" title={fmtTime(t.created_at)}>
-                          {fmtAgo(t.created_at)}
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
-
-      {pageCount > 1 && (
-        <div className="progressive-footer">
-          <span className="hint">
-            Page {page} of {pageCount} · {data.page.total} targets
-          </span>
-          <button className="secondary-button" disabled={page === 1} onClick={() => setPage(page - 1)}>
-            Previous
-          </button>
-          <button className="secondary-button" disabled={page === pageCount} onClick={() => setPage(page + 1)}>
-            Next
-          </button>
-        </div>
-      )}
+        <DataTable
+          label="Operational targets"
+          rows={data.targets}
+          rowKey={(target) => target.id}
+          columns={columns}
+          sort={{ key: sort, order: order === 'desc' ? 'desc' : 'asc' }}
+          onSortChange={(next) =>
+            updateRouteParams({
+              sort: next.key === 'name' ? null : next.key,
+              order: next.order === 'asc' ? null : next.order,
+              page: null,
+            })
+          }
+          page={data.page}
+          onPageChange={(next) => {
+            setExpandedRow(null)
+            setPage(next)
+          }}
+          resultLabel="targets"
+          emptyTitle={externalCount === 0 && siteCount === 0 ? 'No targets yet' : 'No matching targets'}
+          emptyDescription={
+            externalCount === 0 && siteCount === 0
+              ? 'An admin can add hosts and URLs to probe in Settings → Targets. Enroll an agent and its destination appears here.'
+              : 'Change the kind, status, search, or network filter.'
+          }
+          disclosure={{
+            expandedKey: expandedRow,
+            onExpandedKeyChange: setExpandedRow,
+            label: (_target, expanded) => (expanded ? 'Hide metadata' : 'Show metadata'),
+            desktop: false,
+          }}
+        />
+      </div>
     </>
   )
 }

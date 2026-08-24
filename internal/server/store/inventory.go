@@ -10,10 +10,12 @@ import (
 )
 
 const (
-	AgentHealthOffline  = "offline"
-	AgentHealthDegraded = "degraded"
-	AgentHealthHealthy  = "healthy"
-	AgentHealthNoData   = "no_data"
+	AgentHealthOffline   = "offline"
+	AgentHealthDegraded  = "degraded"
+	AgentHealthHealthy   = "healthy"
+	AgentHealthNoData    = "no_data"
+	AgentHealthAttention = "attention"
+	AgentHealthClear     = "clear"
 )
 
 // AgentInventoryFilter is the query-mode contract for the operational
@@ -30,11 +32,13 @@ type AgentInventoryFilter struct {
 
 // AgentInventorySummary counts the complete filtered set before paging.
 type AgentInventorySummary struct {
-	Total    int64
-	Offline  int64
-	Degraded int64
-	Healthy  int64
-	NoData   int64
+	Total          int64
+	Offline        int64
+	Degraded       int64
+	Healthy        int64
+	NoData         int64
+	Attention      int64
+	DroppedResults int64
 }
 
 func agentInventoryOrder(sortName, order string) (string, error) {
@@ -108,8 +112,15 @@ const agentInventoryCTE = `
 		        GROUP BY ss.agent_id
 		  ) ss ON ss.agent_id = a.id
 		 WHERE $2::uuid[] IS NULL OR a.network_id = ANY($2)
+	), classified AS MATERIALIZED (
+		SELECT *,
+		       health <> 'healthy'
+		       OR (not_after IS NOT NULL AND not_after < now() + interval '8 days')
+		       OR (last_dropped_at IS NOT NULL AND last_dropped_at > now() - interval '24 hours')
+		       AS needs_attention
+		  FROM agent_rows
 	), filtered AS MATERIALIZED (
-		SELECT * FROM agent_rows
+		SELECT * FROM classified
 		 WHERE ($3 = ''
 		        OR id::text ILIKE '%' || $3 || '%'
 		        OR hostname ILIKE '%' || $3 || '%'
@@ -117,7 +128,10 @@ const agentInventoryCTE = `
 		        OR network ILIKE '%' || $3 || '%'
 		        OR probe_address ILIKE '%' || $3 || '%'
 		        OR version ILIKE '%' || $3 || '%')
-		   AND ($4 = '' OR health = $4)
+		   AND ($4 = ''
+		        OR ($4 = 'attention' AND needs_attention)
+		        OR ($4 = 'clear' AND NOT needs_attention)
+		        OR ($4 NOT IN ('attention', 'clear') AND health = $4))
 	)`
 
 // QueryAgents returns a filtered, stably ordered page plus summary counts
@@ -128,7 +142,8 @@ func (s *Store) QueryAgents(ctx context.Context, f AgentInventoryFilter) ([]Agen
 		return nil, AgentInventorySummary{}, invalidf("invalid agent inventory page")
 	}
 	if f.Health != "" && f.Health != AgentHealthOffline && f.Health != AgentHealthDegraded &&
-		f.Health != AgentHealthHealthy && f.Health != AgentHealthNoData {
+		f.Health != AgentHealthHealthy && f.Health != AgentHealthNoData && f.Health != AgentHealthAttention &&
+		f.Health != AgentHealthClear {
 		return nil, AgentInventorySummary{}, invalidf("unknown agent health %q", f.Health)
 	}
 	orderBy, err := agentInventoryOrder(f.Sort, f.Order)
@@ -150,7 +165,9 @@ func (s *Store) QueryAgents(ctx context.Context, f AgentInventoryFilter) ([]Agen
 		       count(*) FILTER (WHERE health = 'offline') OVER (),
 		       count(*) FILTER (WHERE health = 'degraded') OVER (),
 		       count(*) FILTER (WHERE health = 'healthy') OVER (),
-		       count(*) FILTER (WHERE health = 'no_data') OVER ()
+		       count(*) FILTER (WHERE health = 'no_data') OVER (),
+		       count(*) FILTER (WHERE needs_attention) OVER (),
+		       COALESCE(sum(dropped_results) OVER (), 0)::bigint
 		  FROM filtered
 		 ORDER BY `+orderBy+`
 		 LIMIT $5 OFFSET $6`, append(args, f.Limit, f.Offset)...)
@@ -166,7 +183,7 @@ func (s *Store) QueryAgents(ctx context.Context, f AgentInventoryFilter) ([]Agen
 			&a.LastDroppedAt, &a.CertNotAfter, &a.CertRevokedAt, &a.Offline,
 			&a.ProbesFailing, &a.ProbesTotal, &a.Health, &summary.Total,
 			&summary.Offline, &summary.Degraded, &summary.Healthy,
-			&summary.NoData); err != nil {
+			&summary.NoData, &summary.Attention, &summary.DroppedResults); err != nil {
 			return nil, AgentInventorySummary{}, fmt.Errorf("scan queried agent: %w", err)
 		}
 		list = append(list, a)
@@ -180,9 +197,12 @@ func (s *Store) QueryAgents(ctx context.Context, f AgentInventoryFilter) ([]Agen
 			       count(*) FILTER (WHERE health = 'offline'),
 			       count(*) FILTER (WHERE health = 'degraded'),
 			       count(*) FILTER (WHERE health = 'healthy'),
-			       count(*) FILTER (WHERE health = 'no_data')
+			       count(*) FILTER (WHERE health = 'no_data'),
+			       count(*) FILTER (WHERE needs_attention),
+			       COALESCE(sum(dropped_results), 0)::bigint
 			  FROM filtered`, args...).Scan(&summary.Total, &summary.Offline,
-			&summary.Degraded, &summary.Healthy, &summary.NoData)
+			&summary.Degraded, &summary.Healthy, &summary.NoData,
+			&summary.Attention, &summary.DroppedResults)
 		if err != nil {
 			return nil, AgentInventorySummary{}, fmt.Errorf("summarize agents: %w", err)
 		}

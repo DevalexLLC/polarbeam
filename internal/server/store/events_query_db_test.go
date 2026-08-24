@@ -112,6 +112,9 @@ func TestQueryPathEventsFilteringSortingAndPaging(t *testing.T) {
 		{query: "site-a", want: []uuid.UUID{ids[1], ids[0], ids[2]}},
 		{query: "site-b", want: []uuid.UUID{ids[0], ids[2]}},
 		{query: "svc", want: []uuid.UUID{ids[1]}},
+		{query: ids[2].String(), want: []uuid.UUID{ids[2]}},
+		{query: "site-a -> site-b", want: []uuid.UUID{ids[0], ids[2]}},
+		{query: "site-a → svc", want: []uuid.UUID{ids[1]}},
 		{query: "svc%_", want: []uuid.UUID{}},
 	}
 	for _, tt := range searches {

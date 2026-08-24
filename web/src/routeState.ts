@@ -152,8 +152,47 @@ export function canonicalizeRouteHash(hash: string, options: CanonicalRouteOptio
     const section = oneOf(source, 'section', sections, sections[0] ?? '')
     setNonDefault(out, 'section', section, sections[0] ?? '')
     setNonDefault(out, 'subsection', opaque(source, 'subsection'))
-    if (section === 'sites') setNonDefault(out, 'site', opaque(source, 'site'))
-    if (section === 'probes') setNonDefault(out, 'probe', opaque(source, 'probe'))
+    if (section === 'sites' || section === 'targets' || section === 'probes') {
+      setNonDefault(out, 'q', opaque(source, 'q'))
+      const page = positiveInteger(source, 'page', 1)
+      if (page > 1) out.set('page', String(page))
+      setNonDefault(out, 'order', oneOf(source, 'order', ['asc', 'desc'], 'asc'), 'asc')
+    }
+    if (section === 'sites') {
+      setNonDefault(
+        out,
+        'sort',
+        oneOf(source, 'sort', ['name', 'display_name', 'created', 'agents', 'meshes', 'probes'], 'name'),
+        'name',
+      )
+      setNonDefault(out, 'site', opaque(source, 'site'))
+    }
+    if (section === 'targets') {
+      setNonDefault(
+        out,
+        'sort',
+        oneOf(source, 'sort', ['name', 'kind', 'network', 'probes', 'created'], 'name'),
+        'name',
+      )
+      setNonDefault(out, 'kind', oneOf(source, 'kind', ['all', 'external', 'agent'], 'all'), 'all')
+    }
+    if (section === 'probes') {
+      setNonDefault(
+        out,
+        'sort',
+        oneOf(source, 'sort', ['site', 'target', 'type', 'enabled', 'updated'], 'site'),
+        'site',
+      )
+      setNonDefault(out, 'mode', oneOf(source, 'mode', ['all', 'direct', 'mesh'], 'all'), 'all')
+      setNonDefault(out, 'enabled', oneOf(source, 'enabled', ['all', 'true', 'false'], 'all'), 'all')
+      setNonDefault(
+        out,
+        'type',
+        oneOf(source, 'type', ['all', 'icmp', 'tcp', 'tls', 'http', 'dns', 'ntp', 'traceroute', 'path_mtu'], 'all'),
+        'all',
+      )
+      setNonDefault(out, 'probe', opaque(source, 'probe'))
+    }
   }
 
   const query = out.toString()
