@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import uPlot from 'uplot'
 import { apiGet } from '../api'
 import Chart from '../components/Chart'
+import PageError from '../components/PageError'
 import PathGraph, { isWidePath } from '../components/PathGraph'
 import { useNetworkFilter } from '../networkFilter'
 import { inheritRouteNetwork } from '../routeState'
@@ -256,7 +257,7 @@ export default function PairDetail({
   const [paths, setPaths] = useState<TracerouteResponse | null>(null)
   const [mtus, setMtus] = useState<PathMtuResponse | null>(null)
   const [settings, setSettings] = useState<SettingsResponse | null>(null)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<unknown>(null)
 
   // Settings ride the same load as the series so a threshold change and
   // the chart redraw land in one commit. The generation counter drops
@@ -285,12 +286,13 @@ export default function PairDetail({
         setPaths(tr)
         setMtus(pm)
         setSettings(st)
-        setError('')
+        setError(null)
       })
       .catch((err) => {
         onAuthError(err)
+        console.error('pair detail request failed', err)
         if (gen !== loadGen.current) return
-        setError(err instanceof Error ? err.message : String(err))
+        setError(err)
       })
   }, [a, b, win, metric, net, onAuthError])
 
@@ -408,10 +410,14 @@ export default function PairDetail({
 
   if (error && !series)
     return (
-      <div className="state-panel state-error">
-        <h1>Pair detail unavailable</h1>
-        <p>{error}</p>
-      </div>
+      <PageError
+        title="Pair detail unavailable"
+        subject="pair"
+        error={error}
+        backHref={inheritRouteNetwork('#/')}
+        backLabel="Back to Overview"
+        onRetry={() => void load()}
+      />
     )
   if (!series || !pair)
     return (

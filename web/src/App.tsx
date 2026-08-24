@@ -3,6 +3,7 @@ import { ApiError, apiGet, apiPost, setCsrfToken } from './api'
 import { capsOf, roleLabel } from './caps'
 import { PRIMARY_NAVIGATION, SETTINGS_NAVIGATION, navigationItemIsCurrent } from './navigation'
 import { reconcileNetworkFilter } from './networkFilter'
+import { documentTitle } from './pageState'
 import {
   inheritRouteNetwork,
   replaceCanonicalRoute,
@@ -10,12 +11,14 @@ import {
   subscribeRouteState,
   updateRouteParams,
 } from './routeState'
-import { canOpenSettings, resolveTab } from './settingsTabs'
+import { SETTINGS_TABS, canOpenSettings, resolveTab } from './settingsTabs'
+import type { SettingsTab } from './settingsTabs'
 import type { AuthProviders, LoginResponse, NetworksConfigResponse, UIBanner, User } from './types'
 import BannerFrame from './components/BannerFrame'
 import ChangePasswordDialog from './components/ChangePasswordDialog'
 import LogoMark from './components/LogoMark'
 import MobileNavigation from './components/MobileNavigation'
+import PageError from './components/PageError'
 import ThemeToggle from './components/ThemeToggle'
 import TimezoneToggle from './components/TimezoneToggle'
 import TopbarFilter from './components/TopbarFilter'
@@ -45,6 +48,7 @@ type Route =
   | { view: 'agents'; agent: string | null }
   | { view: 'about' }
   | { view: 'settings'; tab: string }
+  | { view: 'not-found'; path: string }
 
 // A malformed percent-escape in a hand-edited bookmark must not blank the
 // app; fall back to the raw segment so PairDetail shows a loud not-found.
@@ -58,14 +62,16 @@ function decodeSegment(s: string): string {
 
 function parseHash(hash: string): Route {
   const parts = hash.replace(/^#\/?/, '').split('?')[0].split('/')
+  if (parts[0] === '' || parts[0] === 'connectivity' || parts[0] === 'sightlines') return { view: 'overview' }
+  if (/^sso-error=[a-z-]+$/.test(parts[0])) return { view: 'overview' }
   if (parts[0] === 'pair' && parts[1] && parts[2]) {
     return { view: 'pair', a: decodeSegment(parts[1]), b: decodeSegment(parts[2]) }
   }
   if (parts[0] === 'targets') return { view: 'targets' }
   // #/target/<id> is the per-target drill-down; a bad id shows the view's
   // own loud not-found rather than silently landing on the overview.
-  if (parts[0] === 'target' && parts[1]) {
-    return { view: 'target', id: decodeSegment(parts[1]) }
+  if (parts[0] === 'target') {
+    return { view: 'target', id: parts[1] ? decodeSegment(parts[1]) : '' }
   }
   if (parts[0] === 'incidents' || parts[0] === 'outages') return { view: 'incidents' }
   if (parts[0] === 'routes' || parts[0] === 'paths') return { view: 'routes' }
@@ -78,9 +84,7 @@ function parseHash(hash: string): Route {
     // a useState initializer before /auth/me returns.
     return { view: 'settings', tab: routeParam(hash, 'section') || decodeSegment(parts[1] ?? '') }
   }
-  // #/connectivity and #/sightlines land here too: the map/matrix switch
-  // lives on the Overview now, so those bookmarks alias to it.
-  return { view: 'overview' }
+  return { view: 'not-found', path: parts.map(decodeSegment).join('/') }
 }
 
 // Focus follows page navigation, not in-page state. Agent disclosure is
@@ -91,6 +95,20 @@ function routePageKey(route: Route): string {
   if (route.view === 'target') return `${route.view}/${route.id}`
   if (route.view === 'settings') return `${route.view}/${route.tab}`
   return route.view
+}
+
+function routeTitle(route: Route, settingsTab: SettingsTab | null): string {
+  if (route.view === 'overview') return 'Overview'
+  if (route.view === 'pair') return `${route.a} ⇄ ${route.b}`
+  if (route.view === 'target') return 'Target detail'
+  if (route.view === 'targets') return 'Targets'
+  if (route.view === 'incidents') return 'Incidents'
+  if (route.view === 'routes') return 'Routes'
+  if (route.view === 'agents') return route.agent ? 'Agent detail' : 'Agents'
+  if (route.view === 'about') return 'About'
+  if (route.view === 'not-found') return 'Page not found'
+  const section = SETTINGS_TABS.find((item) => item.tab === settingsTab)
+  return section ? `${section.label} · Settings` : 'Settings'
 }
 
 export default function App() {
@@ -108,6 +126,7 @@ export default function App() {
   const routeKey = JSON.stringify(route)
   const pageKey = routePageKey(route)
   const initialRouteRef = useRef(true)
+  const [entityTitle, setEntityTitle] = useState<{ routeKey: string; label: string } | null>(null)
 
   useEffect(() => {
     const onRoute = () => {
@@ -295,6 +314,12 @@ export default function App() {
     setRoute({ view: 'settings', tab: settingsTab })
   }, [route, settingsTab])
 
+  const reportEntityTitle = useCallback((label: string) => setEntityTitle({ routeKey, label }), [routeKey])
+  const pageTitle = entityTitle?.routeKey === routeKey ? entityTitle.label : routeTitle(route, settingsTab)
+  useEffect(() => {
+    document.title = documentTitle(!booted ? '' : user ? pageTitle : 'Sign in')
+  }, [booted, pageTitle, user])
+
   // Any 401 from a view means the session died server-side: back to login.
   const onAuthError = useCallback((err: unknown) => {
     if (err instanceof ApiError && err.status === 401) setUser(null)
@@ -446,13 +471,13 @@ export default function App() {
             <PairDetail key={`${route.a}/${route.b}`} a={route.a} b={route.b} onAuthError={onAuthError} />
           ) : route.view === 'target' ? (
             // Keyed on the id for the same remount-on-switch reason.
-            <TargetDetail key={route.id} id={route.id} onAuthError={onAuthError} />
+            <TargetDetail key={route.id} id={route.id} onAuthError={onAuthError} onTitleChange={reportEntityTitle} />
           ) : route.view === 'targets' ? (
             <Targets onAuthError={onAuthError} />
           ) : route.view === 'incidents' ? (
             <Outages onAuthError={onAuthError} />
           ) : route.view === 'agents' ? (
-            <Agents agent={route.agent} onAuthError={onAuthError} />
+            <Agents agent={route.agent} onAuthError={onAuthError} onTitleChange={reportEntityTitle} />
           ) : route.view === 'settings' ? (
             // The link is hidden for roles that may open no tab, but the
             // hash is still typeable; say so rather than rendering an empty
@@ -474,8 +499,16 @@ export default function App() {
             )
           ) : route.view === 'about' ? (
             <About version={serverVersion} />
-          ) : (
+          ) : route.view === 'routes' ? (
             <Paths onAuthError={onAuthError} />
+          ) : (
+            <PageError
+              title="Page not found"
+              subject="page"
+              message="This address does not match a PolarBEAM page."
+              backHref={inheritRouteNetwork('#/')}
+              backLabel="Back to Overview"
+            />
           )}
         </main>
       </div>

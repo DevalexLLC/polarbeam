@@ -3,9 +3,11 @@ import uPlot from 'uplot'
 import { apiGet } from '../api'
 import Chart from '../components/Chart'
 import HealthStrip, { stripStats, UptimeValue } from '../components/HealthStrip'
+import PageError from '../components/PageError'
 import PathGraph, { isWidePath } from '../components/PathGraph'
 import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
-import { inheritRouteNetwork } from '../routeState'
+import { isTargetID } from '../pageState'
+import { inheritRouteNetwork, targetInventoryHref } from '../routeState'
 import { useTheme } from '../theme'
 import { useTimezone } from '../timezone'
 import { useRouteParam } from '../useRouteState'
@@ -287,7 +289,15 @@ function StripRows({
   )
 }
 
-export default function TargetDetail({ id, onAuthError }: { id: string; onAuthError: (err: unknown) => void }) {
+export default function TargetDetail({
+  id,
+  onAuthError,
+  onTitleChange,
+}: {
+  id: string
+  onAuthError: (err: unknown) => void
+  onTitleChange: (title: string) => void
+}) {
   const [windowParam, setWindowParam] = useRouteParam('window', '24h')
   const [metricParam, setMetricParam] = useRouteParam('metric', 'latency')
   const [selectedProbe, setSelectedProbe] = useRouteParam('probe')
@@ -309,7 +319,8 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
   const [health, setHealth] = useState<TargetHealthResponse | null>(null)
   const [paths, setPaths] = useState<TargetPathsResponse | null>(null)
   const [settings, setSettings] = useState<SettingsResponse | null>(null)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<unknown>(null)
+  const validID = isTargetID(id)
   const scrolledProbe = useRef<string | null>(null)
 
   useEffect(() => {
@@ -338,6 +349,7 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
   // drops superseded responses after a window/metric flip.
   const loadGen = useRef(0)
   const load = useCallback(() => {
+    if (!validID) return Promise.resolve()
     const gen = ++loadGen.current
     const base = `/api/v1/targets/${encodeURIComponent(id)}`
     return Promise.all([
@@ -356,20 +368,31 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
         setHealth(he)
         setPaths(pa)
         setSettings(cfg)
-        setError('')
+        setError(null)
       })
       .catch((err) => {
         onAuthError(err)
+        console.error('target detail request failed', err)
         if (gen !== loadGen.current) return
-        setError(err instanceof Error ? err.message : String(err))
+        setError(err)
       })
-  }, [id, win, metric, onAuthError])
+  }, [id, win, metric, onAuthError, validID])
 
   useEffect(() => {
+    if (!validID) return
     void load()
     const pollId = setInterval(() => void load(), POLL_MS)
     return () => clearInterval(pollId)
-  }, [load])
+  }, [load, validID])
+
+  const loadedTitle = summary
+    ? summary.target.kind === 'agent'
+      ? (summary.target.dst_site ?? 'deleted site')
+      : summary.target.name
+    : null
+  useEffect(() => {
+    if (loadedTitle) onTitleChange(loadedTitle)
+  }, [loadedTitle, onTitleChange])
 
   // Effective thresholds per source row: agent-kind targets grade on the
   // source↔destination site pair for that row's plane; external targets have
@@ -504,12 +527,26 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
     // investigation-context changes recreate through Chart's contextKey.
   }, [resolved, mode])
 
+  if (!validID)
+    return (
+      <PageError
+        title="Target detail unavailable"
+        subject="target"
+        message="This target address is not valid."
+        backHref={targetInventoryHref()}
+        backLabel="Back to Targets"
+      />
+    )
   if (error && !summary)
     return (
-      <div className="state-panel state-error">
-        <h1>Target detail unavailable</h1>
-        <p>{error}</p>
-      </div>
+      <PageError
+        title="Target detail unavailable"
+        subject="target"
+        error={error}
+        backHref={targetInventoryHref()}
+        backLabel="Back to Targets"
+        onRetry={() => void load()}
+      />
     )
   if (!summary || !series)
     return (
@@ -547,7 +584,7 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
       <div className="page-head page-head-primary">
         <div>
           <div className="eyebrow">
-            <a href={inheritRouteNetwork('#/')}>Overview</a> / Target detail
+            <a href={targetInventoryHref()}>Targets</a> / Target detail
           </div>
           <h1>{title}</h1>
           <p>

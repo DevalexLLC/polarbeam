@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Caps } from '../caps'
 import RoleWall from './RoleWall'
+import SettingsPageError from './SettingsPageError'
 import { apiGet, apiPost, apiPut } from '../api'
 import { fmtAgo } from '../format'
 import type { OIDCDiscoveryInfo, OIDCRoleRule, OIDCSettings, OIDCSettingsPut, UnmatchedRole } from '../types'
@@ -148,7 +149,8 @@ export default function OIDCSettingsPanel({
   onAuthError: (err: unknown) => void
 }) {
   const [data, setData] = useState<OIDCSettings | null>(null)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<unknown>(null)
+  const [retryKey, setRetryKey] = useState(0)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [formErrors, setFormErrors] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
@@ -169,13 +171,14 @@ export default function OIDCSettingsPanel({
         .then((res) => {
           if (!cancelled) {
             setData(res)
-            setError('')
+            setError(null)
           }
         })
         .catch((err) => {
           if (cancelled) return
           onAuthError(err)
-          setError(err instanceof Error ? err.message : String(err))
+          console.error('authentication settings request failed', err)
+          setError(err)
         })
     }
     load()
@@ -184,17 +187,19 @@ export default function OIDCSettingsPanel({
       cancelled = true
       clearInterval(id)
     }
-  }, [canWrite, onAuthError])
+  }, [canWrite, onAuthError, retryKey])
 
   if (!canWrite) {
     return <RoleWall need="adminWrite" what="Single sign-on settings" caps={caps} />
   }
   if (error && !data) {
     return (
-      <div className="state-panel state-error">
-        <h2>Authentication settings unavailable</h2>
-        <p>{error}</p>
-      </div>
+      <SettingsPageError
+        title="Authentication settings unavailable"
+        subject="authentication settings"
+        error={error}
+        onRetry={() => setRetryKey((key) => key + 1)}
+      />
     )
   }
   if (!data) {
@@ -302,7 +307,7 @@ export default function OIDCSettingsPanel({
 
   return (
     <>
-      {error && (
+      {error !== null && (
         <div className="inline-alert" role="status">
           Refresh failed. Showing the last successful snapshot.
         </div>

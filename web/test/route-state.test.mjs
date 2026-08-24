@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { canonicalizeRouteHash, inheritRouteNetwork, routeNumberParam, routeParam } from '../src/routeState.ts'
+import {
+  canonicalizeRouteHash,
+  inheritRouteNetwork,
+  routeNumberParam,
+  routeParam,
+  targetDetailHref,
+  targetInventoryHref,
+} from '../src/routeState.ts'
 
 test('canonical state omits defaults, unknown keys, and invalid values', () => {
   assert.equal(
@@ -16,6 +23,13 @@ test('legacy route paths canonicalize without losing selection', () => {
   assert.equal(canonicalizeRouteHash('#/paths?q=ny').hash, '#/routes?q=ny')
   assert.equal(canonicalizeRouteHash('#/agents/a%2Fb').hash, '#/agents?agent=a%2Fb')
   assert.equal(canonicalizeRouteHash('#/settings/probes').hash, '#/settings?section=probes')
+})
+
+test('unknown and malformed target paths remain recoverable routes', () => {
+  assert.equal(canonicalizeRouteHash('#/does-not-exist?junk=1').hash, '#/does-not-exist')
+  assert.equal(canonicalizeRouteHash('#/target').hash, '#/target')
+  assert.equal(canonicalizeRouteHash('#/target/%').hash, '#/target/%25')
+  assert.equal(canonicalizeRouteHash('#/sso-error=config').hash, '#/sso-error=config')
 })
 
 test('network is URL-only and reconciles against accessible planes', () => {
@@ -71,4 +85,20 @@ test('typed readers use canonical values and safe integer fallbacks', () => {
   assert.equal(routeParam('#/pair/a/b?metric=bogus', 'metric'), '')
   assert.equal(routeNumberParam('#/routes?page=7', 'page', 1), 7)
   assert.equal(routeNumberParam('#/routes?page=999999999999999999999', 'page', 1), 1)
+})
+
+test('target inventory links preserve canonical URL-backed context', () => {
+  const inventory = '#/targets?network=blue&q=edge&kind=external&status=incident&sort=probes&order=desc&page=2'
+  const detail = targetDetailHref('2f2a264e-0d9f-4fc7-8032-41d00448e278', inventory)
+  assert.equal(
+    detail,
+    '#/target/2f2a264e-0d9f-4fc7-8032-41d00448e278?network=blue&from=%23%2Ftargets%3Fnetwork%3Dblue%26q%3Dedge%26kind%3Dexternal%26status%3Dincident%26sort%3Dprobes%26order%3Ddesc%26page%3D2',
+  )
+  assert.equal(targetInventoryHref(detail), inventory)
+  assert.equal(
+    targetInventoryHref('#/target/id?network=green&from=%23%2Ftargets%3Fnetwork%3Dblue%26q%3Dedge%26sort%3Dcreated'),
+    '#/targets?network=green&q=edge&sort=created',
+  )
+  assert.equal(targetInventoryHref('#/target/id?from=%23%2Ftargets%3Fnetwork%3Dblue%26q%3Dedge'), '#/targets?q=edge')
+  assert.equal(targetInventoryHref('#/target/id?network=blue&from=%23%2Froutes%3Fq%3Dx'), '#/targets?network=blue')
 })

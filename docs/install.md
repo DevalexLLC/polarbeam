@@ -998,6 +998,13 @@ to show the latest full window. Changing the resource, network, window,
 metric, or selected target probe starts a fresh live range, as does a zoom
 whose entire range has aged out of retained data.
 
+Browser tabs identify the active dashboard page, selected Settings section,
+pair, target, or expanded agent. If an initial request fails, the page shows
+a concise recovery panel instead of server diagnostics; **Retry** appears
+only for transient failures and retains the current URL-backed filters. A
+missing target returns to **Targets**, including the inventory filters carried
+by the link that opened it.
+
 Everything above is the operator's view, which sees every plane. If the
 second network belongs to someone else — a tenant, or a team you would
 rather not hand the whole deployment to — give them an account scoped to it:

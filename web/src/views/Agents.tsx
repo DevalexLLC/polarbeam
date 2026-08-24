@@ -2,8 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { apiGet } from '../api'
 import DisclosureChevron from '../components/DisclosureChevron'
 import HealthStrip, { stripStats, UptimeValue } from '../components/HealthStrip'
+import PageError from '../components/PageError'
 import { fmtAgo, fmtTime } from '../format'
 import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
+import { pageFailure } from '../pageState'
 import { inheritRouteNetwork, updateRouteParams } from '../routeState'
 import { useTimezone } from '../timezone'
 import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
@@ -146,14 +148,14 @@ function ProbeDetail({
 }: {
   agentId: string
   detail: AgentProbeHealthResponse | null
-  error: string
+  error: unknown
   selectedProbe: string
   onSelectProbe: (probe: string) => void
 }) {
-  if (!detail && error)
+  if (!detail && error !== null)
     return (
       <div className="inline-alert" role="status">
-        Probe detail unavailable: {error}
+        {pageFailure(error, 'probe detail').message}
       </div>
     )
   if (!detail)
@@ -177,7 +179,7 @@ function ProbeDetail({
   const probes = [...detail.probes].sort((x, y) => probeSortKey(x).localeCompare(probeSortKey(y)))
   return (
     <div className="probe-strip-list">
-      {error && (
+      {error !== null && (
         <div className="inline-alert" role="status">
           Refresh failed. Showing the last successful snapshot.
         </div>
@@ -249,7 +251,7 @@ function Row({
   expanded: boolean
   onToggle: () => void
   detail: AgentProbeHealthResponse | null
-  detailError: string
+  detailError: unknown
   selectedProbe: string
   onSelectProbe: (probe: string) => void
 }) {
@@ -348,10 +350,19 @@ function Row({
   )
 }
 
-export default function Agents({ agent, onAuthError }: { agent: string | null; onAuthError: (err: unknown) => void }) {
+export default function Agents({
+  agent,
+  onAuthError,
+  onTitleChange,
+}: {
+  agent: string | null
+  onAuthError: (err: unknown) => void
+  onTitleChange: (title: string) => void
+}) {
   useTimezone() // re-render fmtTime tooltips on UTC/local toggle
   const [data, setData] = useState<AgentsResponse | null>(null)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<unknown>(null)
+  const [retryKey, setRetryKey] = useState(0)
   const [healthParam] = useRouteParam('health', 'all')
   const [query, setQuery] = useRouteSearch()
   const [sort] = useRouteParam('sort', 'status')
@@ -369,7 +380,7 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
   // card, refreshes, and Back all restore the expansion for free.
   const expanded = agent
   const [detail, setDetail] = useState<AgentProbeHealthResponse | null>(null)
-  const [detailError, setDetailError] = useState('')
+  const [detailError, setDetailError] = useState<unknown>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -378,12 +389,13 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
         .then((res) => {
           if (!cancelled) {
             setData(res)
-            setError('')
+            setError(null)
           }
         })
         .catch((err) => {
           onAuthError(err)
-          if (!cancelled) setError(err instanceof Error ? err.message : String(err))
+          console.error('agents request failed', err)
+          if (!cancelled) setError(err)
         })
     load()
     const id = setInterval(load, POLL_MS)
@@ -391,28 +403,29 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
       cancelled = true
       clearInterval(id)
     }
-  }, [onAuthError])
+  }, [onAuthError, retryKey])
 
   useEffect(() => {
     if (!expanded) {
       setDetail(null)
-      setDetailError('')
+      setDetailError(null)
       return
     }
     let cancelled = false
     setDetail(null)
-    setDetailError('')
+    setDetailError(null)
     const load = () =>
       apiGet<AgentProbeHealthResponse>(`/api/v1/agents/${expanded}/health?window=24h`)
         .then((res) => {
           if (!cancelled) {
             setDetail(res)
-            setDetailError('')
+            setDetailError(null)
           }
         })
         .catch((err) => {
           onAuthError(err)
-          if (!cancelled) setDetailError(err instanceof Error ? err.message : String(err))
+          console.error('agent probe detail request failed', err)
+          if (!cancelled) setDetailError(err)
         })
     load()
     const id = setInterval(load, POLL_MS)
@@ -421,6 +434,11 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
       clearInterval(id)
     }
   }, [expanded, onAuthError])
+
+  const expandedAgent = data?.agents.find((row) => row.id === expanded)
+  useEffect(() => {
+    if (expanded) onTitleChange(expandedAgent?.hostname ?? 'Agent detail')
+  }, [expanded, expandedAgent?.hostname, onTitleChange])
 
   useEffect(() => {
     if (!data || !expanded) return
@@ -519,10 +537,14 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
 
   if (error && !data)
     return (
-      <div className="state-panel state-error">
-        <h1>Agents unavailable</h1>
-        <p>{error}</p>
-      </div>
+      <PageError
+        title="Agents unavailable"
+        subject="agents"
+        error={error}
+        backHref={inheritRouteNetwork('#/')}
+        backLabel="Back to Overview"
+        onRetry={() => setRetryKey((key) => key + 1)}
+      />
     )
   if (!data)
     return (
@@ -570,7 +592,7 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
         </div>
       </div>
 
-      {error && (
+      {error !== null && (
         <div className="inline-alert" role="status">
           Refresh failed. Showing the last successful snapshot.
         </div>

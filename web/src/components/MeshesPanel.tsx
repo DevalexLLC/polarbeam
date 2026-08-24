@@ -5,6 +5,7 @@ import { initialPlane, networkField, planeReady } from '../plane'
 import type { MeshesConfigResponse, MeshConfig, SitesResponse } from '../types'
 import ConfirmButton from './ConfirmButton'
 import PlaneField from './PlaneField'
+import SettingsPageError from './SettingsPageError'
 
 const POLL_MS = 30_000
 
@@ -19,7 +20,8 @@ export default function MeshesPanel({
 }) {
   const [data, setData] = useState<MeshesConfigResponse | null>(null)
   const [sites, setSites] = useState<string[]>([])
-  const [error, setError] = useState('')
+  const [error, setError] = useState<unknown>(null)
+  const [retryKey, setRetryKey] = useState(0)
   const [actionError, setActionError] = useState('')
   const [newName, setNewName] = useState('')
   const [newNetworkDraft, setNewNetwork] = useState<string | null>(null)
@@ -36,13 +38,14 @@ export default function MeshesPanel({
           if (!cancelled) {
             setData(meshes)
             setSites(sitesRes.sites.map((s) => s.name))
-            setError('')
+            setError(null)
           }
         })
         .catch((err) => {
           if (cancelled) return
           onAuthError(err)
-          setError(err instanceof Error ? err.message : String(err))
+          console.error('mesh settings request failed', err)
+          setError(err)
         })
     }
     load()
@@ -51,7 +54,7 @@ export default function MeshesPanel({
       cancelled = true
       clearInterval(id)
     }
-  }, [onAuthError])
+  }, [onAuthError, retryKey])
 
   const reload = () => apiGet<MeshesConfigResponse>('/api/v1/config/meshes').then(setData).catch(onAuthError)
 
@@ -71,10 +74,12 @@ export default function MeshesPanel({
 
   if (error && !data) {
     return (
-      <div className="state-panel state-error">
-        <h2>Meshes unavailable</h2>
-        <p>{error}</p>
-      </div>
+      <SettingsPageError
+        title="Meshes unavailable"
+        subject="meshes"
+        error={error}
+        onRetry={() => setRetryKey((key) => key + 1)}
+      />
     )
   }
   if (!data) {
@@ -93,7 +98,7 @@ export default function MeshesPanel({
 
   return (
     <>
-      {error && (
+      {error !== null && (
         <div className="inline-alert" role="status">
           Refresh failed. Showing the last successful snapshot.
         </div>

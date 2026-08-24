@@ -10,6 +10,7 @@ import { fmtAgo, fmtTime } from '../format'
 import { useTimezone } from '../timezone'
 import type { JoinToken, SitesConfigResponse, TokenCreateResponse, TokensResponse } from '../types'
 import ConfirmButton from './ConfirmButton'
+import SettingsPageError from './SettingsPageError'
 
 const POLL_MS = 30_000
 
@@ -45,7 +46,8 @@ export default function EnrollmentPanel({
   useTimezone() // re-render fmtTime renders on UTC/local toggle
   const [data, setData] = useState<TokensResponse | null>(null)
   const [siteNames, setSiteNames] = useState<string[]>([])
-  const [error, setError] = useState('')
+  const [error, setError] = useState<unknown>(null)
+  const [retryKey, setRetryKey] = useState(0)
   const [actionError, setActionError] = useState('')
   const [site, setSite] = useState('')
   const [networkDraft, setNetwork] = useState<string | null>(null)
@@ -68,13 +70,14 @@ export default function EnrollmentPanel({
         .then((res) => {
           if (!cancelled) {
             setData(res)
-            setError('')
+            setError(null)
           }
         })
         .catch((err) => {
           if (cancelled) return
           onAuthError(err)
-          setError(err instanceof Error ? err.message : String(err))
+          console.error('enrollment settings request failed', err)
+          setError(err)
         })
       apiGet<SitesConfigResponse>('/api/v1/config/sites')
         .then((res) => {
@@ -90,17 +93,19 @@ export default function EnrollmentPanel({
       cancelled = true
       clearInterval(id)
     }
-  }, [canWrite, onAuthError])
+  }, [canWrite, onAuthError, retryKey])
 
   if (!canWrite) {
     return <RoleWall need="networkWrite" what="Enrollment tokens" caps={caps} />
   }
   if (error && !data) {
     return (
-      <div className="state-panel state-error">
-        <h2>Enrollment tokens unavailable</h2>
-        <p>{error}</p>
-      </div>
+      <SettingsPageError
+        title="Enrollment tokens unavailable"
+        subject="enrollment tokens"
+        error={error}
+        onRetry={() => setRetryKey((key) => key + 1)}
+      />
     )
   }
   if (!data) {
@@ -164,7 +169,7 @@ export default function EnrollmentPanel({
 
   return (
     <>
-      {error && (
+      {error !== null && (
         <div className="inline-alert" role="status">
           Refresh failed. Showing the last successful snapshot.
         </div>

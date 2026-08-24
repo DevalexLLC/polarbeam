@@ -14,6 +14,7 @@ import OIDCSettingsPanel from '../components/OIDCSettingsPanel'
 import NetworkThresholdsPanel from '../components/NetworkThresholdsPanel'
 import PathThresholdsPanel from '../components/PathThresholdsPanel'
 import ProbesPanel from '../components/ProbesPanel'
+import SettingsPageError from '../components/SettingsPageError'
 import SitesPanel from '../components/SitesPanel'
 import TargetsPanel from '../components/TargetsPanel'
 import ThresholdSettingsPanel from '../components/ThresholdSettings'
@@ -40,7 +41,7 @@ export default function Settings({
   onBannerSaved: (b: UIBanner) => void
 }) {
   const [settings, setSettings] = useState<SettingsResponse | null>(null)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<unknown>(null)
   const [selectedSite, setSelectedSite] = useRouteParam('site')
   const [selectedProbe, setSelectedProbe] = useRouteParam('probe')
 
@@ -68,11 +69,12 @@ export default function Settings({
     apiGet<SettingsResponse>('/api/v1/settings')
       .then((s) => {
         setSettings(s)
-        setError('')
+        setError(null)
       })
       .catch((err) => {
         onAuthError(err)
-        setError(err instanceof Error ? err.message : String(err))
+        console.error('settings request failed', err)
+        setError(err)
       })
   }, [onAuthError])
 
@@ -144,10 +146,7 @@ export default function Settings({
           onAuthError={onAuthError}
         />
       ) : error && !settings ? (
-        <div className="state-panel state-error">
-          <h2>Settings unavailable</h2>
-          <p>{error}</p>
-        </div>
+        <SettingsPageError title="Settings unavailable" subject="settings" error={error} onRetry={load} />
       ) : !settings ? (
         <div className="state-panel" role="status">
           <span className="state-spinner" />
@@ -155,7 +154,7 @@ export default function Settings({
         </div>
       ) : (
         <>
-          {error && (
+          {error !== null && (
             <div className="inline-alert" role="status">
               Refresh failed. Showing the last successful snapshot.
             </div>

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { apiGet } from '../api'
+import PageError from '../components/PageError'
 import { fmtAgo, fmtTime } from '../format'
 import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
-import { inheritRouteNetwork, updateRouteParams } from '../routeState'
+import { inheritRouteNetwork, targetDetailHref, updateRouteParams } from '../routeState'
 import { useTimezone } from '../timezone'
 import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
 import type {
@@ -62,7 +63,8 @@ function StatusCell({ t, troubled, active }: { t: TargetConfig; troubled: Set<st
 export default function Targets({ onAuthError }: { onAuthError: (err: unknown) => void }) {
   useTimezone() // re-render fmtTime tooltips on UTC/local toggle
   const [feeds, setFeeds] = useState<Feeds | null>(null)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<unknown>(null)
+  const [retryKey, setRetryKey] = useState(0)
   const [query, setQuery] = useRouteSearch()
   const [kind] = useRouteParam('kind', 'all')
   const [status] = useRouteParam('status', 'all')
@@ -87,11 +89,12 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
             agentByID: new Map(agents.agents.map((a) => [a.id, a])),
             outages: outages.outages,
           })
-          setError('')
+          setError(null)
         })
         .catch((err) => {
           onAuthError(err)
-          if (!cancelled) setError(err instanceof Error ? err.message : String(err))
+          console.error('targets request failed', err)
+          if (!cancelled) setError(err)
         })
     load()
     const id = setInterval(load, POLL_MS)
@@ -99,7 +102,7 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
       cancelled = true
       clearInterval(id)
     }
-  }, [onAuthError])
+  }, [onAuthError, retryKey])
 
   // The global top-bar network filter scopes the whole view before the
   // search does: probing sites, incident status, rows, and header chips.
@@ -188,10 +191,14 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
 
   if (error && !feeds)
     return (
-      <div className="state-panel state-error">
-        <h1>Targets unavailable</h1>
-        <p>{error}</p>
-      </div>
+      <PageError
+        title="Targets unavailable"
+        subject="targets"
+        error={error}
+        backHref={inheritRouteNetwork('#/')}
+        backLabel="Back to Overview"
+        onRetry={() => setRetryKey((key) => key + 1)}
+      />
     )
   if (!feeds || !scoped)
     return (
@@ -227,7 +234,7 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
         </div>
       </div>
 
-      {error && (
+      {error !== null && (
         <div className="inline-alert" role="status">
           Refresh failed. Showing the last successful snapshot.
         </div>
@@ -325,7 +332,7 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
                         <StatusCell t={t} troubled={scoped.troubled} active={scoped.probeSites.has(t.name)} />
                       </td>
                       <td data-label="Name" className="mono">
-                        <a href={inheritRouteNetwork('#/target/' + encodeURIComponent(t.id))}>{t.name}</a>
+                        <a href={targetDetailHref(t.id)}>{t.name}</a>
                       </td>
                       <td data-label="Endpoint" className="mono">
                         {t.url ? t.url : t.port ? `${t.address}:${t.port}` : t.address}
@@ -392,9 +399,7 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
                           <StatusCell t={t} troubled={scoped.troubled} active />
                         </td>
                         <td data-label="Site" className="mono">
-                          <a href={inheritRouteNetwork('#/target/' + encodeURIComponent(t.id))}>
-                            {agent ? agent.site : t.name}
-                          </a>
+                          <a href={targetDetailHref(t.id)}>{agent ? agent.site : t.name}</a>
                         </td>
                         <td data-label="Agent" className="mono">
                           {agent ? agent.hostname : <span className="hint">deleted agent</span>}

@@ -72,13 +72,14 @@ function normalizePath(rawPath: string, source: URLSearchParams): string {
     return '/agents'
   }
   if (head === 'pair' && parts[1] && parts[2]) return `/pair/${encodedSegment(parts[1])}/${encodedSegment(parts[2])}`
-  if (head === 'target' && parts[1]) return `/target/${encodedSegment(parts[1])}`
+  if (head === 'target') return parts[1] ? `/target/${encodedSegment(parts[1])}` : '/target'
   if (head === 'settings') {
     if (parts[1] && !source.has('section')) source.set('section', decodeSegment(parts[1]))
     return '/settings'
   }
+  if (/^sso-error=[a-z-]+$/.test(head)) return `/${head}`
   if (head === 'about') return '/about'
-  return '/'
+  return `/${parts.map(encodedSegment).join('/')}`
 }
 
 function routeName(path: string): string {
@@ -142,7 +143,10 @@ export function canonicalizeRouteHash(hash: string, options: CanonicalRouteOptio
   } else if (route === 'pair' || route === 'target') {
     setNonDefault(out, 'window', oneOf(source, 'window', WINDOWS, '24h'), '24h')
     setNonDefault(out, 'metric', oneOf(source, 'metric', ['latency', 'loss'], 'latency'), 'latency')
-    if (route === 'target') setNonDefault(out, 'probe', opaque(source, 'probe'))
+    if (route === 'target') {
+      setNonDefault(out, 'probe', opaque(source, 'probe'))
+      setNonDefault(out, 'from', opaque(source, 'from'))
+    }
   } else if (route === 'settings') {
     const sections = options.settingsSections ?? SETTINGS_SECTIONS
     const section = oneOf(source, 'section', sections, sections[0] ?? '')
@@ -184,6 +188,35 @@ export function inheritRouteNetwork(href: string, sourceHash?: string): string {
   const params = new URLSearchParams(target.params)
   params.set('network', network)
   return canonicalizeRouteHash(`#${target.path}?${params.toString()}`).hash
+}
+
+// Inventory links carry their canonical URL state into target detail so the
+// breadcrumb works in copied/new-tab links as well as browser history. Other
+// entry points fall back to the Targets landing page in the current plane.
+export function targetDetailHref(id: string, sourceHash = routeHashSnapshot()): string {
+  const source = canonicalizeRouteHash(sourceHash)
+  const target = canonicalizeRouteHash(`#/target/${encodeURIComponent(id)}`)
+  const params = new URLSearchParams(target.params)
+  const network = source.params.get('network')
+  if (network) params.set('network', network)
+  if (source.path === '/targets') params.set('from', source.hash)
+  return canonicalizeRouteHash(`#${target.path}?${params.toString()}`).hash
+}
+
+export function targetInventoryHref(sourceHash = routeHashSnapshot()): string {
+  const source = canonicalizeRouteHash(sourceHash)
+  const from = source.params.get('from')
+  if (from) {
+    const inventory = canonicalizeRouteHash(from)
+    if (inventory.path === '/targets') {
+      const params = new URLSearchParams(inventory.params)
+      const currentNetwork = source.params.get('network')
+      if (currentNetwork) params.set('network', currentNetwork)
+      else params.delete('network')
+      return canonicalizeRouteHash(`#${inventory.path}?${params.toString()}`).hash
+    }
+  }
+  return inheritRouteNetwork('#/targets', source.hash)
 }
 
 export function updateRouteParams(

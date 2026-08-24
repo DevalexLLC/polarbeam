@@ -45,6 +45,13 @@ Pair and target uPlot charts share investigation-range behavior through
 `web/src/chartRange.ts`. Every caller must pass a context key containing all
 resource, network, window, metric, and probe inputs that reset zoom.
 
+`web/src/App.tsx` owns route-aware document titles; asynchronous target and
+agent identities report back through its title callback. Initial route and
+Settings-subsection failures use `web/src/components/PageError.tsx` (or its
+Settings wrapper): keep raw causes in diagnostics, preserve URL state on
+Retry, and expose Retry only when `web/src/pageState.ts` classifies the
+failure as retryable.
+
 ## Coding Style & Naming Conventions
 
 Format Go with `gofmt`; use tabs, lowercase packages, and conventional

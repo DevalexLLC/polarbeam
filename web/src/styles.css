@@ -2839,7 +2839,8 @@ button.primary:disabled {
   background: var(--surface-2);
 }
 
-.secondary-button:disabled {
+.secondary-button:disabled,
+.state-panel button:disabled {
   cursor: wait;
   opacity: 0.65;
 }
@@ -3618,6 +3619,20 @@ td.users-actions .inline-confirm:disabled {
 .state-error h1,
 .state-error h2 {
   color: var(--status-down);
+}
+
+.state-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.state-actions .secondary-button {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
 }
 
 .state-spinner {

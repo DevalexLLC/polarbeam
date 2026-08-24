@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { apiGet } from '../api'
 import ConnectivityCard, { type ConnectivityMode } from '../components/ConnectivityCard'
 import FleetAgentsCard from '../components/FleetAgentsCard'
+import PageError from '../components/PageError'
 import { fmtAgo } from '../format'
 import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
 import { inheritRouteNetwork } from '../routeState'
@@ -87,7 +88,7 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
   // The global top-bar filter; '' = all planes folded together — the
   // pre-networks view. Every stat tile and card on this page honors it.
   const { network: netFilter } = useNetworkFilter()
-  const [error, setError] = useState('')
+  const [error, setError] = useState<unknown>(null)
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
   const [refreshing, setRefreshing] = useState(false)
 
@@ -107,11 +108,12 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
         setSettings(s)
         setHealth(h)
         setUpdatedAt(new Date())
-        setError('')
+        setError(null)
       })
       .catch((err) => {
         onAuthError(err)
-        setError(err instanceof Error ? err.message : String(err))
+        console.error('overview request failed', err)
+        setError(err)
       })
       .finally(() => setRefreshing(false))
   }, [onAuthError])
@@ -186,13 +188,7 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
   }).length
 
   if (error && !matrix)
-    return (
-      <div className="state-panel state-error">
-        <h1>Overview unavailable</h1>
-        <p>{error}</p>
-        <button onClick={() => void load()}>Try again</button>
-      </div>
-    )
+    return <PageError title="Overview unavailable" subject="overview" error={error} onRetry={() => void load()} />
   if (!matrix || !agents || !outages)
     return (
       <div className="state-panel" role="status">
@@ -217,7 +213,7 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
         </div>
       </div>
 
-      {error && (
+      {error !== null && (
         <div className="inline-alert" role="status">
           Refresh failed. Showing the last successful snapshot.
         </div>

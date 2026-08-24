@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { apiGet } from '../api'
 import DisclosureChevron from '../components/DisclosureChevron'
+import PageError from '../components/PageError'
 import PathGraph from '../components/PathGraph'
 import { fmtAgo, fmtTime } from '../format'
 import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
@@ -163,7 +164,8 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
   const [expandedEvent, setExpandedEvent] = useRouteParam('event')
   const win = windowParam as Window
   const [data, setData] = useState<PathEventsResponse | null>(null)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<unknown>(null)
+  const [retryKey, setRetryKey] = useState(0)
   const [query, setQuery] = useRouteSearch()
 
   useEffect(() => {
@@ -173,12 +175,13 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
         .then((res) => {
           if (!cancelled) {
             setData(res)
-            setError('')
+            setError(null)
           }
         })
         .catch((err) => {
           onAuthError(err)
-          if (!cancelled) setError(err instanceof Error ? err.message : String(err))
+          console.error('routes request failed', err)
+          if (!cancelled) setError(err)
         })
     load()
     const id = setInterval(load, POLL_MS)
@@ -186,7 +189,7 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
       cancelled = true
       clearInterval(id)
     }
-  }, [win, onAuthError])
+  }, [win, onAuthError, retryKey])
 
   // The global top-bar network filter narrows first (the header count reads
   // this subset too), then the search narrows the listed rows.
@@ -256,10 +259,14 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
 
   if (error && !data)
     return (
-      <div className="state-panel state-error">
-        <h1>Routes unavailable</h1>
-        <p>{error}</p>
-      </div>
+      <PageError
+        title="Routes unavailable"
+        subject="routes"
+        error={error}
+        backHref={inheritRouteNetwork('#/')}
+        backLabel="Back to Overview"
+        onRetry={() => setRetryKey((key) => key + 1)}
+      />
     )
   if (!data)
     return (
@@ -284,7 +291,7 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
         </div>
       </div>
 
-      {error && (
+      {error !== null && (
         <div className="inline-alert" role="status">
           Refresh failed. Showing the last successful snapshot.
         </div>

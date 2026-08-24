@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Caps } from '../caps'
 import RoleWall from './RoleWall'
+import SettingsPageError from './SettingsPageError'
 import { apiGet, apiPut } from '../api'
 import { fmtAgo } from '../format'
 import type { BannerSettings, BannerSettingsPut, UIBanner } from '../types'
@@ -40,7 +41,8 @@ export default function BannerSettingsPanel({
   onSaved: (b: UIBanner) => void
 }) {
   const [data, setData] = useState<BannerSettings | null>(null)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<unknown>(null)
+  const [retryKey, setRetryKey] = useState(0)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [formErrors, setFormErrors] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
@@ -56,13 +58,14 @@ export default function BannerSettingsPanel({
         .then((res) => {
           if (!cancelled) {
             setData(res)
-            setError('')
+            setError(null)
           }
         })
         .catch((err) => {
           if (cancelled) return
           onAuthError(err)
-          setError(err instanceof Error ? err.message : String(err))
+          console.error('banner settings request failed', err)
+          setError(err)
         })
     }
     load()
@@ -71,17 +74,19 @@ export default function BannerSettingsPanel({
       cancelled = true
       clearInterval(id)
     }
-  }, [canWrite, onAuthError])
+  }, [canWrite, onAuthError, retryKey])
 
   if (!canWrite) {
     return <RoleWall need="adminWrite" what="Banner settings" caps={caps} />
   }
   if (error && !data) {
     return (
-      <div className="state-panel state-error">
-        <h2>Banner settings unavailable</h2>
-        <p>{error}</p>
-      </div>
+      <SettingsPageError
+        title="Banner settings unavailable"
+        subject="banner settings"
+        error={error}
+        onRetry={() => setRetryKey((key) => key + 1)}
+      />
     )
   }
   if (!data) {
@@ -128,7 +133,7 @@ export default function BannerSettingsPanel({
 
   return (
     <>
-      {error && (
+      {error !== null && (
         <div className="inline-alert" role="status">
           Refresh failed. Showing the last successful snapshot.
         </div>
