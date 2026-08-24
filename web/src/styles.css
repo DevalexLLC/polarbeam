@@ -53,6 +53,12 @@
   --radius: 8px;
   --radius-lg: 12px;
 
+  /* Shared interaction geometry. Controls are 40 px by default and grow to
+     44 px on narrow/coarse-pointer devices; even compact icon and row-action
+     controls retain a 24 px floor on their shorter axis. */
+  --control-target: 40px;
+  --minimum-target: 24px;
+
   /* Cards get a whisper of elevation on light surfaces; dark relies on
      borders alone (shadows read as mud on near-black). */
   --shadow-card: 0 1px 2px rgb(0 0 0 / 0.05);
@@ -531,8 +537,8 @@ button.linklike:hover {
   appearance: none;
   position: relative;
   flex: none;
-  width: 2.15rem;
-  height: 1.25rem;
+  width: 44px;
+  height: 24px;
   margin: 0;
   border-radius: 999px;
   background: var(--border-strong);
@@ -543,10 +549,10 @@ button.linklike:hover {
 .oidc-enable input::after {
   content: '';
   position: absolute;
-  top: 0.125rem;
-  left: 0.125rem;
-  width: 1rem;
-  height: 1rem;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   background: #fff;
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
@@ -558,7 +564,7 @@ button.linklike:hover {
 }
 
 .oidc-enable input:checked::after {
-  transform: translateX(0.9rem);
+  transform: translateX(20px);
 }
 
 .oidc-enable input:focus-visible {
@@ -3611,10 +3617,29 @@ td.users-actions .inline-confirm:disabled {
 }
 
 .incident-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
   color: var(--accent);
   font-size: 0.76rem;
   font-weight: 650;
   white-space: nowrap;
+}
+
+.disclosure-chevron {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  transition: transform 120ms ease;
+}
+
+.disclosure-chevron-expanded {
+  transform: rotate(90deg);
 }
 
 .incident-details {
@@ -3868,6 +3893,10 @@ td.users-actions .inline-confirm:disabled {
   .state-spinner {
     animation: none;
   }
+
+  .disclosure-chevron {
+    transition: none;
+  }
 }
 
 /* ---- Probe-workload management (Settings tabs) ---- */
@@ -4055,6 +4084,238 @@ button.path-toggle:hover {
   margin-left: auto;
 }
 
+/* ---- Mobile shell and shared interaction targets ---- */
+
+.mobile-nav-toggle,
+.mobile-nav-layer {
+  display: none;
+}
+
+.mobile-nav-toggle,
+.mobile-nav-close {
+  width: var(--control-target);
+  height: var(--control-target);
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  cursor: pointer;
+  place-items: center;
+}
+
+.mobile-nav-close {
+  display: grid;
+}
+
+.mobile-nav-toggle:hover,
+.mobile-nav-toggle:focus-visible,
+.mobile-nav-close:hover,
+.mobile-nav-close:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.mobile-nav-toggle svg,
+.mobile-nav-close svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 1.8;
+}
+
+.mobile-nav-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: rgb(0 0 0 / 0.48);
+  cursor: default;
+}
+
+.mobile-nav-drawer {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: min(20rem, calc(100vw - 3rem));
+  padding: 1rem;
+  border-right: 1px solid var(--border-strong);
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: 14px 0 36px rgb(0 0 0 / 0.2);
+}
+
+.mobile-nav-heading {
+  display: flex;
+  min-height: var(--control-target);
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+  color: var(--ink-3);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.mobile-nav-drawer nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.mobile-nav-link {
+  display: flex;
+  align-items: center;
+  padding: 0.65rem 0.8rem;
+  border-radius: var(--radius);
+  color: var(--ink-2);
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.mobile-nav-link:hover,
+.mobile-nav-link:focus-visible {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+
+.mobile-nav-link[aria-current='page'] {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+/* Explicit selectors make the operational touch contract auditable and keep
+   compact component overrides from shrinking any of these critical targets. */
+.topnav a,
+.mobile-nav-toggle,
+.mobile-nav-link,
+.control-group button,
+button.agent-detail-toggle,
+button.path-toggle,
+td.config-actions .secondary-button,
+td.users-actions .inline-confirm {
+  min-width: var(--minimum-target);
+  min-height: var(--control-target);
+}
+
+.incident-summary {
+  min-width: var(--minimum-target);
+  min-height: max(72px, var(--control-target));
+}
+
+button:not(.linklike),
+summary,
+select,
+textarea,
+input:not([type='checkbox']):not([type='radio']) {
+  min-width: var(--minimum-target);
+  min-height: var(--control-target);
+}
+
+input[type='checkbox'],
+input[type='radio'] {
+  min-width: var(--minimum-target);
+  min-height: var(--minimum-target);
+}
+
+button.linklike {
+  min-width: var(--minimum-target);
+  min-height: var(--minimum-target);
+}
+
+@media (max-width: 760px), (pointer: coarse) {
+  :root {
+    --control-target: 44px;
+  }
+}
+
+@media (max-width: 760px) {
+  .topbar {
+    position: sticky;
+    top: 0;
+    min-height: 60px;
+    flex-wrap: nowrap;
+    gap: 0.4rem;
+    padding: 0.5rem 0.75rem;
+  }
+
+  .banner-frame .topbar {
+    top: var(--banner-h);
+  }
+
+  .brand {
+    min-width: 0;
+  }
+
+  .brand-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .topnav {
+    display: none;
+  }
+
+  .mobile-nav-toggle {
+    display: grid;
+    flex: none;
+  }
+
+  .mobile-nav-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    display: block;
+  }
+
+  .topbar-right {
+    min-width: 0;
+    gap: 0.35rem;
+    margin-left: auto;
+  }
+
+  .topbar-plane {
+    min-width: 0;
+    overflow: hidden;
+    max-width: 5rem;
+    flex: 0 1 5rem;
+    text-overflow: ellipsis;
+  }
+
+  .theme-toggle,
+  .topbar-filter > summary,
+  .user-menu > summary {
+    width: var(--control-target);
+    height: var(--control-target);
+  }
+
+  .tz-toggle {
+    width: auto;
+    min-width: var(--control-target);
+  }
+
+  .app main {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 520px) {
+  .brand-name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+}
+
 .mesh-members {
   display: flex;
   align-items: center;
@@ -4120,4 +4381,11 @@ button.path-toggle:hover {
   .config-form-grid {
     flex-direction: column;
   }
+}
+
+/* This compact chip action is declared after the shared target rules above;
+   restate the contract here so cascade order cannot shrink its hit area. */
+.mesh-members .chip .inline-confirm {
+  min-width: var(--minimum-target);
+  min-height: var(--control-target);
 }

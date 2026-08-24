@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { apiGet } from '../api'
+import DisclosureChevron from '../components/DisclosureChevron'
 import HealthStrip, { stripStats, UptimeValue } from '../components/HealthStrip'
 import { fmtAgo, fmtTime } from '../format'
 import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
@@ -218,6 +219,7 @@ function Row({
   detailError: string
 }) {
   const h = health(a)
+  const detailsID = `agent-detail-${a.id}`
   return (
     <>
       <tr
@@ -286,14 +288,16 @@ function Row({
             type="button"
             className="incident-toggle agent-detail-toggle"
             aria-expanded={expanded}
+            aria-controls={detailsID}
             onClick={onToggle}
           >
-            {expanded ? 'Hide details' : 'View details'} <span aria-hidden="true">{expanded ? '−' : '+'}</span>
+            {expanded ? 'Hide details' : 'View details'}
+            <DisclosureChevron expanded={expanded} />
           </button>
         </td>
       </tr>
       {expanded && (
-        <tr className="agent-detail-row">
+        <tr id={detailsID} className="agent-detail-row">
           <td colSpan={multiNetwork ? 11 : 10} data-label="24 h probes">
             <ProbeDetail agentId={a.id} detail={detail} error={detailError} />
           </td>
