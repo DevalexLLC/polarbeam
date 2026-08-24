@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,26 @@ import (
 func (f *fakeDB) ListTargets(_ context.Context, networks []uuid.UUID) ([]store.TargetInfo, error) {
 	f.recordScope("ListTargets", networks)
 	return f.targets, nil
+}
+
+func (f *fakeDB) QueryTargetsConfig(_ context.Context, filter store.TargetConfigFilter) ([]store.TargetInfo, int64, error) {
+	f.recordScope("QueryTargetsConfig", filter.Networks)
+	f.lastTargetConfigQuery = filter
+	start := min(filter.Offset, len(f.targets))
+	end := min(start+filter.Limit, len(f.targets))
+	return f.targets[start:end], f.targetConfigQueryTotal, nil
+}
+
+func (f *fakeDB) GetTargetConfig(_ context.Context, name string, networks []uuid.UUID) (*store.TargetInfo, error) {
+	f.recordScope("GetTargetConfig", networks)
+	for i := range f.targets {
+		if f.targets[i].Name == name &&
+			(networks == nil || f.targets[i].Network == "" || f.networkInScope(f.targets[i].Network, networks)) {
+			target := f.targets[i]
+			return &target, nil
+		}
+	}
+	return nil, fmt.Errorf("target %q does not exist%w", name, store.ErrNotFound)
 }
 
 // targetWritable mirrors the store's targetInScope: unscoped callers write
@@ -172,6 +193,25 @@ func (f *fakeDB) RemoveMeshMember(_ context.Context, meshName, siteName string, 
 func (f *fakeDB) ListProbeConfigs(_ context.Context, networks []uuid.UUID) ([]store.ProbeConfigInfo, error) {
 	f.recordScope("ListProbeConfigs", networks)
 	return f.probes, nil
+}
+
+func (f *fakeDB) QueryProbeConfigs(_ context.Context, filter store.ProbeConfigFilter) ([]store.ProbeConfigInfo, int64, error) {
+	f.recordScope("QueryProbeConfigs", filter.Networks)
+	f.lastProbeConfigQuery = filter
+	start := min(filter.Offset, len(f.probes))
+	end := min(start+filter.Limit, len(f.probes))
+	return f.probes[start:end], f.probeConfigQueryTotal, nil
+}
+
+func (f *fakeDB) GetProbeConfigScoped(_ context.Context, id uuid.UUID, networks []uuid.UUID) (*store.ProbeConfigInfo, error) {
+	f.recordScope("GetProbeConfigScoped", networks)
+	for i := range f.probes {
+		if f.probes[i].ID == id && (networks == nil || f.networkInScope(f.probes[i].Network, networks)) {
+			p := f.probes[i]
+			return &p, nil
+		}
+	}
+	return nil, fmt.Errorf("probe config %s does not exist%w", id, store.ErrNotFound)
 }
 
 func (f *fakeDB) GetProbeConfig(_ context.Context, id uuid.UUID) (*store.ProbeConfigInfo, error) {
@@ -327,6 +367,96 @@ func TestConfigAuth(t *testing.T) {
 	adminCookie, _ := configLogin(t, h, f, "admin")
 	if w := doConfig(t, h, "POST", "/api/v1/config/meshes", `{"name":"m"}`, adminCookie, ""); w.Code != http.StatusForbidden {
 		t.Errorf("admin write without CSRF = %d, want 403", w.Code)
+	}
+}
+
+func TestTargetAndProbeConfigQueriesAndDetails(t *testing.T) {
+	f := newFakeDB()
+	netID := uuid.New()
+	otherNetID := uuid.New()
+	f.networks = append(f.networks,
+		store.NetworkAdminInfo{ID: netID, Name: "corp"},
+		store.NetworkAdminInfo{ID: otherNetID, Name: "other"})
+	f.targets = []store.TargetInfo{
+		{ID: uuid.New(), Kind: "external", Name: "db", Address: "192.0.2.1", Network: "corp", CreatedAt: time.Now()},
+		{ID: uuid.New(), Kind: "external", Name: "web", URL: "https://example.test", CreatedAt: time.Now()},
+		{ID: uuid.New(), Kind: "external", Name: "hidden", Address: "192.0.2.2", Network: "other", CreatedAt: time.Now()},
+	}
+	probeID := uuid.New()
+	hiddenProbeID := uuid.New()
+	f.probes = []store.ProbeConfigInfo{
+		{ID: uuid.New(), Site: "lon", Target: "db", Network: "corp", ProbeType: int16(pb.ProbeType_PROBE_TYPE_TCP), Params: map[string]string{}, CreatedAt: time.Now(), UpdatedAt: time.Now()},
+		{ID: probeID, Site: "nyc", Target: "web", Network: "corp", ProbeType: int16(pb.ProbeType_PROBE_TYPE_ICMP), Params: map[string]string{}, CreatedAt: time.Now(), UpdatedAt: time.Now()},
+		{ID: hiddenProbeID, Site: "hidden", Target: "hidden", Network: "other", ProbeType: int16(pb.ProbeType_PROBE_TYPE_ICMP), Params: map[string]string{}, CreatedAt: time.Now(), UpdatedAt: time.Now()},
+	}
+	f.targetConfigQueryTotal = 9
+	f.probeConfigQueryTotal = 7
+	h := newTestAPI(t, f)
+	cookie, _ := configLogin(t, h, f, "viewer")
+
+	for _, path := range []string{"/api/v1/config/targets", "/api/v1/config/probes"} {
+		w := doConfig(t, h, "GET", path, "", cookie, "")
+		if w.Code != http.StatusOK || strings.Contains(w.Body.String(), `"page"`) {
+			t.Errorf("legacy %s = %d %s", path, w.Code, w.Body)
+		}
+	}
+
+	w := doConfig(t, h, "GET",
+		"/api/v1/config/targets?network=corp&q=db&kind=external&sort=probes&order=desc&limit=1&offset=1", "", cookie, "")
+	targetFilter := f.lastTargetConfigQuery
+	if w.Code != http.StatusOK || targetFilter.Query != "db" || targetFilter.Kind != "external" ||
+		targetFilter.Sort != "probes" || targetFilter.Order != "desc" ||
+		targetFilter.Limit != 1 || targetFilter.Offset != 1 ||
+		!slices.Equal(targetFilter.Networks, []uuid.UUID{netID}) ||
+		!strings.Contains(w.Body.String(), `"total":9`) {
+		t.Errorf("target query = %d filter %+v body %s", w.Code, targetFilter, w.Body)
+	}
+
+	w = doConfig(t, h, "GET",
+		"/api/v1/config/probes?network=corp&q=icmp&mode=direct&enabled=false&type=icmp&sort=updated&order=desc&limit=1&offset=1", "", cookie, "")
+	probeFilter := f.lastProbeConfigQuery
+	if w.Code != http.StatusOK || probeFilter.Query != "icmp" || probeFilter.Mode != "direct" ||
+		probeFilter.Enabled == nil || *probeFilter.Enabled ||
+		probeFilter.ProbeType != int16(pb.ProbeType_PROBE_TYPE_ICMP) ||
+		probeFilter.Sort != "updated" || probeFilter.Order != "desc" ||
+		probeFilter.Limit != 1 || probeFilter.Offset != 1 ||
+		!slices.Equal(probeFilter.Networks, []uuid.UUID{netID}) ||
+		!strings.Contains(w.Body.String(), `"total":7`) {
+		t.Errorf("probe query = %d filter %+v body %s", w.Code, probeFilter, w.Body)
+	}
+
+	for _, tt := range []struct {
+		path string
+		want string
+	}{
+		{"/api/v1/config/targets/db", `"name":"db"`},
+		{"/api/v1/config/probes/" + probeID.String(), `"id":"` + probeID.String() + `"`},
+	} {
+		detail := doConfig(t, h, "GET", tt.path, "", cookie, "")
+		if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), tt.want) {
+			t.Errorf("detail %s = %d %s", tt.path, detail.Code, detail.Body)
+		}
+	}
+	scopedCookie, _ := testSession(f, store.RoleNetworkViewer, []store.NetworkRef{{ID: netID, Name: "corp"}})
+	for _, path := range []string{
+		"/api/v1/config/targets/hidden",
+		"/api/v1/config/probes/" + hiddenProbeID.String(),
+	} {
+		if hidden := doConfig(t, h, "GET", path, "", scopedCookie, ""); hidden.Code != http.StatusNotFound {
+			t.Errorf("inaccessible detail %s = %d, want 404: %s", path, hidden.Code, hidden.Body)
+		}
+	}
+	if badID := doConfig(t, h, "GET", "/api/v1/config/probes/not-a-uuid", "", cookie, ""); badID.Code != http.StatusBadRequest {
+		t.Errorf("malformed probe detail = %d, want 400: %s", badID.Code, badID.Body)
+	}
+	for _, path := range []string{
+		"/api/v1/config/targets?kind=bogus",
+		"/api/v1/config/probes?enabled=yes",
+		"/api/v1/config/probes?type=bogus",
+	} {
+		if invalid := doConfig(t, h, "GET", path, "", cookie, ""); invalid.Code != http.StatusBadRequest {
+			t.Errorf("invalid query %s = %d, want 400: %s", path, invalid.Code, invalid.Body)
+		}
 	}
 }
 

@@ -116,7 +116,50 @@ type targetJSON struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+func toTargetJSON(t store.TargetInfo) targetJSON {
+	return targetJSON{
+		ID: t.ID.String(), Kind: t.Kind, Name: t.Name, Address: t.Address,
+		Port: t.Port, URL: t.URL, Network: t.Network,
+		ProbeCount: t.ProbeCount, CreatedAt: t.CreatedAt,
+	}
+}
+
+var targetConfigListSpec = listQuerySpec{
+	Filters:      []listFilterSpec{{Name: "kind", Allowed: []string{"agent", "external"}}},
+	Sorts:        []string{"name", "kind", "network", "probes", "created"},
+	DefaultSort:  "name",
+	DefaultOrder: "asc",
+}
+
 func (a *api) handleTargetsGet(w http.ResponseWriter, r *http.Request) {
+	query, ok := readListQuery(w, r, targetConfigListSpec)
+	if !ok {
+		return
+	}
+	if !query.Mode {
+		a.handleTargetsLegacy(w, r)
+		return
+	}
+	scope, ok := a.listQueryScope(w, r, query)
+	if !ok {
+		return
+	}
+	targets, total, err := a.db.QueryTargetsConfig(r.Context(), store.TargetConfigFilter{
+		Query: query.Query, Kind: query.Filters["kind"], Sort: query.Sort,
+		Order: query.Order, Limit: query.Limit, Offset: query.Offset, Networks: scope,
+	})
+	if err != nil {
+		internalError(w, "query targets config", err)
+		return
+	}
+	out := make([]targetJSON, 0, len(targets))
+	for _, t := range targets {
+		out = append(out, toTargetJSON(t))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"targets": out, "page": query.page(total)})
+}
+
+func (a *api) handleTargetsLegacy(w http.ResponseWriter, r *http.Request) {
 	targets, err := a.db.ListTargets(r.Context(), scopeIDs(r.Context()))
 	if err != nil {
 		internalError(w, "list targets", err)
@@ -124,13 +167,18 @@ func (a *api) handleTargetsGet(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]targetJSON, 0, len(targets))
 	for _, t := range targets {
-		out = append(out, targetJSON{
-			ID: t.ID.String(), Kind: t.Kind, Name: t.Name, Address: t.Address,
-			Port: t.Port, URL: t.URL, Network: t.Network,
-			ProbeCount: t.ProbeCount, CreatedAt: t.CreatedAt,
-		})
+		out = append(out, toTargetJSON(t))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"targets": out})
+}
+
+func (a *api) handleTargetConfigGet(w http.ResponseWriter, r *http.Request) {
+	target, err := a.db.GetTargetConfig(r.Context(), r.PathValue("name"), scopeIDs(r.Context()))
+	if err != nil {
+		writeStoreError(w, "get target config", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toTargetJSON(*target))
 }
 
 // targetAPIFields makes shared target validation errors name the JSON fields.
@@ -339,7 +387,56 @@ func toProbeCfgJSON(p store.ProbeConfigInfo) probeCfgJSON {
 	}
 }
 
+var probeConfigListSpec = listQuerySpec{
+	Filters: []listFilterSpec{
+		{Name: "mode", Allowed: []string{"direct", "mesh"}},
+		{Name: "enabled", Allowed: []string{"true", "false"}},
+		{Name: "type", Allowed: probeadmin.Names()},
+	},
+	Sorts:        []string{"site", "target", "type", "enabled", "updated"},
+	DefaultSort:  "site",
+	DefaultOrder: "asc",
+}
+
 func (a *api) handleProbesGet(w http.ResponseWriter, r *http.Request) {
+	query, ok := readListQuery(w, r, probeConfigListSpec)
+	if !ok {
+		return
+	}
+	if !query.Mode {
+		a.handleProbesLegacy(w, r)
+		return
+	}
+	scope, ok := a.listQueryScope(w, r, query)
+	if !ok {
+		return
+	}
+	var enabled *bool
+	if value, present := query.Filters["enabled"]; present {
+		parsed := value == "true"
+		enabled = &parsed
+	}
+	var probeType int16
+	if value, present := query.Filters["type"]; present {
+		probeType = int16(probeadmin.TypeNames[value])
+	}
+	probes, total, err := a.db.QueryProbeConfigs(r.Context(), store.ProbeConfigFilter{
+		Query: query.Query, Mode: query.Filters["mode"], Enabled: enabled,
+		ProbeType: probeType, Sort: query.Sort, Order: query.Order,
+		Limit: query.Limit, Offset: query.Offset, Networks: scope,
+	})
+	if err != nil {
+		internalError(w, "query probes", err)
+		return
+	}
+	out := make([]probeCfgJSON, 0, len(probes))
+	for _, p := range probes {
+		out = append(out, toProbeCfgJSON(p))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"probes": out, "page": query.page(total)})
+}
+
+func (a *api) handleProbesLegacy(w http.ResponseWriter, r *http.Request) {
 	probes, err := a.db.ListProbeConfigs(r.Context(), scopeIDs(r.Context()))
 	if err != nil {
 		internalError(w, "list probes", err)
@@ -350,6 +447,20 @@ func (a *api) handleProbesGet(w http.ResponseWriter, r *http.Request) {
 		out = append(out, toProbeCfgJSON(p))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"probes": out})
+}
+
+func (a *api) handleProbeGet(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "probe id must be a UUID")
+		return
+	}
+	probe, err := a.db.GetProbeConfigScoped(r.Context(), id, scopeIDs(r.Context()))
+	if err != nil {
+		writeStoreError(w, "get probe config", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toProbeCfgJSON(*probe))
 }
 
 type probeRequest struct {
