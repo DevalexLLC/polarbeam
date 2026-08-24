@@ -11,7 +11,14 @@ import DisclosureChevron from '../components/DisclosureChevron'
 import PageError from '../components/PageError'
 import { fmtAgo, fmtTime } from '../format'
 import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
-import { inheritRouteNetwork, updateRouteParams } from '../routeState'
+import {
+  incidentAgentHref,
+  incidentPairHref,
+  incidentTargetHref,
+  inheritRouteNetwork,
+  routeEventHref,
+  updateRouteParams,
+} from '../routeState'
 import { useTimezone } from '../timezone'
 import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
 import type { OutageEvent, OutagesResponse, Window } from '../types'
@@ -48,7 +55,58 @@ function errorSummary(error: string | null): string {
 }
 
 function target(o: OutageEvent): string {
-  return o.kind === 'agent_offline' ? `${o.src_site} · ${o.agent}` : `${o.src_site} → ${o.dst_site ?? o.target ?? '?'}`
+  const source = o.src_site || o.agent || `agent ${o.agent_id.slice(0, 8)}`
+  if (o.kind === 'agent_offline') return `${source} · ${o.agent || 'deleted agent'}`
+  return `${source} → ${o.dst_site ?? o.target ?? (o.target_id ? `target ${o.target_id.slice(0, 8)}` : '?')}`
+}
+
+function InvestigationLinks({ event, win }: { event: OutageEvent; win: Window }) {
+  const agentLabel = event.agent || `Deleted agent ${event.agent_id.slice(0, 8)}`
+  const agentHref = incidentAgentHref(event.agent_id, event.probe_id, event.agent)
+  const agent = agentHref ? <a href={agentHref}>Agent {agentLabel}</a> : <span>Agent {agentLabel}</span>
+  const pairHref = incidentPairHref(event.src_site, event.dst_site, win)
+  const pair = pairHref ? (
+    <a href={pairHref}>
+      Pair {event.src_site} → {event.dst_site}
+    </a>
+  ) : event.src_site || event.dst_site ? (
+    <span>
+      Pair {event.src_site || '?'} → {event.dst_site || '?'}
+    </span>
+  ) : null
+  const targetHref = incidentTargetHref(event.target_id, event.probe_id, event.target, win)
+  const targetLink = event.target ? (
+    targetHref ? (
+      <a href={targetHref}>Target {event.target}</a>
+    ) : (
+      <span>Target {event.target}</span>
+    )
+  ) : event.target_id ? (
+    <span>Deleted target {event.target_id.slice(0, 8)}</span>
+  ) : null
+
+  return (
+    <div className="incident-investigation">
+      <div className="incident-resource-links">
+        {agent}
+        {pair}
+        {targetLink}
+      </div>
+      <div className="incident-route-links">
+        <span className="eyebrow">Related route changes</span>
+        {event.route_events.length === 0 ? (
+          <span className="hint">No related route changes within 15 minutes of opening or resolution.</span>
+        ) : (
+          event.route_events.map((route) => (
+            <a key={route.id} href={routeEventHref(route.id, win)} title={fmtTime(route.time)}>
+              {route.src_site || route.agent || 'Unknown source'} → {route.dst_site ?? route.target ?? 'unknown target'}{' '}
+              · {fmtAgo(route.time)}
+            </a>
+          ))
+        )}
+      </div>
+    </div>
+  )
 }
 
 interface IncidentGroup {
@@ -102,10 +160,12 @@ function groupIncidents(events: OutageEvent[]): IncidentGroup[] {
 
 function IncidentGroupRow({
   group,
+  win,
   expanded,
   onToggle,
 }: {
   group: IncidentGroup
+  win: Window
   expanded: boolean
   onToggle: () => void
 }) {
@@ -166,6 +226,7 @@ function IncidentGroupRow({
               <span title={fmtTime(event.opened_at)}>{fmtAgo(event.opened_at)}</span>
               <span>{fmtDuration(event.opened_at, event.closed_at)}</span>
               <code title={event.error ?? undefined}>{event.error || 'No error detail'}</code>
+              <InvestigationLinks event={event} win={win} />
             </div>
           ))}
           {detailLimit < group.events.length && (
@@ -203,11 +264,12 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
   // the 30s poll, never on a re-render (hover, expand, timezone toggle).
   const [fetchedAt, setFetchedAt] = useState(0)
   const selectedBucket = selectedSlice || null
+  const snapshotWin = data && (WINDOWS as readonly string[]).includes(data.window) ? (data.window as Window) : win
 
   useEffect(() => {
     let cancelled = false
     const load = () =>
-      apiGet<OutagesResponse>(`/api/v1/outages?window=${win}`)
+      apiGet<OutagesResponse>(`/api/v1/outages?window=${win}&include_routes=true`)
         .then((res) => {
           if (!cancelled) {
             setData(res)
@@ -254,12 +316,11 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
   // spread across a chart claiming a year with everything else zero.
   const timeline = useMemo(() => {
     if (!fetchedAt || !data) return null
-    const dataWin = (WINDOWS as readonly string[]).includes(data.window) ? (data.window as Window) : win
-    const grid = timelineGrid(dataWin, fetchedAt)
+    const grid = timelineGrid(snapshotWin, fetchedAt)
     const bucket =
       selectedBucket != null && selectedBucket >= grid.startMs && selectedBucket < grid.endMs ? selectedBucket : null
-    return { grid, bucket, win: dataWin }
-  }, [data, win, fetchedAt, selectedBucket])
+    return { grid, bucket, win: snapshotWin }
+  }, [data, snapshotWin, fetchedAt, selectedBucket])
   const bucket = timeline?.bucket ?? null
   const groups = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -475,6 +536,7 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
             <IncidentGroupRow
               key={group.key}
               group={group}
+              win={snapshotWin}
               expanded={expandedIncident === group.id}
               onToggle={() => setExpandedIncident(expandedIncident === group.id ? '' : group.id)}
             />

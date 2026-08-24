@@ -190,6 +190,56 @@ export function inheritRouteNetwork(href: string, sourceHash?: string): string {
   return canonicalizeRouteHash(`#${target.path}?${params.toString()}`).hash
 }
 
+// Incident investigation links retain the selected plane and window, and
+// carry the stable route-event identity that the Routes view expands.
+export function routeEventHref(eventID: string, window: string, sourceHash = routeHashSnapshot()): string {
+  const params = new URLSearchParams()
+  if (window !== '24h') params.set('window', window)
+  params.set('event', eventID)
+  return inheritRouteNetwork(`#/routes?${params.toString()}`, sourceHash)
+}
+
+export function incidentAgentHref(
+  agentID: string,
+  probeID: string | null,
+  liveLabel: string,
+  sourceHash = routeHashSnapshot(),
+): string | null {
+  if (!agentID || !liveLabel) return null
+  const params = new URLSearchParams({ agent: agentID })
+  if (probeID) params.set('probe', probeID)
+  return inheritRouteNetwork(`#/agents?${params.toString()}`, sourceHash)
+}
+
+export function incidentPairHref(
+  source: string,
+  destination: string | null,
+  window: string,
+  sourceHash = routeHashSnapshot(),
+): string | null {
+  if (!source || !destination) return null
+  const query = window === '24h' ? '' : `?window=${encodeURIComponent(window)}`
+  return inheritRouteNetwork(
+    `#/pair/${encodeURIComponent(source)}/${encodeURIComponent(destination)}${query}`,
+    sourceHash,
+  )
+}
+
+export function incidentTargetHref(
+  targetID: string | null,
+  probeID: string | null,
+  liveLabel: string | null,
+  window: string,
+  sourceHash = routeHashSnapshot(),
+): string | null {
+  if (!targetID || !liveLabel) return null
+  const params = new URLSearchParams()
+  if (window !== '24h') params.set('window', window)
+  if (probeID) params.set('probe', probeID)
+  const query = params.toString()
+  return inheritRouteNetwork(`#/target/${encodeURIComponent(targetID)}${query ? `?${query}` : ''}`, sourceHash)
+}
+
 // Inventory links carry their canonical URL state into target detail so the
 // breadcrumb works in copied/new-tab links as well as browser history. Other
 // entry points fall back to the Targets landing page in the current plane.

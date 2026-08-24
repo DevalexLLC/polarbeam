@@ -30,6 +30,8 @@ type fakeDB struct {
 	sessions   map[string]*store.SessionInfo // key: string(token_hash)
 	outages    []store.OutageInfo
 	pathEvents []store.PathEventInfo
+	// whether the most recent outage read requested correlated route evidence
+	lastOutageRoutes bool
 	// Query-mode path event arguments and metadata. The fake preserves its
 	// seeded order; SQL filtering/sorting is covered by store DB tests.
 	lastPathEventFilter store.PathEventFilter
@@ -508,9 +510,16 @@ func (f *fakeDB) UpdateBannerSettings(_ context.Context, b store.BannerSettings)
 	f.banner = &b
 	return f.banner, nil
 }
-func (f *fakeDB) ListOutages(_ context.Context, _ time.Duration, networks []uuid.UUID) ([]store.OutageInfo, error) {
+func (f *fakeDB) ListOutages(_ context.Context, _ time.Duration, networks []uuid.UUID, includeRoutes bool) ([]store.OutageInfo, error) {
 	f.recordScope("ListOutages", networks)
-	return f.outages, nil
+	f.lastOutageRoutes = includeRoutes
+	out := append([]store.OutageInfo(nil), f.outages...)
+	if !includeRoutes {
+		for i := range out {
+			out[i].RelatedRoutes = nil
+		}
+	}
+	return out, nil
 }
 func (f *fakeDB) ListPathEvents(_ context.Context, _ time.Duration, networks []uuid.UUID) ([]store.PathEventInfo, error) {
 	f.recordScope("ListPathEvents", networks)
@@ -1516,22 +1525,29 @@ func TestEventsEndpoints(t *testing.T) {
 	f := newFakeDB()
 	closed := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
 	dst, target, ptype := "nyc", "nyc-agent", int16(1)
+	agentID, probeID, targetID := uuid.New(), uuid.New(), uuid.New()
+	routeID := uuid.New()
 	degradedErr := "latency at or above critical threshold (40ms)"
 	f.outages = []store.OutageInfo{
-		{ID: uuid.New(), Kind: "probe_failing", AgentHostname: "syd-1", Network: "corp", SrcSite: "syd",
+		{ID: uuid.New(), Kind: "probe_failing", AgentID: agentID, ProbeID: &probeID, TargetID: &targetID,
+			AgentHostname: "syd-1", Network: "corp", SrcSite: "syd",
 			DstSite: &dst, TargetName: &target, ProbeType: &ptype,
-			OpenedAt: closed.Add(-time.Hour)},
+			OpenedAt: closed.Add(-time.Hour), RelatedRoutes: []store.PathEventInfo{{
+				ID: routeID, Time: closed.Add(-50 * time.Minute), AgentID: agentID, ProbeID: probeID, TargetID: &targetID,
+				AgentHostname: "syd-1", Network: "corp", SrcSite: "syd", DstSite: &dst, TargetName: &target,
+			}}},
 		// No Network: the agent row is gone, the plane serves as "".
-		{ID: uuid.New(), Kind: "agent_offline", AgentHostname: "lon-1", SrcSite: "lon",
+		{ID: uuid.New(), Kind: "agent_offline", AgentID: uuid.New(), AgentHostname: "lon-1", SrcSite: "lon",
 			OpenedAt: closed.Add(-2 * time.Hour), ClosedAt: &closed},
-		{ID: uuid.New(), Kind: "probe_degraded", AgentHostname: "syd-1", Network: "corp", SrcSite: "syd",
+		{ID: uuid.New(), Kind: "probe_degraded", AgentID: agentID, ProbeID: &probeID, TargetID: &targetID,
+			AgentHostname: "syd-1", Network: "corp", SrcSite: "syd",
 			DstSite: &dst, TargetName: &target, ProbeType: &ptype,
 			OpenedAt: closed.Add(-30 * time.Minute), Error: &degradedErr},
 	}
 	h := newTestAPI(t, f)
 	cookie, _ := loginAndCookie(t, h, f)
 
-	req := httptest.NewRequest("GET", "/api/v1/outages", nil)
+	req := httptest.NewRequest("GET", "/api/v1/outages?include_routes=true", nil)
 	req.AddCookie(cookie)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -1549,9 +1565,26 @@ func TestEventsEndpoints(t *testing.T) {
 	if !strings.Contains(body, `"kind":"probe_degraded"`) || !strings.Contains(body, degradedErr) {
 		t.Errorf("outages body missing probe_degraded passthrough: %s", body)
 	}
+	if !strings.Contains(body, `"agent_id":"`+agentID.String()+`"`) ||
+		!strings.Contains(body, `"probe_id":"`+probeID.String()+`"`) ||
+		!strings.Contains(body, `"target_id":"`+targetID.String()+`"`) ||
+		!strings.Contains(body, `"route_events":[{"id":"`+routeID.String()+`"`) ||
+		!strings.Contains(body, `"probe_id":null,"target_id":null`) {
+		t.Errorf("outages body missing stable identities or correlated routes: %s", body)
+	}
+	if !f.lastOutageRoutes {
+		t.Error("outage handler did not opt in to correlated route evidence")
+	}
 	// The plane passes through, and a deleted agent's empty plane stays "".
 	if !strings.Contains(body, `"network":"corp"`) || !strings.Contains(body, `"network":""`) {
 		t.Errorf("outages body missing network passthrough: %s", body)
+	}
+	req = httptest.NewRequest("GET", "/api/v1/outages", nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK || f.lastOutageRoutes || !strings.Contains(w.Body.String(), `"route_events":[]`) {
+		t.Errorf("default outages unexpectedly correlated routes = %d %s", w.Code, w.Body)
 	}
 
 	// Empty results serve well-formed shapes, not nulls that break the SPA.
@@ -1578,6 +1611,13 @@ func TestEventsEndpoints(t *testing.T) {
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("outages bad window = %d, want 400", w.Code)
+	}
+	req = httptest.NewRequest("GET", "/api/v1/outages?include_routes=yes", nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("outages bad include_routes = %d, want 400", w.Code)
 	}
 	req = httptest.NewRequest("GET", "/api/v1/traceroute/nowhere/lon", nil)
 	req.AddCookie(cookie)
