@@ -224,17 +224,6 @@ func TestSettingsTargetInventoryQueryAndDetail(t *testing.T) {
 	if len(rows) != 6 || total != 6 {
 		t.Fatalf("target inventory = %d rows total %d", len(rows), total)
 	}
-	networkOf := func(target store.TargetInfo) string {
-		if target.AgentID == nil {
-			return target.Network
-		}
-		switch *target.AgentID {
-		case f.aDef, f.bDef, f.defaultOnlyAgent:
-			return "default"
-		default:
-			return "mgmt"
-		}
-	}
 	for _, sortName := range []string{"name", "kind", "network", "probes", "created"} {
 		for _, order := range []string{"asc", "desc"} {
 			filter := base
@@ -248,7 +237,7 @@ func TestSettingsTargetInventoryQueryAndDetail(t *testing.T) {
 				case "kind":
 					primary = strings.Compare(a.Kind, b.Kind)
 				case "network":
-					primary = strings.Compare(strings.ToLower(networkOf(a)), strings.ToLower(networkOf(b)))
+					primary = strings.Compare(strings.ToLower(a.Network), strings.ToLower(b.Network))
 				case "probes":
 					primary = cmp.Compare(a.ProbeCount, b.ProbeCount)
 				case "created":
@@ -404,6 +393,16 @@ func TestSettingsProbeInventoryQueryAndDetail(t *testing.T) {
 	if _, err := s.GetProbeConfigScoped(ctx, f.directID, []uuid.UUID{f.mgmt}); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("inaccessible probe detail err = %v, want ErrNotFound", err)
 	}
+	probeadmin.TypeNames["future"] = 9
+	defer delete(probeadmin.TypeNames, "future")
+	if _, err := s.Pool().Exec(ctx, `UPDATE probe_configs SET probe_type = 9 WHERE id = $1`, f.mgmtDirect); err != nil {
+		t.Fatalf("set future probe type: %v", err)
+	}
+	filter = base
+	filter.Query, filter.ProbeType = "future", 9
+	if rows, total = query(filter); total != 1 || len(rows) != 1 || rows[0].ID != f.mgmtDirect {
+		t.Errorf("registry-derived future probe type = %v total %d", probeConfigIDs(rows), total)
+	}
 
 	filter = base
 	filter.Sort, filter.Limit = "updated", 1
@@ -425,7 +424,7 @@ func TestSettingsProbeInventoryQueryAndDetail(t *testing.T) {
 		{Sort: "bogus", Order: "asc", Limit: 1},
 		{Sort: "site", Order: "sideways", Limit: 1},
 		{Sort: "site", Order: "asc", Mode: "bogus", Limit: 1},
-		{Sort: "site", Order: "asc", ProbeType: 9, Limit: 1},
+		{Sort: "site", Order: "asc", ProbeType: -1, Limit: 1},
 		{Sort: "site", Order: "asc", Enabled: &enabled, Limit: 0},
 	} {
 		if _, _, err := s.QueryProbeConfigs(ctx, bad); !errors.Is(err, store.ErrInvalid) {

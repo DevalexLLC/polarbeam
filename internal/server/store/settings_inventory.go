@@ -9,6 +9,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/devalexllc/polarbeam/internal/server/probeadmin"
 )
 
 type SiteConfigFilter struct {
@@ -142,7 +144,7 @@ func (s *Store) QuerySitesConfig(ctx context.Context, f SiteConfigFilter) ([]Sit
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
 	}
-	if len(out) == 0 {
+	if len(out) == 0 && f.Offset > 0 {
 		if err := s.pool.QueryRow(ctx, cte+` SELECT count(*) FROM filtered`, args...).Scan(&total); err != nil {
 			return nil, 0, fmt.Errorf("count sites config: %w", err)
 		}
@@ -153,7 +155,10 @@ func (s *Store) QuerySitesConfig(ctx context.Context, f SiteConfigFilter) ([]Sit
 // GetSiteConfig returns one settings site row with caller-scoped counts.
 func (s *Store) GetSiteConfig(ctx context.Context, name string, networks []uuid.UUID) (*SiteAdminInfo, error) {
 	si, err := scanSiteConfig(s.pool.QueryRow(ctx,
-		`WITH site_rows AS (`+siteConfigRowsSQL+`) SELECT * FROM site_rows WHERE name = $2`,
+		`WITH site_rows AS (`+siteConfigRowsSQL+`)
+		 SELECT id, name, display_name, location, latitude, longitude, created_at,
+		        agent_count, mesh_count, probe_count
+		   FROM site_rows WHERE name = $2`,
 		networks, name))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, notFoundf("site %q does not exist", name)
@@ -172,7 +177,7 @@ func targetConfigOrder(sortName, order string) (string, error) {
 	columns := map[string]string{
 		"name":    "lower(name)",
 		"kind":    "kind",
-		"network": "lower(sort_network)",
+		"network": "lower(network)",
 		"probes":  "probe_count",
 		"created": "created_at",
 	}
@@ -186,28 +191,25 @@ func targetConfigOrder(sortName, order string) (string, error) {
 const targetConfigRowsSQL = `
 	SELECT t.id, t.kind, t.name, t.agent_id, t.address, t.port, t.url, t.created_at,
 	       COALESCE(owner_network.name, '') AS network,
-	       COALESCE(owner_network.name, agent_network.name, '') AS sort_network,
 	       (SELECT count(*) FROM probe_configs pc
 	         WHERE pc.target_id = t.id
 	           AND ($1::uuid[] IS NULL OR pc.network_id = ANY($1))) AS probe_count
 	  FROM targets t
 	  LEFT JOIN networks owner_network ON owner_network.id = t.network_id
 	  LEFT JOIN agents target_agent ON target_agent.id = t.agent_id
-	  LEFT JOIN networks agent_network ON agent_network.id = target_agent.network_id
 	 WHERE $1::uuid[] IS NULL
 	    OR (t.agent_id IS NULL
 	        AND (t.network_id IS NULL OR t.network_id = ANY($1)))
 	    OR target_agent.network_id = ANY($1)`
 
-func scanTargetConfig(row rowScanner, extra ...any) (TargetInfo, string, error) {
+func scanTargetConfig(row rowScanner, extra ...any) (TargetInfo, error) {
 	var t TargetInfo
-	var sortNetwork string
 	dest := []any{&t.ID, &t.Kind, &t.Name, &t.AgentID, &t.Address, &t.Port,
-		&t.URL, &t.CreatedAt, &t.Network, &sortNetwork, &t.ProbeCount}
+		&t.URL, &t.CreatedAt, &t.Network, &t.ProbeCount}
 	if err := row.Scan(append(dest, extra...)...); err != nil {
-		return t, "", err
+		return t, err
 	}
-	return t, sortNetwork, nil
+	return t, nil
 }
 
 // QueryTargetsConfig filters, sorts, and pages the settings target inventory.
@@ -234,7 +236,7 @@ func (s *Store) QueryTargetsConfig(ctx context.Context, f TargetConfigFilter) ([
 		)`
 	rows, err := s.pool.Query(ctx, cte+`
 		SELECT id, kind, name, agent_id, address, port, url, created_at,
-		       network, sort_network, probe_count, count(*) OVER ()
+		       network, probe_count, count(*) OVER ()
 		  FROM filtered ORDER BY `+orderBy+` LIMIT $4 OFFSET $5`,
 		append(args, f.Limit, f.Offset)...)
 	if err != nil {
@@ -244,7 +246,7 @@ func (s *Store) QueryTargetsConfig(ctx context.Context, f TargetConfigFilter) ([
 	out := make([]TargetInfo, 0, f.Limit)
 	var total int64
 	for rows.Next() {
-		t, _, err := scanTargetConfig(rows, &total)
+		t, err := scanTargetConfig(rows, &total)
 		if err != nil {
 			return nil, 0, fmt.Errorf("scan target config: %w", err)
 		}
@@ -253,7 +255,7 @@ func (s *Store) QueryTargetsConfig(ctx context.Context, f TargetConfigFilter) ([
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
 	}
-	if len(out) == 0 {
+	if len(out) == 0 && f.Offset > 0 {
 		if err := s.pool.QueryRow(ctx, cte+` SELECT count(*) FROM filtered`, args...).Scan(&total); err != nil {
 			return nil, 0, fmt.Errorf("count targets config: %w", err)
 		}
@@ -263,8 +265,11 @@ func (s *Store) QueryTargetsConfig(ctx context.Context, f TargetConfigFilter) ([
 
 // GetTargetConfig returns one visible target using the settings response row.
 func (s *Store) GetTargetConfig(ctx context.Context, name string, networks []uuid.UUID) (*TargetInfo, error) {
-	t, _, err := scanTargetConfig(s.pool.QueryRow(ctx,
-		`WITH target_rows AS (`+targetConfigRowsSQL+`) SELECT * FROM target_rows WHERE name = $2`,
+	t, err := scanTargetConfig(s.pool.QueryRow(ctx,
+		`WITH target_rows AS (`+targetConfigRowsSQL+`)
+		 SELECT id, kind, name, agent_id, address, port, url, created_at,
+		        network, probe_count
+		   FROM target_rows WHERE name = $2`,
 		networks, name))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, notFoundf("target %q does not exist", name)
@@ -275,12 +280,6 @@ func (s *Store) GetTargetConfig(ctx context.Context, name string, networks []uui
 	return &t, nil
 }
 
-const probeTypeNameSQL = `CASE pc.probe_type
-	WHEN 1 THEN 'icmp' WHEN 2 THEN 'tcp' WHEN 3 THEN 'tls'
-	WHEN 4 THEN 'http' WHEN 5 THEN 'dns' WHEN 6 THEN 'traceroute'
-	WHEN 7 THEN 'ntp' WHEN 8 THEN 'path_mtu'
-	ELSE 'type-' || pc.probe_type::text END`
-
 const probeConfigRowsSQL = `
 	SELECT pc.id, COALESCE(s.name, '') AS site, COALESCE(t.name, '') AS target,
 	       COALESCE(g.name, '') AS mesh,
@@ -289,14 +288,25 @@ const probeConfigRowsSQL = `
 	       COALESCE(nd.name, ng.name, '') AS network,
 	       CASE WHEN pc.mesh_id IS NULL THEN 'direct' ELSE 'mesh' END AS mode,
 	       COALESCE(t.name, g.name, '') AS assignment,
-	       ` + probeTypeNameSQL + ` AS type_name
+	       COALESCE(type_names.name, 'type-' || pc.probe_type::text) AS type_name
 	  FROM probe_configs pc
 	  LEFT JOIN sites s ON s.id = pc.site_id
 	  LEFT JOIN targets t ON t.id = pc.target_id
 	  LEFT JOIN mesh_groups g ON g.id = pc.mesh_id
 	  LEFT JOIN networks nd ON nd.id = pc.network_id
 	  LEFT JOIN networks ng ON ng.id = g.network_id
+	  LEFT JOIN unnest($2::smallint[], $3::text[]) AS type_names(id, name)
+	    ON type_names.id = pc.probe_type
 	 WHERE $1::uuid[] IS NULL OR COALESCE(pc.network_id, g.network_id) = ANY($1)`
+
+func probeTypeLookup() ([]int16, []string) {
+	names := probeadmin.Names()
+	ids := make([]int16, len(names))
+	for i, name := range names {
+		ids[i] = int16(probeadmin.TypeNames[name])
+	}
+	return ids, names
+}
 
 func probeConfigOrder(sortName, order string) (string, error) {
 	direction, err := inventoryDirection(order, "probe config")
@@ -344,30 +354,31 @@ func (s *Store) QueryProbeConfigs(ctx context.Context, f ProbeConfigFilter) ([]P
 	if f.Mode != "" && f.Mode != "direct" && f.Mode != "mesh" {
 		return nil, 0, invalidf("unknown probe config mode %q", f.Mode)
 	}
-	if f.ProbeType < 0 || f.ProbeType > 8 {
+	if f.ProbeType < 0 {
 		return nil, 0, invalidf("unknown probe config type %d", f.ProbeType)
 	}
 	orderBy, err := probeConfigOrder(f.Sort, f.Order)
 	if err != nil {
 		return nil, 0, err
 	}
-	args := []any{f.Networks, escapeLike(strings.TrimSpace(f.Query)), f.Mode, f.Enabled, f.ProbeType}
+	typeIDs, typeNames := probeTypeLookup()
+	args := []any{f.Networks, typeIDs, typeNames, escapeLike(strings.TrimSpace(f.Query)), f.Mode, f.Enabled, f.ProbeType}
 	cte := `WITH probe_rows AS MATERIALIZED (` + probeConfigRowsSQL + `),
 		filtered AS MATERIALIZED (
 			SELECT * FROM probe_rows
-			 WHERE ($2 = '' OR site ILIKE '%' || $2 || '%'
-			        OR assignment ILIKE '%' || $2 || '%'
-			        OR type_name ILIKE '%' || $2 || '%')
-			   AND ($3 = '' OR mode = $3)
-			   AND ($4::boolean IS NULL OR enabled = $4)
-			   AND ($5::smallint = 0 OR probe_type = $5)
+			 WHERE ($4 = '' OR site ILIKE '%' || $4 || '%'
+			        OR assignment ILIKE '%' || $4 || '%'
+			        OR type_name ILIKE '%' || $4 || '%')
+			   AND ($5 = '' OR mode = $5)
+			   AND ($6::boolean IS NULL OR enabled = $6)
+			   AND ($7::smallint = 0 OR probe_type = $7)
 		)`
 	rows, err := s.pool.Query(ctx, cte+`
 		SELECT id, site, target, mesh, probe_type, interval_ms, timeout_ms,
 		       train_count, train_spacing_ms, params, enabled, created_at,
 		       updated_at, updated_by, network, mode, assignment, type_name,
 		       count(*) OVER ()
-		  FROM filtered ORDER BY `+orderBy+` LIMIT $6 OFFSET $7`,
+		  FROM filtered ORDER BY `+orderBy+` LIMIT $8 OFFSET $9`,
 		append(args, f.Limit, f.Offset)...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("query probe configs: %w", err)
@@ -385,7 +396,7 @@ func (s *Store) QueryProbeConfigs(ctx context.Context, f ProbeConfigFilter) ([]P
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
 	}
-	if len(out) == 0 {
+	if len(out) == 0 && f.Offset > 0 {
 		if err := s.pool.QueryRow(ctx, cte+` SELECT count(*) FROM filtered`, args...).Scan(&total); err != nil {
 			return nil, 0, fmt.Errorf("count probe configs: %w", err)
 		}
@@ -395,9 +406,14 @@ func (s *Store) QueryProbeConfigs(ctx context.Context, f ProbeConfigFilter) ([]P
 
 // GetProbeConfigScoped returns one probe only when its plane is visible.
 func (s *Store) GetProbeConfigScoped(ctx context.Context, id uuid.UUID, networks []uuid.UUID) (*ProbeConfigInfo, error) {
+	typeIDs, typeNames := probeTypeLookup()
 	p, err := scanProbeConfigInventory(s.pool.QueryRow(ctx,
-		`WITH probe_rows AS (`+probeConfigRowsSQL+`) SELECT * FROM probe_rows WHERE id = $2`,
-		networks, id))
+		`WITH probe_rows AS (`+probeConfigRowsSQL+`)
+		 SELECT id, site, target, mesh, probe_type, interval_ms, timeout_ms,
+		        train_count, train_spacing_ms, params, enabled, created_at,
+		        updated_at, updated_by, network, mode, assignment, type_name
+		   FROM probe_rows WHERE id = $4`,
+		networks, typeIDs, typeNames, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, notFoundf("probe config %s does not exist", id)
 	}

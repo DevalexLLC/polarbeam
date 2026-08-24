@@ -84,7 +84,9 @@ without list parameters. Query mode uses SQL-side tenant scope, literal search,
 stable ID tie breakers, and `page` metadata. Keep the query sort/filter names in
 their handler allowlists aligned with `settings_inventory.go`. Their
 `/{identity}` GET routes return the existing resource object directly and must
-hide inaccessible resources behind the same 404 shape as missing ones.
+hide inaccessible resources behind the same 404 shape as missing ones. Unlike
+the operational target view, an explicit Settings network retains visible
+operator-published global targets so tenants can assign probes to them.
 
 ## Coding Style & Naming Conventions
 

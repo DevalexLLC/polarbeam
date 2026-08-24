@@ -159,7 +159,10 @@ of `/config/sites/{name}`, `/config/targets/{name}`, and
 `/config/probes/{id}` return the same resource objects used by their collection
 or mutation responses, with inaccessible rows indistinguishable from missing
 ones. Site reference counts, target probe counts, and all probe rows are scoped
-before search or counting.
+before search or counting. An explicit Settings network still includes visible
+operator-published global targets so that plane can configure probes against
+them; the operational target inventory instead requires active assignment on
+the selected plane.
 
 `/api/v1/*` JSON, separate from agent gRPC. **Auth: local users + PG-backed sessions** (argon2id, HttpOnly/Secure/SameSite cookie, CSRF token; four roles — global `admin`/`viewer` plus network-scoped `network_admin`/`network_viewer`, whose visibility and writes are limited to an explicit set of networks; first admin via `polarbeam-server user add --admin`, scoped accounts via `user add --role <role> --network <name>`) — air-gap-safe and revocable with no external dependency. **Optionally**, dashboard sign-in can additionally delegate to an OpenID Connect provider (authorization-code + PKCE, DB-stored config edited from Settings → Authentication, applied without restart): federated users are JIT-provisioned keyed on the immutable OIDC `sub`, a configurable claim maps to `admin` (via `admin_values`) or to a network-scoped role (via ordered `role_rules`, strongest role winning and networks unioned) with `unmatched_role` deciding whether a user matching nothing becomes a global viewer or is denied — any authorization-policy change revokes federated sessions, since only a login remaps them — and the IdP calls (discovery/token/JWKS) are the server's only outbound HTTP — lazy, bounded, and never on the local-login or startup path, so local accounts remain break-glass when the IdP is down. Builds stay fully offline; OIDC is runtime-only, admin-opted-in egress. Every successful sign-in (local or SSO) appends a `login_events` row, powering the admin-only Settings → Users view: all accounts with role, auth source, sign-in count, last sign-in, and 12 months of monthly totals.
 
