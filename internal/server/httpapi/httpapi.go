@@ -99,6 +99,7 @@ type DB interface {
 
 	ListOutages(ctx context.Context, window time.Duration, networks []uuid.UUID) ([]store.OutageInfo, error)
 	ListPathEvents(ctx context.Context, window time.Duration, networks []uuid.UUID) ([]store.PathEventInfo, error)
+	QueryPathEvents(ctx context.Context, window time.Duration, f store.PathEventFilter) ([]store.PathEventInfo, int64, bool, error)
 	CurrentPaths(ctx context.Context, srcAgents, dstTargets []uuid.UUID) ([]store.CurrentPath, error)
 	CurrentPathMTUs(ctx context.Context, srcAgents, dstTargets []uuid.UUID) ([]store.CurrentPathMTU, error)
 

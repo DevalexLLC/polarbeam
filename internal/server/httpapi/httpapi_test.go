@@ -26,13 +26,18 @@ import (
 // fakeDB implements DB in memory. Only the parts each test exercises are
 // populated; unhandled paths return zero values.
 type fakeDB struct {
-	users       map[string]*store.UserInfo
-	sessions    map[string]*store.SessionInfo // key: string(token_hash)
-	outages     []store.OutageInfo
-	pathEvents  []store.PathEventInfo
-	agents      []store.AgentListInfo
-	networks    []store.NetworkAdminInfo
-	agentHealth []store.AgentHealthBucket
+	users      map[string]*store.UserInfo
+	sessions   map[string]*store.SessionInfo // key: string(token_hash)
+	outages    []store.OutageInfo
+	pathEvents []store.PathEventInfo
+	// Query-mode path event arguments and metadata. The fake preserves its
+	// seeded order; SQL filtering/sorting is covered by store DB tests.
+	lastPathEventFilter store.PathEventFilter
+	pathEventTotal      int64
+	pathEventTruncated  bool
+	agents              []store.AgentListInfo
+	networks            []store.NetworkAdminInfo
+	agentHealth         []store.AgentHealthBucket
 	// probe type the last AgentHealthSeries call was told to exclude
 	lastHealthExclude int16
 	probeHealth       []store.AgentProbeHealthRow
@@ -482,6 +487,17 @@ func (f *fakeDB) ListOutages(_ context.Context, _ time.Duration, networks []uuid
 func (f *fakeDB) ListPathEvents(_ context.Context, _ time.Duration, networks []uuid.UUID) ([]store.PathEventInfo, error) {
 	f.recordScope("ListPathEvents", networks)
 	return f.pathEvents, nil
+}
+func (f *fakeDB) QueryPathEvents(_ context.Context, _ time.Duration, filter store.PathEventFilter) ([]store.PathEventInfo, int64, bool, error) {
+	f.recordScope("QueryPathEvents", filter.Networks)
+	f.lastPathEventFilter = filter
+	total := f.pathEventTotal
+	if total == 0 {
+		total = int64(len(f.pathEvents))
+	}
+	start := min(filter.Offset, len(f.pathEvents))
+	end := min(start+filter.Limit, len(f.pathEvents))
+	return f.pathEvents[start:end], total, f.pathEventTruncated, nil
 }
 func (f *fakeDB) CurrentPaths(_ context.Context, srcAgents, _ []uuid.UUID) ([]store.CurrentPath, error) {
 	var out []store.CurrentPath
@@ -1580,6 +1596,101 @@ func TestPathEventsTargetID(t *testing.T) {
 	// The plane passes through, and a deleted agent's empty plane stays "".
 	if !strings.Contains(body, `"network":"corp"`) || !strings.Contains(body, `"network":""`) {
 		t.Errorf("path-events body missing network passthrough: %s", body)
+	}
+	// No shared list parameter means the exact legacy shape: the new stable
+	// IDs, changed count, page metadata, and truncation flag are query-only.
+	var legacy map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if len(legacy) != 2 || legacy["page"] != nil || legacy["truncated"] != nil {
+		t.Errorf("legacy top-level shape = %v", legacy)
+	}
+	first := legacy["events"].([]any)[0].(map[string]any)
+	for _, key := range []string{"agent_id", "probe_id", "changed_hops"} {
+		if _, present := first[key]; present {
+			t.Errorf("legacy event unexpectedly carries %s: %v", key, first)
+		}
+	}
+}
+
+func TestPathEventsQueryMode(t *testing.T) {
+	f := newFakeDB()
+	netID := uuid.New()
+	f.networks = append(f.networks, store.NetworkAdminInfo{ID: netID, Name: "corp"})
+	when := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	for i := range 3 {
+		targetID := uuid.New()
+		targetName := "service"
+		f.pathEvents = append(f.pathEvents, store.PathEventInfo{
+			ID: uuid.New(), Time: when.Add(-time.Duration(i) * time.Minute),
+			AgentID: uuid.New(), ProbeID: uuid.New(), AgentHostname: "edge-agent",
+			Network: "corp", SrcSite: "edge", TargetName: &targetName, TargetID: &targetID,
+			OldPathHash: []byte{byte(i)}, NewPathHash: []byte{byte(i + 1)},
+			OldHops: []byte("[]"), NewHops: []byte("[]"), ChangedHops: i,
+		})
+	}
+	f.pathEventTotal = 3
+	f.pathEventTruncated = true
+	h := newTestAPI(t, f)
+	cookie, _ := loginAndCookie(t, h, f)
+
+	req := httptest.NewRequest("GET",
+		"/api/v1/path-events?window=7d&network=corp&q=%20edge%20&sort=changes&order=asc&limit=1&offset=1", nil)
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("query path events = %d %s", w.Code, w.Body)
+	}
+	filter := f.lastPathEventFilter
+	if filter.Query != "edge" || filter.Sort != "changes" || filter.Order != "asc" ||
+		filter.Limit != 1 || filter.Offset != 1 || !slices.Equal(filter.Networks, []uuid.UUID{netID}) {
+		t.Errorf("store filter = %+v", filter)
+	}
+	var body struct {
+		Window    string           `json:"window"`
+		Events    []map[string]any `json:"events"`
+		Page      listPageJSON     `json:"page"`
+		Truncated bool             `json:"truncated"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	want := f.pathEvents[1]
+	if body.Window != "7d" || len(body.Events) != 1 || body.Events[0]["id"] != want.ID.String() ||
+		body.Events[0]["agent_id"] != want.AgentID.String() || body.Events[0]["probe_id"] != want.ProbeID.String() ||
+		body.Events[0]["target_id"] != want.TargetID.String() || body.Events[0]["changed_hops"] != float64(1) {
+		t.Errorf("query response = %+v", body)
+	}
+	if body.Page != (listPageJSON{Limit: 1, Offset: 1, Total: 3, HasMore: true}) || !body.Truncated {
+		t.Errorf("metadata = %+v truncated=%v", body.Page, body.Truncated)
+	}
+
+	req = httptest.NewRequest("GET", "/api/v1/path-events?q=edge", nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK || f.lastPathEventFilter.Sort != "time" ||
+		f.lastPathEventFilter.Order != "desc" || f.lastPathEventFilter.Limit != 100 {
+		t.Errorf("query defaults = %d %+v", w.Code, f.lastPathEventFilter)
+	}
+}
+
+func TestPathEventsRejectInvalidListQuery(t *testing.T) {
+	f := newFakeDB()
+	h := newTestAPI(t, f)
+	cookie, _ := loginAndCookie(t, h, f)
+	for _, query := range []string{"sort=bogus", "order=sideways", "limit=0", "limit=101", "offset=-1"} {
+		t.Run(query, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/api/v1/path-events?"+query, nil)
+			req.AddCookie(cookie)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+			if w.Code != http.StatusBadRequest || !strings.HasPrefix(w.Body.String(), `{"error":`) {
+				t.Errorf("%s = %d %s, want uniform 400", query, w.Code, w.Body)
+			}
+		})
 	}
 }
 

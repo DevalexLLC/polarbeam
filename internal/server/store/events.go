@@ -4,6 +4,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -91,16 +92,34 @@ func (s *Store) ListOutages(ctx context.Context, window time.Duration, networks 
 type PathEventInfo struct {
 	ID            uuid.UUID
 	Time          time.Time
+	AgentID       uuid.UUID
+	ProbeID       uuid.UUID
 	AgentHostname string
 	Network       string // "" once the agent row is deleted
 	SrcSite       string
 	DstSite       *string
 	TargetName    *string
-	TargetID      *uuid.UUID // nil once the target row is deleted
-	OldPathHash   []byte
-	NewPathHash   []byte
-	OldHops       []byte
-	NewHops       []byte
+	// Query mode reads the event's stable ID after target deletion; legacy
+	// mode reads the joined target row and returns nil.
+	TargetID    *uuid.UUID
+	OldPathHash []byte
+	NewPathHash []byte
+	OldHops     []byte
+	NewHops     []byte
+	ChangedHops int
+}
+
+// PathEventFilter is the validated query-mode contract for route changes.
+// Query matches display evidence case-insensitively. Sort and Order are
+// revalidated here before they become an ORDER BY clause; Networks is nil
+// for an unscoped caller and non-nil for a narrowed authenticated scope.
+type PathEventFilter struct {
+	Query    string
+	Sort     string
+	Order    string
+	Limit    int
+	Offset   int
+	Networks []uuid.UUID
 }
 
 // ListPathEvents returns path change events within the window, newest first.
@@ -137,6 +156,149 @@ func (s *Store) ListPathEvents(ctx context.Context, window time.Duration, networ
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// pathEventMatchingSQL returns the newest matching rows before query-mode
+// presentation sorting. countProbe selects only the columns needed to count
+// up to 501 rows; the page query takes 500 complete rows. The safety cap
+// therefore applies after search/scope and before an alternate sort.
+func pathEventMatchingSQL(countProbe bool) string {
+	limit := "500"
+	projection := `pe.id, pe.time, pe.agent_id, pe.probe_id, pe.target_id,
+		       COALESCE(a.hostname, '') AS agent_hostname,
+		       COALESCE(n.name, '') AS network,
+		       COALESCE(src.name, '') AS src_site,
+		       dst.name AS dst_site, t.name AS target_name,
+		       pe.old_path_hash, pe.new_path_hash, pe.old_hops, pe.new_hops`
+	if countProbe {
+		limit = "501"
+		projection = "pe.id"
+	}
+	return `
+		SELECT ` + projection + `
+		  FROM path_events pe
+		  LEFT JOIN agents a ON a.id = pe.agent_id
+		  LEFT JOIN networks n ON n.id = a.network_id
+		  LEFT JOIN sites src ON src.id = a.site_id
+		  LEFT JOIN targets t ON t.id = pe.target_id
+		  LEFT JOIN agents ta ON ta.id = t.agent_id
+		  LEFT JOIN sites dst ON dst.id = ta.site_id
+		 WHERE pe.time > now() - $1::interval
+		   AND ($2::uuid[] IS NULL OR a.network_id = ANY($2))
+		   AND ($3 = ''
+		        OR COALESCE(a.hostname, '') ILIKE '%' || $3 || '%'
+		        OR COALESCE(src.name, '') ILIKE '%' || $3 || '%'
+		        OR COALESCE(dst.name, '') ILIKE '%' || $3 || '%'
+		        OR COALESCE(t.name, '') ILIKE '%' || $3 || '%')
+		 ORDER BY pe.time DESC, pe.id DESC
+		 LIMIT ` + limit
+}
+
+func pathEventOrder(sortName, order string) (string, error) {
+	if order != "asc" && order != "desc" {
+		return "", invalidf("path event order must be asc or desc")
+	}
+	direction := " ASC"
+	if order == "desc" {
+		direction = " DESC"
+	}
+	var column string
+	switch sortName {
+	case "time":
+		column = "e.time"
+	case "agent":
+		column = "lower(e.agent_hostname)"
+	case "source":
+		column = "lower(e.src_site)"
+	case "destination":
+		column = "lower(COALESCE(e.dst_site, e.target_name, ''))"
+	case "changes":
+		column = "e.changed_hops"
+	default:
+		return "", invalidf("unknown path event sort %q", sortName)
+	}
+	return column + direction + ", e.id" + direction, nil
+}
+
+// QueryPathEvents filters, counts, sorts, and pages route changes in SQL.
+// total describes the capped result set; truncated reports a 501st match.
+// ChangedHops compares one deduplicated address set per TTL, deliberately
+// ignoring RTTs and counting added/removed TTLs through a FULL JOIN. TTL
+// identity stays text because the wire's uint32 range exceeds SQL integer.
+func (s *Store) QueryPathEvents(ctx context.Context, window time.Duration, f PathEventFilter) ([]PathEventInfo, int64, bool, error) {
+	if f.Limit < 1 || f.Limit > 100 || f.Offset < 0 {
+		return nil, 0, false, invalidf("invalid path event page")
+	}
+	orderBy, err := pathEventOrder(f.Sort, f.Order)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	query := escapeLike(strings.TrimSpace(f.Query))
+
+	countSQL := `WITH matching AS MATERIALIZED (` + pathEventMatchingSQL(true) + `)
+		SELECT LEAST(count(*), 500), count(*) > 500 FROM matching`
+	var total int64
+	var truncated bool
+	if err := s.pool.QueryRow(ctx, countSQL, window, f.Networks, query).Scan(&total, &truncated); err != nil {
+		return nil, 0, false, fmt.Errorf("count path events: %w", err)
+	}
+	if int64(f.Offset) >= total {
+		return []PathEventInfo{}, total, truncated, nil
+	}
+
+	listSQL := `WITH matching AS MATERIALIZED (` + pathEventMatchingSQL(false) + `),
+		enriched AS (
+			SELECT m.*, changed.changed_hops
+			  FROM matching m
+			 CROSS JOIN LATERAL (
+				WITH old_ttls AS (
+					SELECT hop->>'ttl' AS ttl,
+					       COALESCE(array_agg(DISTINCT address.value ORDER BY address.value)
+					         FILTER (WHERE address.value IS NOT NULL), ARRAY[]::text[]) AS addresses
+					  FROM jsonb_array_elements(m.old_hops) AS hop
+					  LEFT JOIN LATERAL jsonb_array_elements_text(
+					       COALESCE(hop->'addrs', '[]'::jsonb)) AS address(value) ON true
+					 GROUP BY hop->>'ttl'
+				), new_ttls AS (
+					SELECT hop->>'ttl' AS ttl,
+					       COALESCE(array_agg(DISTINCT address.value ORDER BY address.value)
+					         FILTER (WHERE address.value IS NOT NULL), ARRAY[]::text[]) AS addresses
+					  FROM jsonb_array_elements(m.new_hops) AS hop
+					  LEFT JOIN LATERAL jsonb_array_elements_text(
+					       COALESCE(hop->'addrs', '[]'::jsonb)) AS address(value) ON true
+					 GROUP BY hop->>'ttl'
+				)
+				SELECT count(*)::integer AS changed_hops
+				  FROM old_ttls o FULL JOIN new_ttls n USING (ttl)
+				 WHERE o.addresses IS DISTINCT FROM n.addresses
+			) changed
+		)
+		SELECT e.id, e.time, e.agent_id, e.probe_id, e.target_id,
+		       e.agent_hostname, e.network, e.src_site, e.dst_site, e.target_name,
+		       e.old_path_hash, e.new_path_hash, e.old_hops, e.new_hops, e.changed_hops
+		  FROM enriched e
+		 ORDER BY ` + orderBy + `
+		 LIMIT $4 OFFSET $5`
+	rows, err := s.pool.Query(ctx, listSQL, window, f.Networks, query, f.Limit, f.Offset)
+	if err != nil {
+		return nil, 0, false, fmt.Errorf("query path events: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]PathEventInfo, 0, f.Limit)
+	for rows.Next() {
+		var e PathEventInfo
+		if err := rows.Scan(&e.ID, &e.Time, &e.AgentID, &e.ProbeID, &e.TargetID,
+			&e.AgentHostname, &e.Network, &e.SrcSite, &e.DstSite, &e.TargetName,
+			&e.OldPathHash, &e.NewPathHash, &e.OldHops, &e.NewHops, &e.ChangedHops); err != nil {
+			return nil, 0, false, fmt.Errorf("scan queried path event: %w", err)
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, false, err
+	}
+	return out, total, truncated, nil
 }
 
 // CurrentPath is one traceroute_current row for a direction of a site
