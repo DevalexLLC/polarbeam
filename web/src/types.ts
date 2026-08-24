@@ -59,10 +59,22 @@ export interface AgentInfo {
   probes_total: number
   dropped_results: number
   last_dropped_at: string | null
+  // Present only in query mode; unqueried /agents retains its legacy shape.
+  health?: 'offline' | 'degraded' | 'healthy' | 'no_data'
 }
 
 export interface AgentsResponse {
   agents: AgentInfo[]
+  page?: ListPage
+  summary?: AgentInventorySummary
+}
+
+export interface AgentInventorySummary {
+  total: number
+  offline: number
+  degraded: number
+  healthy: number
+  no_data: number
 }
 
 // GET /api/v1/agents/health — 24h of per-agent probe success counts in
@@ -312,6 +324,42 @@ export interface TargetInfo {
   port: number
   url: string
   dst_site: string | null
+}
+
+// GET /api/v1/targets — the read-only operational inventory. Counts and
+// probing sites are scoped and joined by stable IDs on the server.
+export interface OperationalTarget {
+  id: string
+  kind: 'agent' | 'external'
+  name: string
+  address: string
+  port: number
+  url: string
+  network: string
+  created_at: string
+  probe_count: number
+  enabled_probe_count: number
+  probing_sites: string[]
+  open_incident_count: number
+  status: 'incident' | 'unprobed' | 'no_incidents'
+  agent_id: string | null
+  agent_site: string | null
+  agent_hostname: string | null
+}
+
+export interface TargetInventorySummary {
+  total: number
+  external: number
+  agent: number
+  incident: number
+  unprobed: number
+  no_incidents: number
+}
+
+export interface OperationalTargetsResponse {
+  targets: OperationalTarget[]
+  page: ListPage
+  summary: TargetInventorySummary
 }
 
 export interface TargetSourceSummary extends DirectionSummary {

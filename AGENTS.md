@@ -66,6 +66,13 @@ stable ID tie breakers, SQL-side changed-TTL calculation, capped `page.total`,
 and `truncated` signal aligned; `window`-only requests retain the legacy JSON
 shape and newest-500 behavior.
 
+Operational agent and target inventories derive health/status, scoped counts,
+summaries, search, ordering, and pagination in SQL. Keep `/api/v1/agents`
+without list parameters on its exact legacy response; `/api/v1/targets` is the
+read-only operational inventory, while `/api/v1/config/targets` remains the
+administrative resource. Target aggregates must scope source agents and probe
+configuration before counting or searching shared global targets.
+
 ## Coding Style & Naming Conventions
 
 Format Go with `gofmt`; use tabs, lowercase packages, and conventional

@@ -44,30 +44,47 @@ func (a *api) handleSites(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"sites": toSiteJSON(sites)})
 }
 
-func (a *api) handleAgents(w http.ResponseWriter, r *http.Request) {
-	agents, err := a.db.ListAgents(r.Context(), scopeIDs(r.Context()))
-	if err != nil {
-		internalError(w, "list agents", err)
-		return
-	}
-	type agentJSON struct {
-		ID             string     `json:"id"`
-		Site           string     `json:"site"`
-		Network        string     `json:"network"`
-		Hostname       string     `json:"hostname"`
-		ProbeAddress   string     `json:"probe_address"`
-		Version        string     `json:"version"`
-		LastSeenAt     *time.Time `json:"last_seen_at"`
-		EnrolledAt     time.Time  `json:"enrolled_at"`
-		ConfigHash     string     `json:"config_hash"`
-		CertNotAfter   *time.Time `json:"cert_not_after"`
-		CertRevokedAt  *time.Time `json:"cert_revoked_at"`
-		Offline        bool       `json:"offline"`
-		ProbesFailing  int64      `json:"probes_failing"`
-		ProbesTotal    int64      `json:"probes_total"`
-		DroppedResults int64      `json:"dropped_results"`
-		LastDroppedAt  *time.Time `json:"last_dropped_at"`
-	}
+type agentJSON struct {
+	ID             string     `json:"id"`
+	Site           string     `json:"site"`
+	Network        string     `json:"network"`
+	Hostname       string     `json:"hostname"`
+	ProbeAddress   string     `json:"probe_address"`
+	Version        string     `json:"version"`
+	LastSeenAt     *time.Time `json:"last_seen_at"`
+	EnrolledAt     time.Time  `json:"enrolled_at"`
+	ConfigHash     string     `json:"config_hash"`
+	CertNotAfter   *time.Time `json:"cert_not_after"`
+	CertRevokedAt  *time.Time `json:"cert_revoked_at"`
+	Offline        bool       `json:"offline"`
+	ProbesFailing  int64      `json:"probes_failing"`
+	ProbesTotal    int64      `json:"probes_total"`
+	DroppedResults int64      `json:"dropped_results"`
+	LastDroppedAt  *time.Time `json:"last_dropped_at"`
+	Health         string     `json:"health,omitempty"`
+}
+
+type agentSummaryJSON struct {
+	Total    int64 `json:"total"`
+	Offline  int64 `json:"offline"`
+	Degraded int64 `json:"degraded"`
+	Healthy  int64 `json:"healthy"`
+	NoData   int64 `json:"no_data"`
+}
+
+var agentListSpec = listQuerySpec{
+	Filters: []listFilterSpec{{
+		Name: "health", Allowed: []string{
+			store.AgentHealthOffline, store.AgentHealthDegraded,
+			store.AgentHealthHealthy, store.AgentHealthNoData,
+		},
+	}},
+	Sorts:        []string{"hostname", "site", "network", "health", "last_seen", "version"},
+	DefaultSort:  "health",
+	DefaultOrder: "asc",
+}
+
+func toAgentJSON(agents []store.AgentListInfo, queryMode bool) []agentJSON {
 	out := make([]agentJSON, len(agents))
 	for i, ag := range agents {
 		out[i] = agentJSON{
@@ -78,8 +95,49 @@ func (a *api) handleAgents(w http.ResponseWriter, r *http.Request) {
 			Offline: ag.Offline, ProbesFailing: ag.ProbesFailing, ProbesTotal: ag.ProbesTotal,
 			DroppedResults: ag.DroppedResults, LastDroppedAt: ag.LastDroppedAt,
 		}
+		if queryMode {
+			out[i].Health = ag.Health
+		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"agents": out})
+	return out
+}
+
+func (a *api) handleAgents(w http.ResponseWriter, r *http.Request) {
+	query, ok := readListQuery(w, r, agentListSpec)
+	if !ok {
+		return
+	}
+	if !query.Mode {
+		agents, err := a.db.ListAgents(r.Context(), scopeIDs(r.Context()))
+		if err != nil {
+			internalError(w, "list agents", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"agents": toAgentJSON(agents, false)})
+		return
+	}
+	scope, ok := a.listQueryScope(w, r, query)
+	if !ok {
+		return
+	}
+	agents, summary, err := a.db.QueryAgents(r.Context(), store.AgentInventoryFilter{
+		Query: query.Query, Health: query.Filters["health"],
+		Sort: query.Sort, Order: query.Order, Limit: query.Limit,
+		Offset: query.Offset, Networks: scope,
+	})
+	if err != nil {
+		internalError(w, "query agents", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"agents": toAgentJSON(agents, true),
+		"page":   query.page(summary.Total),
+		"summary": agentSummaryJSON{
+			Total: summary.Total, Offline: summary.Offline,
+			Degraded: summary.Degraded, Healthy: summary.Healthy,
+			NoData: summary.NoData,
+		},
+	})
 }
 
 // Fleet sparkline resolution: 48 slots over 24 h. Deliberately not

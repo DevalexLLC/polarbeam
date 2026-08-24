@@ -59,6 +59,7 @@ type DB interface {
 	UpdateNetwork(ctx context.Context, name, displayName string) error
 	DeleteNetwork(ctx context.Context, name string) (int64, error)
 	ListAgents(ctx context.Context, networks []uuid.UUID) ([]store.AgentListInfo, error)
+	QueryAgents(ctx context.Context, f store.AgentInventoryFilter) ([]store.AgentListInfo, store.AgentInventorySummary, error)
 	AgentHealthSeries(ctx context.Context, window, bucket time.Duration, excludeProbeType int16, networks []uuid.UUID) ([]store.AgentHealthBucket, error)
 	AgentProbeHealth(ctx context.Context, agentID uuid.UUID, window, bucket time.Duration, networks []uuid.UUID) ([]store.AgentProbeHealthRow, error)
 	AgentBucketFailures(ctx context.Context, agentID uuid.UUID, bucketStart time.Time, bucket time.Duration, probeID *uuid.UUID, excludeProbeType int16, networks []uuid.UUID) ([]store.AgentBucketFailureGroup, error)
@@ -83,6 +84,7 @@ type DB interface {
 	DeleteNetworkThreshold(ctx context.Context, network string, scope []uuid.UUID) error
 
 	ListTargets(ctx context.Context, networks []uuid.UUID) ([]store.TargetInfo, error)
+	QueryOperationalTargets(ctx context.Context, f store.TargetInventoryFilter) ([]store.OperationalTargetInfo, store.TargetInventorySummary, error)
 	UpsertExternalTarget(ctx context.Context, name, address string, port int32, url string, networkID *uuid.UUID, scope []uuid.UUID) (uuid.UUID, error)
 	DeleteTarget(ctx context.Context, name string, scope []uuid.UUID) error
 	ListMeshGroups(ctx context.Context, networks []uuid.UUID) ([]store.MeshGroupInfo, error)
@@ -270,6 +272,7 @@ func newHandler(sdb DB, static fs.FS, providers OIDCProviders) http.Handler {
 	mux.Handle("GET /api/v1/pairs/{a}/{b}/series", a.withSession(a.handleSeries))
 	// Target detail: reads any-session (the /config/targets precedent). The
 	// strips' slot drill-down reuses /agents/{id}/health/bucket.
+	mux.Handle("GET /api/v1/targets", a.withSession(a.handleOperationalTargets))
 	mux.Handle("GET /api/v1/targets/{id}", a.withSession(a.handleTargetSummary))
 	mux.Handle("GET /api/v1/targets/{id}/series", a.withSession(a.handleTargetSeries))
 	mux.Handle("GET /api/v1/targets/{id}/stages", a.withSession(a.handleTargetStages))

@@ -122,8 +122,9 @@ type AgentListInfo struct {
 	// row (never happens through real enrollment).
 	CertNotAfter  *time.Time
 	CertRevokedAt *time.Time
-	Offline       bool  // an agent_offline outage is currently open
-	ProbesFailing int64 // open probe_failing outages
+	Offline       bool   // an agent_offline outage is currently open
+	ProbesFailing int64  // open probe_failing outages
+	Health        string // query mode only: offline|degraded|healthy|no_data
 	// Series this agent has reported results for whose probe is still
 	// enabled. Disabling a probe keeps its series_state row (spool-replay
 	// dedup) but removes it from this count immediately; re-enabling
