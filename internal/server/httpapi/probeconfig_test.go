@@ -373,15 +373,21 @@ func TestConfigAuth(t *testing.T) {
 func TestTargetAndProbeConfigQueriesAndDetails(t *testing.T) {
 	f := newFakeDB()
 	netID := uuid.New()
-	f.networks = append(f.networks, store.NetworkAdminInfo{ID: netID, Name: "corp"})
+	otherNetID := uuid.New()
+	f.networks = append(f.networks,
+		store.NetworkAdminInfo{ID: netID, Name: "corp"},
+		store.NetworkAdminInfo{ID: otherNetID, Name: "other"})
 	f.targets = []store.TargetInfo{
 		{ID: uuid.New(), Kind: "external", Name: "db", Address: "192.0.2.1", Network: "corp", CreatedAt: time.Now()},
 		{ID: uuid.New(), Kind: "external", Name: "web", URL: "https://example.test", CreatedAt: time.Now()},
+		{ID: uuid.New(), Kind: "external", Name: "hidden", Address: "192.0.2.2", Network: "other", CreatedAt: time.Now()},
 	}
 	probeID := uuid.New()
+	hiddenProbeID := uuid.New()
 	f.probes = []store.ProbeConfigInfo{
 		{ID: uuid.New(), Site: "lon", Target: "db", Network: "corp", ProbeType: int16(pb.ProbeType_PROBE_TYPE_TCP), Params: map[string]string{}, CreatedAt: time.Now(), UpdatedAt: time.Now()},
 		{ID: probeID, Site: "nyc", Target: "web", Network: "corp", ProbeType: int16(pb.ProbeType_PROBE_TYPE_ICMP), Params: map[string]string{}, CreatedAt: time.Now(), UpdatedAt: time.Now()},
+		{ID: hiddenProbeID, Site: "hidden", Target: "hidden", Network: "other", ProbeType: int16(pb.ProbeType_PROBE_TYPE_ICMP), Params: map[string]string{}, CreatedAt: time.Now(), UpdatedAt: time.Now()},
 	}
 	f.targetConfigQueryTotal = 9
 	f.probeConfigQueryTotal = 7
@@ -429,6 +435,15 @@ func TestTargetAndProbeConfigQueriesAndDetails(t *testing.T) {
 		detail := doConfig(t, h, "GET", tt.path, "", cookie, "")
 		if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), tt.want) {
 			t.Errorf("detail %s = %d %s", tt.path, detail.Code, detail.Body)
+		}
+	}
+	scopedCookie, _ := testSession(f, store.RoleNetworkViewer, []store.NetworkRef{{ID: netID, Name: "corp"}})
+	for _, path := range []string{
+		"/api/v1/config/targets/hidden",
+		"/api/v1/config/probes/" + hiddenProbeID.String(),
+	} {
+		if hidden := doConfig(t, h, "GET", path, "", scopedCookie, ""); hidden.Code != http.StatusNotFound {
+			t.Errorf("inaccessible detail %s = %d, want 404: %s", path, hidden.Code, hidden.Body)
 		}
 	}
 	if badID := doConfig(t, h, "GET", "/api/v1/config/probes/not-a-uuid", "", cookie, ""); badID.Code != http.StatusBadRequest {

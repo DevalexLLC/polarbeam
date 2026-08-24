@@ -70,6 +70,7 @@ type fakeDB struct {
 	meshes                 []store.MeshGroupInfo
 	probes                 []store.ProbeConfigInfo
 	siteConfigs            []store.SiteAdminInfo
+	siteConfigNetworks     map[string][]uuid.UUID
 	joinTokens             []store.JoinTokenInfo
 	lastSiteConfigQuery    store.SiteConfigFilter
 	siteConfigQueryTotal   int64
@@ -145,10 +146,11 @@ func (f *fakeDB) recordScope(method string, networks []uuid.UUID) {
 
 func newFakeDB() *fakeDB {
 	return &fakeDB{
-		users:      map[string]*store.UserInfo{},
-		sessions:   map[string]*store.SessionInfo{},
-		oidcUsers:  map[string]*store.UserInfo{},
-		userScopes: map[uuid.UUID][]store.NetworkRef{},
+		users:              map[string]*store.UserInfo{},
+		sessions:           map[string]*store.SessionInfo{},
+		oidcUsers:          map[string]*store.UserInfo{},
+		userScopes:         map[uuid.UUID][]store.NetworkRef{},
+		siteConfigNetworks: map[string][]uuid.UUID{},
 		// Mirror migration 0017's seed: the default network always exists,
 		// and token/probe handlers unconditionally resolve a network.
 		networks: []store.NetworkAdminInfo{

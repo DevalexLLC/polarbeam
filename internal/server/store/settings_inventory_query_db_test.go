@@ -393,15 +393,13 @@ func TestSettingsProbeInventoryQueryAndDetail(t *testing.T) {
 	if _, err := s.GetProbeConfigScoped(ctx, f.directID, []uuid.UUID{f.mgmt}); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("inaccessible probe detail err = %v, want ErrNotFound", err)
 	}
-	probeadmin.TypeNames["future"] = 9
-	defer delete(probeadmin.TypeNames, "future")
 	if _, err := s.Pool().Exec(ctx, `UPDATE probe_configs SET probe_type = 9 WHERE id = $1`, f.mgmtDirect); err != nil {
 		t.Fatalf("set future probe type: %v", err)
 	}
 	filter = base
-	filter.Query, filter.ProbeType = "future", 9
+	filter.Query, filter.ProbeType = "type-9", 9
 	if rows, total = query(filter); total != 1 || len(rows) != 1 || rows[0].ID != f.mgmtDirect {
-		t.Errorf("registry-derived future probe type = %v total %d", probeConfigIDs(rows), total)
+		t.Errorf("unknown future probe type = %v total %d", probeConfigIDs(rows), total)
 	}
 
 	filter = base

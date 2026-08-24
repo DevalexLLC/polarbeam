@@ -33,7 +33,10 @@ func (f *fakeDB) QuerySitesConfig(_ context.Context, filter store.SiteConfigFilt
 func (f *fakeDB) GetSiteConfig(_ context.Context, name string, networks []uuid.UUID) (*store.SiteAdminInfo, error) {
 	f.recordScope("GetSiteConfig", networks)
 	for i := range f.siteConfigs {
-		if f.siteConfigs[i].Name == name {
+		if f.siteConfigs[i].Name == name &&
+			(networks == nil || slices.ContainsFunc(f.siteConfigNetworks[name], func(id uuid.UUID) bool {
+				return slices.Contains(networks, id)
+			})) {
 			si := f.siteConfigs[i]
 			return &si, nil
 		}
@@ -249,11 +252,15 @@ func TestSiteConfigAuth(t *testing.T) {
 func TestSiteConfigQueryAndDetail(t *testing.T) {
 	f := newFakeDB()
 	netID := uuid.New()
+	otherNetID := uuid.New()
 	f.networks = append(f.networks, store.NetworkAdminInfo{ID: netID, Name: "corp"})
 	f.siteConfigs = []store.SiteAdminInfo{
 		{SiteInfo: store.SiteInfo{ID: uuid.New(), Name: "lon", DisplayName: "London"}, AgentCount: 4, CreatedAt: time.Now()},
 		{SiteInfo: store.SiteInfo{ID: uuid.New(), Name: "nyc", Location: "New York"}, ProbeCount: 7, CreatedAt: time.Now()},
+		{SiteInfo: store.SiteInfo{ID: uuid.New(), Name: "hidden"}, CreatedAt: time.Now()},
 	}
+	f.siteConfigNetworks["lon"] = []uuid.UUID{netID}
+	f.siteConfigNetworks["hidden"] = []uuid.UUID{otherNetID}
 	f.siteConfigQueryTotal = 5
 	h := newTestAPI(t, f)
 	cookie, _ := configLogin(t, h, f, "viewer")
@@ -290,6 +297,10 @@ func TestSiteConfigQueryAndDetail(t *testing.T) {
 	}
 	if missing := doConfig(t, h, "GET", "/api/v1/config/sites/missing", "", cookie, ""); missing.Code != http.StatusNotFound {
 		t.Errorf("missing site detail = %d, want 404: %s", missing.Code, missing.Body)
+	}
+	scopedCookie, _ := testSession(f, store.RoleNetworkViewer, []store.NetworkRef{{ID: netID, Name: "corp"}})
+	if hidden := doConfig(t, h, "GET", "/api/v1/config/sites/hidden", "", scopedCookie, ""); hidden.Code != http.StatusNotFound {
+		t.Errorf("inaccessible site detail = %d, want 404: %s", hidden.Code, hidden.Body)
 	}
 	if invalid := doConfig(t, h, "GET", "/api/v1/config/sites?sort=bogus", "", cookie, ""); invalid.Code != http.StatusBadRequest {
 		t.Errorf("invalid site query = %d, want 400: %s", invalid.Code, invalid.Body)
