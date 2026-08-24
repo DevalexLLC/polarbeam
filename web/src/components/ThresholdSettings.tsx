@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { apiPut } from '../api'
+import { apiGet, apiPut } from '../api'
 import { fmtAgo } from '../format'
+import { useConcurrentSettingsDraft, useSettingsMutation } from '../settingsMutation'
 import type { SettingsResponse, ThresholdSettings } from '../types'
 
 // The form speaks milliseconds and percent; the wire speaks microseconds.
@@ -77,25 +78,62 @@ export default function ThresholdSettingsPanel({
   const [errors, setErrors] = useState<string[]>([])
   const [warnings, setWarnings] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
-  const [savedFlash, setSavedFlash] = useState(false)
+  const feedback = useSettingsMutation()
+  const loadedDraft = settings ? draftFrom(settings.thresholds) : null
+  const guardCurrent = draft ?? loadedDraft
+  const guard = useConcurrentSettingsDraft({
+    id: 'global-thresholds',
+    label: 'Connectivity thresholds',
+    loaded: loadedDraft,
+    current: guardCurrent,
+    editing: draft !== null,
+    discard: () => {
+      setDraft(null)
+      setErrors([])
+      setWarnings([])
+    },
+    reload: setDraft,
+  })
 
   if (!settings) return null
 
   const toggle = () => {
+    if (open && guard.dirty) {
+      feedback.confirm({
+        action: 'Discard changes',
+        resource: 'Connectivity thresholds',
+        consequence: 'This closes the editor and discards your local threshold changes.',
+        confirmLabel: 'Discard',
+        cancelLabel: 'Stay',
+        onConfirm: () => {
+          setOpen(false)
+          setDraft(null)
+          setErrors([])
+          setWarnings([])
+        },
+      })
+      return
+    }
     setOpen((o) => !o)
-    setDraft(draftFrom(settings.thresholds))
+    setDraft(open ? null : draftFrom(settings.thresholds))
     setErrors([])
     setWarnings([])
-    setSavedFlash(false)
   }
 
   const save = async () => {
     const current = draft ?? draftFrom(settings.thresholds)
     const { errors: errs, parsed } = validate(current)
     setErrors(errs)
-    if (!parsed) return
+    if (!parsed) {
+      feedback.error(`Connectivity thresholds: ${errs.join('; ')}`)
+      return
+    }
     setSaving(true)
     try {
+      const currentServer = await guard.checkForConflict(async () =>
+        draftFrom((await apiGet<SettingsResponse>('/api/v1/settings')).thresholds),
+      )
+      if (!currentServer) return
       const res = await apiPut<SettingsResponse>('/api/v1/settings', parsed)
       // Advisory: pair overrides the new globals left inconsistent.
       setWarnings(res.warnings ?? [])
@@ -104,10 +142,14 @@ export default function ThresholdSettingsPanel({
       // Settings page polls, and a lingering draft would hide another
       // admin's later change and let a stray Save overwrite it.
       setDraft(null)
-      setSavedFlash(true)
+      feedback.success(
+        res.warnings?.length ? 'Connectivity thresholds saved with warnings.' : 'Connectivity thresholds saved.',
+      )
     } catch (err) {
       onAuthError(err)
-      setErrors([err instanceof Error ? err.message : String(err)])
+      const message = err instanceof Error ? err.message : String(err)
+      setErrors([message])
+      feedback.error(`Connectivity thresholds were not saved: ${message}`)
     } finally {
       setSaving(false)
     }
@@ -123,7 +165,6 @@ export default function ThresholdSettingsPanel({
           value={(draft ?? draftFrom(settings.thresholds))[key]}
           disabled={!canWrite || saving}
           onChange={(e) => {
-            setSavedFlash(false)
             setDraft((d) => ({ ...(d ?? draftFrom(settings.thresholds)), [key]: e.target.value }))
           }}
         />
@@ -131,10 +172,6 @@ export default function ThresholdSettingsPanel({
       </span>
     </label>
   )
-
-  const currentDraft = draft ?? draftFrom(settings.thresholds)
-  const savedDraft = draftFrom(settings.thresholds)
-  const dirty = (Object.keys(currentDraft) as (keyof Draft)[]).some((key) => currentDraft[key] !== savedDraft[key])
 
   return (
     <div className={'threshold-settings threshold-settings-' + variant}>
@@ -178,8 +215,7 @@ export default function ThresholdSettingsPanel({
             </span>
             {canWrite ? (
               <span className="threshold-actions">
-                {savedFlash && <span className="hint">saved</span>}
-                <button className="primary" onClick={save} disabled={saving || !dirty}>
+                <button className="primary" onClick={save} disabled={saving || !guard.dirty}>
                   {saving ? 'Saving…' : 'Save'}
                 </button>
               </span>

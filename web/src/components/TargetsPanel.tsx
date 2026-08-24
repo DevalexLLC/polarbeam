@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { apiDelete, apiGet, apiPost } from '../api'
+import { ApiError, apiDelete, apiGet, apiPost } from '../api'
 import { fmtAgo } from '../format'
+import { useConcurrentSettingsDraft, useSettingsMutation } from '../settingsMutation'
 import { useNetworkFilter } from '../networkFilter'
 import type { Caps } from '../caps'
 import { canWriteRow } from '../caps'
@@ -28,6 +29,14 @@ interface Draft {
 }
 
 const emptyDraft: Draft = { name: '', address: '', port: '', url: '', network: '' }
+
+const draftFrom = (target: TargetConfig): Draft => ({
+  name: target.name,
+  address: target.address ?? '',
+  port: target.port ? String(target.port) : '',
+  url: target.url ?? '',
+  network: target.network,
+})
 
 // Mirrors the server's target validation; server 400s render verbatim as a
 // backstop.
@@ -64,7 +73,6 @@ export default function TargetsPanel({
   const [editing, setEditing] = useState(false) // draft edits an existing target (name locked)
   const [formErrors, setFormErrors] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
-  const [savedFlash, setSavedFlash] = useState(false)
   const [query, setQuery] = useRouteSearch()
   const [queryParam] = useRouteParam('q')
   const [kind] = useRouteParam('kind', 'all')
@@ -74,6 +82,26 @@ export default function TargetsPanel({
   const [expandedRow, setExpandedRow] = useState<string | null>(null)
   const [actionRow, setActionRow] = useState<string | null>(null)
   const { network } = useNetworkFilter()
+  const feedback = useSettingsMutation()
+  const blankDraft = (): Draft => ({ ...emptyDraft, network: initialPlane(plane) })
+  const loadedTarget = editing && draft ? data?.targets.find((target) => target.name === draft.name) : undefined
+  const loadedDraft = loadedTarget ? draftFrom(loadedTarget) : blankDraft()
+  const guard = useConcurrentSettingsDraft({
+    id: 'target-form',
+    label: editing && draft ? `Target ${draft.name}` : 'New target',
+    loaded: loadedDraft,
+    current: draft ?? loadedDraft,
+    editing: draft !== null,
+    discard: () => {
+      setDraft(null)
+      setEditing(false)
+      setFormErrors([])
+    },
+    reload: (latest) => {
+      setDraft(latest.name ? latest : null)
+      setEditing(latest.name !== '')
+    },
+  })
 
   const params = new URLSearchParams({
     limit: String(TARGET_PAGE),
@@ -117,9 +145,32 @@ export default function TargetsPanel({
     if (!draft) return
     const { errors, port } = validate(draft)
     setFormErrors(errors)
-    if (errors.length > 0) return
+    if (errors.length > 0) {
+      feedback.error(`Target: ${errors.join('; ')}`)
+      return
+    }
     setSaving(true)
     try {
+      const loadNamedTarget = async () => {
+        try {
+          return await apiGet<TargetConfig>('/api/v1/config/targets/' + encodeURIComponent(draft.name.trim()))
+        } catch (requestError) {
+          if (requestError instanceof ApiError && requestError.status === 404) return null
+          throw requestError
+        }
+      }
+      if (editing) {
+        const currentServer = await guard.checkForConflict(async () => {
+          const latest = await loadNamedTarget()
+          return latest ? draftFrom(latest) : blankDraft()
+        })
+        if (!currentServer) return
+      } else if (await loadNamedTarget()) {
+        const message = `a target named ${draft.name.trim()} already exists — choose another name or edit that target`
+        setFormErrors([message])
+        feedback.error(`Target was not added: ${message}`)
+        return
+      }
       await apiPost('/api/v1/config/targets', {
         name: draft.name.trim(),
         address: draft.address.trim(),
@@ -129,11 +180,13 @@ export default function TargetsPanel({
       })
       setDraft(null)
       setEditing(false)
-      setSavedFlash(true)
+      feedback.success(editing ? `Target ${draft.name.trim()} saved.` : `Target ${draft.name.trim()} added.`)
       await reload()
     } catch (err) {
       onAuthError(err)
-      setFormErrors([err instanceof Error ? err.message : String(err)])
+      const message = err instanceof Error ? err.message : String(err)
+      setFormErrors([message])
+      feedback.error(`Target was not saved: ${message}`)
     } finally {
       setSaving(false)
     }
@@ -142,25 +195,20 @@ export default function TargetsPanel({
   const remove = async (t: TargetConfig) => {
     try {
       await apiDelete('/api/v1/config/targets/' + encodeURIComponent(t.name))
+      feedback.success(`Target ${t.name} deleted.`)
       await reload()
     } catch (err) {
       onAuthError(err)
       console.error('target delete failed', err)
       setError(err)
+      feedback.error(`Target ${t.name} was not deleted: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
   const startEdit = (t: TargetConfig) => {
     setEditing(true)
-    setSavedFlash(false)
     setFormErrors([])
-    setDraft({
-      name: t.name,
-      address: t.address ?? '',
-      port: t.port ? String(t.port) : '',
-      url: t.url ?? '',
-      network: t.network,
-    })
+    setDraft(draftFrom(t))
   }
 
   const pageMeta = data?.page ?? { limit: TARGET_PAGE, offset: 0, total: data?.targets.length ?? 0, has_more: false }
@@ -237,8 +285,6 @@ export default function TargetsPanel({
     },
   ]
 
-  const blankDraft = (): Draft => ({ ...emptyDraft, network: initialPlane(plane) })
-
   const field = (label: string, key: keyof Draft, placeholder: string, locked = false) => (
     <label className="threshold-field">
       <span className="eyebrow">{label}</span>
@@ -249,7 +295,6 @@ export default function TargetsPanel({
           placeholder={placeholder}
           disabled={saving || locked}
           onChange={(e) => {
-            setSavedFlash(false)
             setDraft((d) => ({ ...(d ?? blankDraft()), [key]: e.target.value }))
           }}
         />
@@ -350,7 +395,8 @@ export default function TargetsPanel({
                         </button>
                         <ConfirmButton
                           label="Delete"
-                          confirmLabel="Confirm delete?"
+                          resource={`Target ${target.name}`}
+                          consequence="This permanently removes the target."
                           disabled={target.probe_count > 0}
                           title={
                             target.probe_count > 0
@@ -399,7 +445,6 @@ export default function TargetsPanel({
             <div className="threshold-foot">
               <span className="hint">New probes can use this target as soon as it is saved.</span>
               <span className="threshold-actions">
-                {savedFlash && <span className="hint">saved</span>}
                 {(editing || draft) && (
                   <button
                     type="button"
@@ -417,7 +462,7 @@ export default function TargetsPanel({
                 <button
                   className="primary"
                   onClick={save}
-                  disabled={saving || !draft || (!editing && !planeReady(plane))}
+                  disabled={saving || !draft || !guard.dirty || (!editing && !planeReady(plane))}
                 >
                   {saving ? 'Saving…' : editing ? 'Save changes' : 'Add target'}
                 </button>

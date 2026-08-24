@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { apiDelete, apiGet, apiPost, apiPut } from '../api'
+import { ApiError, apiDelete, apiGet, apiPost, apiPut } from '../api'
 import { updateRouteParams } from '../routeState'
 import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
 import { fmtAgo } from '../format'
+import { useConcurrentSettingsDraft, useSettingsMutation } from '../settingsMutation'
 import type { SitesConfigResponse, SiteConfig } from '../types'
 import ConfirmButton from './ConfirmButton'
 import DataTable, { type DataTableColumn } from './DataTable'
@@ -20,6 +21,14 @@ interface Draft {
 }
 
 const emptyDraft: Draft = { name: '', display_name: '', location: '', latitude: '', longitude: '' }
+
+const draftFrom = (site: SiteConfig): Draft => ({
+  name: site.name,
+  display_name: site.display_name,
+  location: site.location,
+  latitude: site.latitude !== null ? String(site.latitude) : '',
+  longitude: site.longitude !== null ? String(site.longitude) : '',
+})
 
 // Mirrors the server's siteadmin validation; server 400s render verbatim as
 // a backstop. Coordinates are both-or-neither — clearing both unplaces the
@@ -75,7 +84,6 @@ export default function SitesPanel({
   const [editing, setEditing] = useState(false) // draft edits an existing site (name locked)
   const [formErrors, setFormErrors] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
-  const [savedFlash, setSavedFlash] = useState(false)
   const [query, setQuery] = useRouteSearch()
   const [queryParam] = useRouteParam('q')
   const [sort] = useRouteParam('sort', 'name')
@@ -85,6 +93,25 @@ export default function SitesPanel({
   const [actionRow, setActionRow] = useState<string | null>(null)
   const scrolledSite = useRef<string | null>(null)
   const pinnedSite = useRef<string | null>(selectedSite)
+  const feedback = useSettingsMutation()
+  const loadedSite = editing && draft ? data?.sites.find((site) => site.name === draft.name) : undefined
+  const loadedDraft = loadedSite ? draftFrom(loadedSite) : emptyDraft
+  const guard = useConcurrentSettingsDraft({
+    id: 'site-form',
+    label: editing && draft ? `Site ${draft.name}` : 'New site',
+    loaded: loadedDraft,
+    current: draft ?? loadedDraft,
+    editing: draft !== null,
+    discard: () => {
+      setDraft(null)
+      setEditing(false)
+      setFormErrors([])
+    },
+    reload: (latest) => {
+      setDraft(latest.name ? latest : null)
+      if (!latest.name) setEditing(false)
+    },
+  })
 
   if (!selectedSite) pinnedSite.current = null
   else if (pinnedSite.current !== selectedSite) {
@@ -140,7 +167,10 @@ export default function SitesPanel({
     if (!draft) return
     const { errors, latitude, longitude } = validate(draft)
     setFormErrors(errors)
-    if (errors.length > 0) return
+    if (errors.length > 0) {
+      feedback.error(`Site: ${errors.join('; ')}`)
+      return
+    }
     setSaving(true)
     try {
       const body = {
@@ -151,18 +181,30 @@ export default function SitesPanel({
         longitude,
       }
       if (editing) {
+        const currentServer = await guard.checkForConflict(async () => {
+          try {
+            return draftFrom(await apiGet<SiteConfig>('/api/v1/config/sites/' + encodeURIComponent(body.name)))
+          } catch (requestError) {
+            if (requestError instanceof ApiError && requestError.status === 404) return emptyDraft
+            throw requestError
+          }
+        })
+        if (!currentServer) return
         await apiPut('/api/v1/config/sites/' + encodeURIComponent(body.name), body)
       } else {
         await apiPost('/api/v1/config/sites', body)
       }
       setDraft(null)
       setEditing(false)
+      guard.release()
       onSelectedSite('', 'replace')
-      setSavedFlash(true)
+      feedback.success(editing ? `Site ${body.name} saved.` : `Site ${body.name} added.`)
       await reload()
     } catch (err) {
       onAuthError(err)
-      setFormErrors([err instanceof Error ? err.message : String(err)])
+      const message = err instanceof Error ? err.message : String(err)
+      setFormErrors([message])
+      feedback.error(`Site was not saved: ${message}`)
     } finally {
       setSaving(false)
     }
@@ -171,28 +213,22 @@ export default function SitesPanel({
   const remove = async (s: SiteConfig) => {
     try {
       await apiDelete('/api/v1/config/sites/' + encodeURIComponent(s.name))
+      feedback.success(`Site ${s.name} deleted.`)
       if (selectedSite === s.id) onSelectedSite('', 'replace')
       await reload()
     } catch (err) {
       onAuthError(err)
       console.error('site delete failed', err)
       setError(err)
+      feedback.error(`Site ${s.name} was not deleted: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
   const startEdit = (s: SiteConfig) => {
     onSelectedSite(s.id)
     setEditing(true)
-    setSavedFlash(false)
     setFormErrors([])
-    setDraft({
-      name: s.name,
-      display_name: s.display_name,
-      location: s.location,
-      // 0 is a real coordinate — check null, never truthiness.
-      latitude: s.latitude !== null ? String(s.latitude) : '',
-      longitude: s.longitude !== null ? String(s.longitude) : '',
-    })
+    setDraft(draftFrom(s))
   }
 
   useEffect(() => {
@@ -213,15 +249,8 @@ export default function SitesPanel({
     }
     if (!editing || draft?.name !== selected.name) {
       setEditing(true)
-      setSavedFlash(false)
       setFormErrors([])
-      setDraft({
-        name: selected.name,
-        display_name: selected.display_name,
-        location: selected.location,
-        latitude: selected.latitude !== null ? String(selected.latitude) : '',
-        longitude: selected.longitude !== null ? String(selected.longitude) : '',
-      })
+      setDraft(draftFrom(selected))
     }
     if (scrolledSite.current !== selectedSite) {
       const surface = window.matchMedia('(max-width: 760px)').matches ? 'mobile' : 'desktop'
@@ -306,7 +335,6 @@ export default function SitesPanel({
           placeholder={placeholder}
           disabled={saving || locked}
           onChange={(e) => {
-            setSavedFlash(false)
             setDraft((d) => ({ ...(d ?? emptyDraft), [key]: e.target.value }))
           }}
         />
@@ -398,7 +426,8 @@ export default function SitesPanel({
                       </button>
                       <ConfirmButton
                         label="Delete"
-                        confirmLabel="Confirm delete? Unused join tokens go with it"
+                        resource={`Site ${site.name}`}
+                        consequence="This permanently removes the site and its unused enrollment tokens."
                         disabled={refCount(site) > 0}
                         title={refCount(site) > 0 ? `In use by ${refSummary(site)} — remove those first` : undefined}
                         onConfirm={() => remove(site)}
@@ -431,7 +460,6 @@ export default function SitesPanel({
                 Coordinates place the site on the Overview map. Clear both fields to remove it from the map.
               </span>
               <span className="threshold-actions">
-                {savedFlash && <span className="hint">saved</span>}
                 {(editing || draft) && (
                   <button
                     type="button"
@@ -440,6 +468,7 @@ export default function SitesPanel({
                     onClick={() => {
                       setDraft(null)
                       setEditing(false)
+                      guard.release()
                       onSelectedSite('')
                       setFormErrors([])
                     }}
@@ -447,7 +476,7 @@ export default function SitesPanel({
                     Cancel
                   </button>
                 )}
-                <button className="primary" onClick={save} disabled={saving || !draft}>
+                <button className="primary" onClick={save} disabled={saving || !draft || !guard.dirty}>
                   {saving ? 'Saving…' : editing ? 'Save changes' : 'Add site'}
                 </button>
               </span>

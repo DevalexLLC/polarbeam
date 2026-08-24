@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { apiDelete, apiGet, apiPost, apiPut } from '../api'
 import { fmtAgo } from '../format'
+import { useConcurrentSettingsDraft, useSettingsMutation } from '../settingsMutation'
 import type { NetworksConfigResponse, NetworkConfig } from '../types'
 import ConfirmButton from './ConfirmButton'
 import SettingsPageError from './SettingsPageError'
@@ -19,6 +20,8 @@ const emptyDraft: Draft = { name: '', display_name: '' }
 function validate(d: Draft): string[] {
   return d.name.trim() === '' ? ['name is required'] : []
 }
+
+const draftFrom = (network: NetworkConfig): Draft => ({ name: network.name, display_name: network.display_name })
 
 // Unused join tokens are swept with the network, so they never block a
 // delete — everything else must be detached first.
@@ -47,7 +50,25 @@ export default function NetworksPanel({
   const [editing, setEditing] = useState(false) // draft edits an existing network (name locked)
   const [formErrors, setFormErrors] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
-  const [savedFlash, setSavedFlash] = useState(false)
+  const feedback = useSettingsMutation()
+  const loadedNetwork = editing && draft ? data?.networks.find((network) => network.name === draft.name) : undefined
+  const loadedDraft = loadedNetwork ? draftFrom(loadedNetwork) : emptyDraft
+  const guard = useConcurrentSettingsDraft({
+    id: 'network-form',
+    label: editing && draft ? `Network ${draft.name}` : 'New network',
+    loaded: loadedDraft,
+    current: draft ?? loadedDraft,
+    editing: draft !== null,
+    discard: () => {
+      setDraft(null)
+      setEditing(false)
+      setFormErrors([])
+    },
+    reload: (latest) => {
+      setDraft(latest.name ? latest : null)
+      if (!latest.name) setEditing(false)
+    },
+  })
 
   useEffect(() => {
     let cancelled = false
@@ -80,22 +101,33 @@ export default function NetworksPanel({
     if (!draft) return
     const errors = validate(draft)
     setFormErrors(errors)
-    if (errors.length > 0) return
+    if (errors.length > 0) {
+      feedback.error(`Network: ${errors.join('; ')}`)
+      return
+    }
     setSaving(true)
     try {
       const body = { name: draft.name.trim(), display_name: draft.display_name.trim() }
       if (editing) {
+        const currentServer = await guard.checkForConflict(async () => {
+          const latest = await apiGet<NetworksConfigResponse>('/api/v1/config/networks')
+          const network = latest.networks.find((item) => item.name === body.name)
+          return network ? draftFrom(network) : emptyDraft
+        })
+        if (!currentServer) return
         await apiPut('/api/v1/config/networks/' + encodeURIComponent(body.name), body)
       } else {
         await apiPost('/api/v1/config/networks', body)
       }
       setDraft(null)
       setEditing(false)
-      setSavedFlash(true)
+      feedback.success(editing ? `Network ${body.name} saved.` : `Network ${body.name} added.`)
       await reload()
     } catch (err) {
       onAuthError(err)
-      setFormErrors([err instanceof Error ? err.message : String(err)])
+      const message = err instanceof Error ? err.message : String(err)
+      setFormErrors([message])
+      feedback.error(`Network was not saved: ${message}`)
     } finally {
       setSaving(false)
     }
@@ -104,17 +136,18 @@ export default function NetworksPanel({
   const remove = async (n: NetworkConfig) => {
     try {
       await apiDelete('/api/v1/config/networks/' + encodeURIComponent(n.name))
+      feedback.success(`Network ${n.name} deleted.`)
       await reload()
     } catch (err) {
       onAuthError(err)
       console.error('network delete failed', err)
       setError(err)
+      feedback.error(`Network ${n.name} was not deleted: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
   const startEdit = (n: NetworkConfig) => {
     setEditing(true)
-    setSavedFlash(false)
     setFormErrors([])
     setDraft({ name: n.name, display_name: n.display_name })
   }
@@ -148,7 +181,6 @@ export default function NetworksPanel({
           placeholder={placeholder}
           disabled={saving || locked}
           onChange={(e) => {
-            setSavedFlash(false)
             setDraft((d) => ({ ...(d ?? emptyDraft), [key]: e.target.value }))
           }}
         />
@@ -214,7 +246,8 @@ export default function NetworksPanel({
                       </button>
                       <ConfirmButton
                         label="Delete"
-                        confirmLabel="Confirm delete? Unused join tokens go with it"
+                        resource={`Network ${n.name}`}
+                        consequence="This permanently removes the network and its unused enrollment tokens."
                         disabled={n.name === 'default' || refCount(n) > 0}
                         title={
                           n.name === 'default'
@@ -252,7 +285,6 @@ export default function NetworksPanel({
                 moves between networks only by re-enrolling with a token for the other one.
               </span>
               <span className="threshold-actions">
-                {savedFlash && <span className="hint">saved</span>}
                 {(editing || draft) && (
                   <button
                     type="button"
@@ -267,7 +299,7 @@ export default function NetworksPanel({
                     Cancel
                   </button>
                 )}
-                <button className="primary" onClick={save} disabled={saving || !draft}>
+                <button className="primary" onClick={save} disabled={saving || !draft || !guard.dirty}>
                   {saving ? 'Saving…' : editing ? 'Save changes' : 'Add network'}
                 </button>
               </span>

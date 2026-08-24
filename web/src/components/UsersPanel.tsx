@@ -3,6 +3,7 @@ import { apiDelete, apiGet, apiPost, apiPut } from '../api'
 import type { Caps } from '../caps'
 import { roleLabel } from '../caps'
 import { fmtAgo, fmtTime } from '../format'
+import { useConcurrentSettingsDraft, useSettingsDraft, useSettingsMutation } from '../settingsMutation'
 import { useTimezone } from '../timezone'
 import type { LoginMonth, Role, UserAccount, UserCreateResponse, UsersResponse } from '../types'
 import ConfirmButton from './ConfirmButton'
@@ -10,6 +11,13 @@ import RoleWall from './RoleWall'
 import SettingsPageError from './SettingsPageError'
 
 const POLL_MS = 30_000
+
+function orderedNetworks(values: string[]): string[] {
+  // ES2023 toSorted is outside this project's browser target. The spread
+  // is a fresh array, so this does not mutate React or API state.
+  // oxlint-disable-next-line unicorn/no-array-sort
+  return [...values].sort()
+}
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
@@ -248,6 +256,44 @@ export default function UsersPanel({
   // further resets while one is in flight.
   const [resetting, setResetting] = useState(false)
   const dialogRef = useRef<HTMLDialogElement>(null)
+  const feedback = useSettingsMutation()
+  const editingUser = scopeEdit ? data?.users.find((user) => user.id === scopeEdit.id) : undefined
+  const loadedScope = editingUser
+    ? { exists: true, id: editingUser.id, networks: orderedNetworks(editingUser.networks ?? []) }
+    : null
+  const currentScope = scopeEdit
+    ? { exists: true, id: scopeEdit.id, networks: orderedNetworks(scopeEdit.networks) }
+    : null
+  const scopeGuard = useConcurrentSettingsDraft({
+    id: `user-scope:${scopeEdit?.id ?? 'none'}`,
+    label: editingUser ? `Network access for ${editingUser.username}` : 'User network access',
+    loaded: loadedScope,
+    current: currentScope,
+    editing: scopeEdit !== null,
+    discard: () => {
+      setScopeEdit(null)
+      setActionError('')
+    },
+    reload: (latest) => setScopeEdit(latest.exists ? { id: latest.id, networks: latest.networks } : null),
+  })
+  const discardCreate = () => {
+    setNewUsername('')
+    setNewRole('viewer')
+    setNewNetworks([])
+    setCreateError('')
+    setMinted(null)
+    setCopied(false)
+    dialogRef.current?.close()
+  }
+  useSettingsDraft(
+    'new-user',
+    minted ? `One-time password for ${minted.res.username}` : 'New local user',
+    minted !== null || newUsername !== '' || newRole !== 'viewer' || newNetworks.length > 0,
+    discardCreate,
+    minted
+      ? 'This password is shown only once and cannot be recovered. Discarding it requires resetting the password again.'
+      : undefined,
+  )
 
   // Debounce the search box so each keystroke doesn't hit the server; any
   // applied-filter change resets to the first page.
@@ -321,17 +367,32 @@ export default function UsersPanel({
   const saveScope = async (u: UserAccount, next: string[]) => {
     setActionError('')
     try {
+      const currentServer = await scopeGuard.checkForConflict(async () => {
+        const latest = await apiGet<UsersResponse>(`/api/v1/users?q=${encodeURIComponent(u.username)}&limit=100`)
+        const account = latest.users.find((item) => item.id === u.id)
+        return {
+          exists: account !== undefined,
+          id: u.id,
+          networks: orderedNetworks(account?.networks ?? []),
+        }
+      })
+      if (!currentServer) return
       await apiPut('/api/v1/users/' + encodeURIComponent(u.id), { networks: next })
       setScopeEdit(null)
+      feedback.success(`Network access for ${u.username} saved.`)
       setRefresh((r) => r + 1)
     } catch (err) {
       onAuthError(err)
-      setActionError(err instanceof Error ? err.message : String(err))
+      const message = err instanceof Error ? err.message : String(err)
+      setActionError(message)
+      feedback.error(`Network access for ${u.username} was not saved: ${message}`)
     }
   }
 
   const openCreate = () => {
     setCreateError('')
+    setNewUsername('')
+    setNewRole('viewer')
     setNewNetworks([])
     dialogRef.current?.showModal()
   }
@@ -354,9 +415,12 @@ export default function UsersPanel({
       setNewRole('viewer')
       setNewNetworks([])
       setRefresh((r) => r + 1)
+      feedback.success(`User ${res.username} created.`)
     } catch (err) {
       onAuthError(err)
-      setCreateError(err instanceof Error ? err.message : String(err))
+      const message = err instanceof Error ? err.message : String(err)
+      setCreateError(message)
+      feedback.error(`User was not created: ${message}`)
     } finally {
       setCreating(false)
     }
@@ -372,10 +436,13 @@ export default function UsersPanel({
     setActionError('')
     try {
       await apiPut('/api/v1/users/' + encodeURIComponent(u.id), { disabled })
+      feedback.success(`User ${u.username} ${disabled ? 'disabled' : 'enabled'}.`)
       setRefresh((r) => r + 1)
     } catch (err) {
       onAuthError(err)
-      setActionError(err instanceof Error ? err.message : String(err))
+      const message = err instanceof Error ? err.message : String(err)
+      setActionError(message)
+      feedback.error(`User ${u.username} was not changed: ${message}`)
     }
   }
 
@@ -383,10 +450,13 @@ export default function UsersPanel({
     setActionError('')
     try {
       await apiDelete('/api/v1/users/' + encodeURIComponent(u.id))
+      feedback.success(`User ${u.username} deleted.`)
       setRefresh((r) => r + 1)
     } catch (err) {
       onAuthError(err)
-      setActionError(err instanceof Error ? err.message : String(err))
+      const message = err instanceof Error ? err.message : String(err)
+      setActionError(message)
+      feedback.error(`User ${u.username} was not deleted: ${message}`)
     }
   }
 
@@ -398,11 +468,14 @@ export default function UsersPanel({
     try {
       const res = await apiPost<UserCreateResponse>('/api/v1/users/' + encodeURIComponent(u.id) + '/reset-password')
       setMinted({ kind: 'reset', res })
+      feedback.success(`Password for ${u.username} reset.`)
       setRefresh((r) => r + 1)
       dialogRef.current?.showModal()
     } catch (err) {
       onAuthError(err)
-      setActionError(err instanceof Error ? err.message : String(err))
+      const message = err instanceof Error ? err.message : String(err)
+      setActionError(message)
+      feedback.error(`Password for ${u.username} was not reset: ${message}`)
     } finally {
       setResetting(false)
     }
@@ -487,6 +560,12 @@ export default function UsersPanel({
           aria-label={minted?.kind === 'reset' ? 'Password reset' : 'Create local user'}
           onCancel={(e) => {
             if (minted) e.preventDefault()
+            else {
+              setNewUsername('')
+              setNewRole('viewer')
+              setNewNetworks([])
+              setCreateError('')
+            }
           }}
         >
           {minted ? (
@@ -564,12 +643,7 @@ export default function UsersPanel({
                 </ul>
               )}
               <div className="users-dialog-foot">
-                <button
-                  type="button"
-                  className="linklike"
-                  disabled={creating}
-                  onClick={() => dialogRef.current?.close()}
-                >
+                <button type="button" className="linklike" disabled={creating} onClick={discardCreate}>
                   Cancel
                 </button>
                 <button
@@ -716,11 +790,22 @@ export default function UsersPanel({
                                   type="button"
                                   className="secondary-button"
                                   aria-expanded={scopeEdit?.id === u.id}
-                                  onClick={() =>
+                                  onClick={() => {
+                                    if (scopeEdit?.id === u.id && scopeGuard.dirty) {
+                                      feedback.confirm({
+                                        action: 'Discard changes',
+                                        resource: `Network access for ${u.username}`,
+                                        consequence: 'This closes the editor and discards the local network selection.',
+                                        confirmLabel: 'Discard',
+                                        cancelLabel: 'Stay',
+                                        onConfirm: () => setScopeEdit(null),
+                                      })
+                                      return
+                                    }
                                     setScopeEdit(
                                       scopeEdit?.id === u.id ? null : { id: u.id, networks: [...(u.networks ?? [])] },
                                     )
-                                  }
+                                  }}
                                 >
                                   {scopeEdit?.id === u.id ? 'Close' : 'Networks'}
                                 </button>
@@ -730,7 +815,8 @@ export default function UsersPanel({
                               {u.auth_source !== 'oidc' && (
                                 <ConfirmButton
                                   label="Reset password"
-                                  confirmLabel="Confirm? Signs them out"
+                                  resource={`Local user ${u.username}`}
+                                  consequence="This replaces their password and signs out their active sessions."
                                   disabled={u.username === currentUsername || resetting}
                                   title={
                                     u.username === currentUsername
@@ -742,7 +828,12 @@ export default function UsersPanel({
                               )}
                               <ConfirmButton
                                 label={u.status === 'disabled' ? 'Enable' : 'Disable'}
-                                confirmLabel={u.status === 'disabled' ? 'Confirm enable?' : 'Confirm disable?'}
+                                resource={`User ${u.username}`}
+                                consequence={
+                                  u.status === 'disabled'
+                                    ? 'This restores the user’s ability to sign in.'
+                                    : 'This blocks sign-in and ends the user’s active sessions.'
+                                }
                                 disabled={u.username === currentUsername}
                                 title={
                                   u.username === currentUsername
@@ -755,8 +846,11 @@ export default function UsersPanel({
                               />
                               <ConfirmButton
                                 label="Delete"
-                                confirmLabel={
-                                  u.auth_source === 'oidc' ? 'Confirm? SSO can re-enroll' : 'Confirm delete?'
+                                resource={`User ${u.username}`}
+                                consequence={
+                                  u.auth_source === 'oidc'
+                                    ? 'This deletes the account. A later SSO sign-in may provision it again.'
+                                    : 'This permanently deletes the local account and ends its sessions.'
                                 }
                                 disabled={u.username === currentUsername}
                                 title={
@@ -789,7 +883,7 @@ export default function UsersPanel({
                                 <button
                                   className="primary"
                                   type="button"
-                                  disabled={scopeEdit.networks.length === 0}
+                                  disabled={scopeEdit.networks.length === 0 || !scopeGuard.dirty}
                                   onClick={() => void saveScope(u, scopeEdit.networks)}
                                 >
                                   Save

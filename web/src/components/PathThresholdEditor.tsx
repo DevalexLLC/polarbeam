@@ -1,4 +1,5 @@
-import type { PathThresholdOverride, ThresholdSettings } from '../types'
+import { apiGet } from '../api'
+import type { PathThresholdOverride, SettingsResponse, ThresholdSettings } from '../types'
 import ThresholdOverrideForm from './ThresholdOverrideForm'
 
 // The plane rides as ?network=; '' addresses the all-planes row that
@@ -24,6 +25,7 @@ export default function PathThresholdEditor({
   onCancel,
   onChanged,
   onAuthError,
+  onDirtyChange,
 }: {
   a: string
   b: string
@@ -37,10 +39,12 @@ export default function PathThresholdEditor({
   onCancel?: () => void
   onChanged: (warnings: string[]) => void
   onAuthError: (err: unknown) => void
+  onDirtyChange?: (dirty: boolean) => void
 }) {
   return (
     <ThresholdOverrideForm
       url={pathThresholdURL(a, b, network)}
+      resource={`Path threshold override for ${a} ↔ ${b}${network ? ` on ${network}` : ''}`}
       override={override}
       inherited={global}
       canWrite={canWrite}
@@ -48,6 +52,15 @@ export default function PathThresholdEditor({
       onCancel={onCancel}
       onChanged={onChanged}
       onAuthError={onAuthError}
+      loadLatest={async () => {
+        const latest = await apiGet<SettingsResponse>('/api/v1/settings')
+        return (
+          latest.overrides.find(
+            (item) => item.network === network && ((item.a === a && item.b === b) || (item.a === b && item.b === a)),
+          ) ?? null
+        )
+      }}
+      onDirtyChange={onDirtyChange}
     />
   )
 }

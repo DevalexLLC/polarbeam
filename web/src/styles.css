@@ -2280,6 +2280,18 @@ button.primary:disabled {
   cursor: default;
 }
 
+button.danger-button {
+  padding: 0.4rem 0.9rem;
+  border: none;
+  border-radius: var(--radius);
+  background: var(--status-down);
+  color: var(--accent-ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
 @media (max-width: 560px) {
   .threshold-grid {
     grid-template-columns: 1fr;
@@ -3495,11 +3507,6 @@ td.users-actions .inline-confirm:hover {
   text-decoration: underline;
 }
 
-td.users-actions .inline-confirm.armed {
-  color: var(--status-down);
-  background: none;
-}
-
 td.users-actions .inline-confirm:disabled {
   color: var(--ink-3);
   opacity: 0.55;
@@ -4302,36 +4309,130 @@ table.data-table tbody tr:last-child > td {
 
 /* ---- Probe-workload management (Settings tabs) ---- */
 
-/* No overflow here: the links' -1px bottom margin (which overlays the nav
-   border with the active underline) makes the content 1px taller than the
-   box, and any overflow:auto turns that into a phantom scrollbar. Narrow
-   screens wrap instead of scrolling. */
-.settings-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
-  margin: -0.5rem 0 1.25rem;
-  border-bottom: 1px solid var(--border);
+.settings-layout {
+  display: grid;
+  grid-template-columns: 11rem minmax(0, 1fr);
+  align-items: start;
+  gap: 1.5rem;
 }
 
-.settings-tabs a {
-  padding: 0.5rem 0.85rem;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
+.settings-sidebar {
+  position: sticky;
+  top: 5rem;
+  display: grid;
+  gap: 1.1rem;
+}
+
+.banner-frame .settings-sidebar {
+  top: calc(5rem + var(--banner-h));
+}
+
+.settings-nav-group {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.settings-nav-group .eyebrow {
+  padding: 0 0.65rem 0.25rem;
+}
+
+.settings-sidebar a {
+  padding: 0.45rem 0.65rem;
+  border-left: 2px solid transparent;
+  border-radius: 0 var(--radius) var(--radius) 0;
   color: var(--ink-2);
   font-size: 0.85rem;
   font-weight: 600;
   text-decoration: none;
-  white-space: nowrap;
 }
 
-.settings-tabs a:hover {
+.settings-sidebar a:hover {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+
+.settings-sidebar a.active {
+  color: var(--ink);
+  border-left-color: var(--accent);
+  background: var(--surface-2);
+}
+
+.settings-content {
+  min-width: 0;
+}
+
+.settings-mobile-picker {
+  display: none;
+  margin: -0.5rem 0 1.25rem;
+}
+
+.settings-mobile-picker label {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: var(--ink-2);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.settings-mobile-picker select {
+  width: 100%;
+}
+
+.settings-toasts {
+  position: fixed;
+  z-index: 80;
+  right: 1rem;
+  bottom: 1rem;
+  display: grid;
+  gap: 0.5rem;
+  width: min(28rem, calc(100vw - 2rem));
+}
+
+.settings-toast {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--border-strong);
+  border-left: 4px solid var(--status-ok);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  background: var(--surface);
   color: var(--ink);
 }
 
-.settings-tabs a.active {
-  color: var(--ink);
-  border-bottom-color: var(--accent);
+.settings-toast-error {
+  border-left-color: var(--status-down);
+}
+
+.settings-toast > span {
+  flex: 1;
+}
+
+.toast-dismiss {
+  padding: 0.15rem 0.35rem;
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 1.25rem;
+}
+
+.settings-confirm-dialog p {
+  margin: 0.5rem 0;
+}
+
+@media (max-width: 760px) {
+  .settings-layout {
+    display: block;
+  }
+
+  .settings-sidebar {
+    display: none;
+  }
+
+  .settings-mobile-picker {
+    display: block;
+  }
 }
 
 /* Config panels hold tables, so unlike the narrow thresholds form they
@@ -4421,12 +4522,6 @@ td.config-actions .secondary-button {
 
 tr.probe-disabled > td {
   color: var(--ink-3);
-}
-
-.inline-confirm.armed {
-  color: var(--status-down);
-  border-color: color-mix(in srgb, var(--status-down) 55%, var(--border-strong));
-  background: color-mix(in srgb, var(--status-down) 10%, var(--surface));
 }
 
 .config-edit-row > td {

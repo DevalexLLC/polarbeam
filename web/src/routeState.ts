@@ -1,4 +1,5 @@
 export type HistoryMode = 'push' | 'replace'
+export type RouteNavigationBlocker = (nextHash: string, mode: HistoryMode) => boolean
 
 export interface CanonicalRouteState {
   hash: string
@@ -13,7 +14,7 @@ export interface CanonicalRouteOptions {
 }
 
 const WINDOWS = ['24h', '7d', '30d', '90d', '365d'] as const
-const SETTINGS_SECTIONS = [
+const LEGACY_SETTINGS_SECTIONS = [
   'thresholds',
   'sites',
   'networks',
@@ -25,8 +26,16 @@ const SETTINGS_SECTIONS = [
   'authentication',
   'banner',
 ] as const
+const SETTINGS_GROUPS = ['monitoring', 'infrastructure', 'access', 'appearance'] as const
+const SETTINGS_SUBSECTIONS = {
+  monitoring: ['thresholds', 'targets', 'meshes', 'probes'],
+  infrastructure: ['sites', 'networks', 'enrollment'],
+  access: ['users', 'authentication'],
+  appearance: ['banner'],
+} as const
 
 const ROUTE_STATE_EVENT = 'polarbeam-route-state'
+let routeNavigationBlocker: RouteNavigationBlocker | null = null
 
 function decodeSegment(value: string): string {
   try {
@@ -148,17 +157,32 @@ export function canonicalizeRouteHash(hash: string, options: CanonicalRouteOptio
       setNonDefault(out, 'from', opaque(source, 'from'))
     }
   } else if (route === 'settings') {
-    const sections = options.settingsSections ?? SETTINGS_SECTIONS
-    const section = oneOf(source, 'section', sections, sections[0] ?? '')
-    setNonDefault(out, 'section', section, sections[0] ?? '')
-    setNonDefault(out, 'subsection', opaque(source, 'subsection'))
-    if (section === 'sites' || section === 'targets' || section === 'probes') {
+    const requestedSection = opaque(source, 'section')
+    const legacySections = options.settingsSections ?? LEGACY_SETTINGS_SECTIONS
+    const legacySubsection = legacySections.includes(requestedSection) ? requestedSection : ''
+    const section = legacySubsection
+      ? legacySubsection === 'thresholds' ||
+        legacySubsection === 'targets' ||
+        legacySubsection === 'meshes' ||
+        legacySubsection === 'probes'
+        ? 'monitoring'
+        : legacySubsection === 'sites' || legacySubsection === 'networks' || legacySubsection === 'enrollment'
+          ? 'infrastructure'
+          : legacySubsection === 'users' || legacySubsection === 'authentication'
+            ? 'access'
+            : 'appearance'
+      : oneOf(source, 'section', SETTINGS_GROUPS, 'monitoring')
+    const allowedSubsections = SETTINGS_SUBSECTIONS[section as keyof typeof SETTINGS_SUBSECTIONS]
+    const subsection = legacySubsection || oneOf(source, 'subsection', allowedSubsections, allowedSubsections[0])
+    out.set('section', section)
+    out.set('subsection', subsection)
+    if (subsection === 'sites' || subsection === 'targets' || subsection === 'probes') {
       setNonDefault(out, 'q', opaque(source, 'q'))
       const page = positiveInteger(source, 'page', 1)
       if (page > 1) out.set('page', String(page))
       setNonDefault(out, 'order', oneOf(source, 'order', ['asc', 'desc'], 'asc'), 'asc')
     }
-    if (section === 'sites') {
+    if (subsection === 'sites') {
       setNonDefault(
         out,
         'sort',
@@ -167,7 +191,7 @@ export function canonicalizeRouteHash(hash: string, options: CanonicalRouteOptio
       )
       setNonDefault(out, 'site', opaque(source, 'site'))
     }
-    if (section === 'targets') {
+    if (subsection === 'targets') {
       setNonDefault(
         out,
         'sort',
@@ -176,7 +200,7 @@ export function canonicalizeRouteHash(hash: string, options: CanonicalRouteOptio
       )
       setNonDefault(out, 'kind', oneOf(source, 'kind', ['all', 'external', 'agent'], 'all'), 'all')
     }
-    if (section === 'probes') {
+    if (subsection === 'probes') {
       setNonDefault(
         out,
         'sort',
@@ -321,6 +345,21 @@ export function updateRouteParams(
   const query = params.toString()
   const next = canonicalizeRouteHash(`#${current.path}${query ? `?${query}` : ''}`).hash
   if (next === current.hash && location.hash === next) return next
+  if (routeNavigationBlocker && !routeNavigationBlocker(next, mode)) return current.hash
+  history[mode === 'replace' ? 'replaceState' : 'pushState'](null, '', next)
+  window.dispatchEvent(new Event(ROUTE_STATE_EVENT))
+  return next
+}
+
+export function setRouteNavigationBlocker(blocker: RouteNavigationBlocker | null): void {
+  routeNavigationBlocker = blocker
+}
+
+export function navigateRouteHash(hash: string, mode: HistoryMode = 'push', bypassBlocker = false): string {
+  const current = canonicalizeRouteHash(location.hash)
+  const next = canonicalizeRouteHash(hash).hash
+  if (next === current.hash && location.hash === next) return next
+  if (!bypassBlocker && routeNavigationBlocker && !routeNavigationBlocker(next, mode)) return current.hash
   history[mode === 'replace' ? 'replaceState' : 'pushState'](null, '', next)
   window.dispatchEvent(new Event(ROUTE_STATE_EVENT))
   return next
@@ -329,6 +368,7 @@ export function updateRouteParams(
 export function replaceCanonicalRoute(options: CanonicalRouteOptions = {}, notify = true): string {
   const canonical = canonicalizeRouteHash(location.hash, options)
   if (!canonical.changed) return canonical.hash
+  if (routeNavigationBlocker && !routeNavigationBlocker(canonical.hash, 'replace')) return location.hash || '#/'
   history.replaceState(null, '', canonical.hash)
   if (notify) window.dispatchEvent(new Event(ROUTE_STATE_EVENT))
   return canonical.hash
@@ -347,4 +387,18 @@ export function subscribeRouteState(listener: () => void): () => void {
 
 export function routeHashSnapshot(): string {
   return location.hash || '#/'
+}
+
+export function routeChangeDiscardsSettingsDraft(currentHash: string, nextHash: string): boolean {
+  const current = canonicalizeRouteHash(currentHash)
+  const next = canonicalizeRouteHash(nextHash)
+  if (current.path !== next.path) return true
+  if (current.path !== '/settings') return false
+  for (const name of ['network', 'section', 'subsection']) {
+    if (current.params.get(name) !== next.params.get(name)) return true
+  }
+  const subsection = current.params.get('subsection')
+  if (subsection === 'sites') return current.params.get('site') !== next.params.get('site')
+  if (subsection === 'probes') return current.params.get('probe') !== next.params.get('probe')
+  return false
 }

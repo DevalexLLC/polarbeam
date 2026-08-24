@@ -16,8 +16,18 @@ export type SettingsTab =
   | 'authentication'
   | 'banner'
 
+export type SettingsGroup = 'monitoring' | 'infrastructure' | 'access' | 'appearance'
+
+export const SETTINGS_GROUPS: { group: SettingsGroup; label: string }[] = [
+  { group: 'monitoring', label: 'Monitoring' },
+  { group: 'infrastructure', label: 'Infrastructure' },
+  { group: 'access', label: 'Access' },
+  { group: 'appearance', label: 'Appearance' },
+]
+
 export interface SettingsTabDef {
   tab: SettingsTab
+  group: SettingsGroup
   href: string
   label: string
   intro: string
@@ -32,70 +42,80 @@ export interface SettingsTabDef {
 export const SETTINGS_TABS: SettingsTabDef[] = [
   {
     tab: 'thresholds',
-    href: '#/settings',
+    group: 'monitoring',
+    href: '#/settings?section=monitoring&subsection=thresholds',
     label: 'Thresholds',
     intro: 'Shared thresholds used to classify network health across the dashboard.',
     need: 'networkWrite',
   },
   {
-    tab: 'sites',
-    href: '#/settings?section=sites',
-    label: 'Sites',
-    intro: 'The locations agents enroll into, with optional map placement and display metadata.',
-    need: 'adminWrite',
-  },
-  {
-    tab: 'networks',
-    href: '#/settings?section=networks',
-    label: 'Networks',
-    intro: 'Connectivity planes. Agents join one at enrollment; meshes and direct probes measure within exactly one.',
-    need: 'adminWrite',
-  },
-  {
     tab: 'targets',
-    href: '#/settings?section=targets',
+    group: 'monitoring',
+    href: '#/settings?section=monitoring&subsection=targets',
     label: 'Targets',
     intro: 'External hosts and URLs that site agents probe.',
     need: 'networkWrite',
   },
   {
     tab: 'meshes',
-    href: '#/settings?section=meshes',
+    group: 'monitoring',
+    href: '#/settings?section=monitoring&subsection=meshes',
     label: 'Meshes',
     intro: 'Site groups whose members probe each other in both directions.',
     need: 'networkWrite',
   },
   {
     tab: 'probes',
-    href: '#/settings?section=probes',
+    group: 'monitoring',
+    href: '#/settings?section=monitoring&subsection=probes',
     label: 'Probes',
     intro: 'The measurement workload pushed to every affected agent within ~30 seconds.',
     need: 'networkWrite',
   },
   {
+    tab: 'sites',
+    group: 'infrastructure',
+    href: '#/settings?section=infrastructure&subsection=sites',
+    label: 'Sites',
+    intro: 'The locations agents enroll into, with optional map placement and display metadata.',
+    need: 'adminWrite',
+  },
+  {
+    tab: 'networks',
+    group: 'infrastructure',
+    href: '#/settings?section=infrastructure&subsection=networks',
+    label: 'Networks',
+    intro: 'Connectivity planes. Agents join one at enrollment; meshes and direct probes measure within exactly one.',
+    need: 'adminWrite',
+  },
+  {
     tab: 'enrollment',
-    href: '#/settings?section=enrollment',
+    group: 'infrastructure',
+    href: '#/settings?section=infrastructure&subsection=enrollment',
     label: 'Enrollment',
     intro: 'Single-use join tokens that enroll new agents into a site.',
     need: 'networkWrite',
   },
   {
     tab: 'users',
-    href: '#/settings?section=users',
+    group: 'access',
+    href: '#/settings?section=access&subsection=users',
     label: 'Users',
     intro: 'Dashboard accounts across local and single sign-on, with sign-in activity.',
     need: 'adminWrite',
   },
   {
     tab: 'authentication',
-    href: '#/settings?section=authentication',
+    group: 'access',
+    href: '#/settings?section=access&subsection=authentication',
     label: 'Authentication',
     intro: 'Optional single sign-on via an OpenID Connect provider. Local accounts always keep working.',
     need: 'adminWrite',
   },
   {
     tab: 'banner',
-    href: '#/settings?section=banner',
+    group: 'appearance',
+    href: '#/settings?section=appearance&subsection=banner',
     label: 'Banner',
     intro: 'An optional marking shown at the top and bottom of every screen, the sign-in page included.',
     need: 'adminWrite',
@@ -103,6 +123,8 @@ export const SETTINGS_TABS: SettingsTabDef[] = [
 ]
 
 export const visibleTabs = (caps: Caps): SettingsTabDef[] => SETTINGS_TABS.filter((t) => caps[t.need])
+
+export const settingsTabDef = (tab: SettingsTab): SettingsTabDef => SETTINGS_TABS.find((item) => item.tab === tab)!
 
 // Settings is offered when the caller can act on something there. A viewer
 // and a network_viewer read every config surface through the pages that

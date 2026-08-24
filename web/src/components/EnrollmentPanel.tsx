@@ -3,6 +3,7 @@ import type { Caps } from '../caps'
 import type { PlaneChoice } from '../plane'
 import { initialPlane, networkField, planeReady } from '../plane'
 import { inheritRouteNetwork } from '../routeState'
+import { useSettingsDraft, useSettingsMutation } from '../settingsMutation'
 import PlaneField from './PlaneField'
 import RoleWall from './RoleWall'
 import { apiDelete, apiGet, apiPost } from '../api'
@@ -58,6 +59,22 @@ export default function EnrollmentPanel({
   // never clear it — it is shown exactly once and cannot be recovered.
   const [minted, setMinted] = useState<TokenCreateResponse | null>(null)
   const [copied, setCopied] = useState(false)
+  const feedback = useSettingsMutation()
+  useSettingsDraft(
+    'enrollment-token-form',
+    minted ? `One-time enrollment token for ${minted.site}` : 'New enrollment token',
+    site !== '' || networkDraft !== null || ttlMS !== 86_400_000 || minted !== null,
+    () => {
+      setSite('')
+      setNetwork(null)
+      setTtlMS(86_400_000)
+      setMinted(null)
+      setActionError('')
+    },
+    minted
+      ? 'This token is shown only once and cannot be recovered. Discarding it requires issuing a replacement token.'
+      : undefined,
+  )
 
   // Like the OIDC panel, this GET is admin-only (join tokens are enrollment
   // credentials), so viewers get a static explanation instead of a doomed
@@ -134,10 +151,13 @@ export default function EnrollmentPanel({
         ...networkField(network),
       })
       setMinted(res)
+      feedback.success('Enrollment token issued.')
       await reload()
     } catch (err) {
       onAuthError(err)
-      setActionError(err instanceof Error ? err.message : String(err))
+      const message = err instanceof Error ? err.message : String(err)
+      setActionError(message)
+      feedback.error(`Enrollment token was not issued: ${message}`)
     } finally {
       setCreating(false)
     }
@@ -147,10 +167,13 @@ export default function EnrollmentPanel({
     setActionError('')
     try {
       await apiDelete('/api/v1/config/tokens/' + encodeURIComponent(t.id))
+      feedback.success(`Enrollment token for ${t.site} deleted.`)
       await reload()
     } catch (err) {
       onAuthError(err)
-      setActionError(err instanceof Error ? err.message : String(err))
+      const message = err instanceof Error ? err.message : String(err)
+      setActionError(message)
+      feedback.error(`Enrollment token was not deleted: ${message}`)
     }
   }
 
@@ -193,8 +216,9 @@ export default function EnrollmentPanel({
               <div className="empty-state">
                 <strong>No sites yet</strong>
                 <span>
-                  Create a site on the <a href={inheritRouteNetwork('#/settings?section=sites')}>Sites tab</a> first —
-                  tokens are always issued for an existing site.
+                  Create a site on the{' '}
+                  <a href={inheritRouteNetwork('#/settings?section=infrastructure&subsection=sites')}>Sites tab</a>{' '}
+                  first — tokens are always issued for an existing site.
                 </span>
               </div>
             ) : (
@@ -318,7 +342,12 @@ export default function EnrollmentPanel({
                         <td data-label="Actions" className="config-actions">
                           <ConfirmButton
                             label="Delete"
-                            confirmLabel={status.kind === 'active' ? 'Confirm revoke?' : 'Confirm delete?'}
+                            resource={`Enrollment token ${t.id}`}
+                            consequence={
+                              status.kind === 'active'
+                                ? 'This revokes the token immediately, so it can no longer enroll an agent.'
+                                : 'This permanently removes the expired token record.'
+                            }
                             disabled={t.used_at !== null}
                             title={t.used_at !== null ? 'Used tokens are enrollment audit records' : undefined}
                             onConfirm={() => remove(t)}
