@@ -34,6 +34,8 @@ test('refresh reconciliation clears missing disclosure and action identities', (
   })
   assert.match(component, /focusedRow\.current !== null && !keys\.includes\(focusedRow\.current\)/)
   assert.match(component, /root\.current\?\.focus\(\)/)
+  assert.match(component, /expandedMissing && !disclosure\?\.retainMissing/)
+  assert.match(component, /closest<HTMLElement>\('\[data-action-key\]'\)/)
   assert.match(component, /role="region"/)
   assert.match(component, /aria-label=\{`\$\{label\} data table`\}/)
 })
@@ -57,10 +59,25 @@ test('floating actions escape the scroll region and disclosure identities are su
   assert.doesNotMatch(styles, /\.data-table-actions-menu\s*\{[^}]*position:\s*absolute/)
   assert.match(component, /render\(row, 'desktop'\)/)
   assert.match(component, /render\(row, 'mobile'\)/)
+  assert.match(component, /document\.addEventListener\('pointerdown', dismiss, true\)/)
+  assert.match(component, /window\.addEventListener\('scroll', follow, true\)/)
 
   const agents = readFileSync(new URL('../src/views/Agents.tsx', import.meta.url), 'utf8')
   assert.match(agents, /agent-probe-\$\{selectedProbe\}-\$\{surface\}/)
   assert.match(agents, /render: \(row, surface\)/)
+})
+
+test('remote disclosure pins survive re-paging while shared sites ignore the top-bar plane', () => {
+  for (const file of ['../src/views/Agents.tsx', '../src/views/Paths.tsx', '../src/components/ProbesPanel.tsx']) {
+    const source = readFileSync(new URL(file, import.meta.url), 'utf8')
+    assert.match(source, /loadedRequestURL/)
+    assert.match(source, /retainMissing:/)
+  }
+
+  const sites = readFileSync(new URL('../src/components/SitesPanel.tsx', import.meta.url), 'utf8')
+  assert.match(sites, /pinnedSiteID && loadedRequestURL !== requestURL/)
+  assert.doesNotMatch(sites, /useNetworkFilter/)
+  assert.doesNotMatch(sites, /params\.set\('network'/)
 })
 
 test('mobile list hides secondary metadata behind a full-width touch target', () => {

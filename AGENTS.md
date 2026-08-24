@@ -107,7 +107,10 @@ identity, status, and primary evidence remain visible, while secondary
 metadata stays behind the full-width disclosure target. Do not restore the
 generic CSS that turns every table cell into a nested mobile card. Row-action
 menus are portalled outside the desktop scroller, and disclosure renderers
-receive their desktop/mobile surface so nested DOM IDs remain unique.
+receive their desktop/mobile surface so nested DOM IDs remain unique. A
+server-paged disclosure may retain a temporarily missing stable key only while
+its exact lookup is pending; a completed empty lookup must clear it. Settings
+Sites is shared vocabulary and does not follow the top-bar network filter.
 
 ## Coding Style & Naming Conventions
 

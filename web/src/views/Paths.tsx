@@ -130,6 +130,7 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
   const win = windowParam as Window
   const [data, setData] = useState<PathEventsResponse | null>(null)
   const [scopeTotal, setScopeTotal] = useState(0)
+  const [loadedRequestURL, setLoadedRequestURL] = useState('')
   const [error, setError] = useState<unknown>(null)
   const [retryKey, setRetryKey] = useState(0)
   const [query, setQuery] = useRouteSearch()
@@ -142,35 +143,36 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
   }
   const pinnedEventID = pinnedEvent.current === expandedEvent ? expandedEvent : null
 
+  const params = new URLSearchParams({
+    window: win,
+    limit: String(ROUTE_PAGE),
+    offset: String(pinnedEventID ? 0 : (page - 1) * ROUTE_PAGE),
+    sort,
+    order,
+  })
+  if (network) params.set('network', network)
+  // Investigation links carry a stable event ID. Querying that ID keeps
+  // the linked row available even when it is not on the default first
+  // page; the store's route search includes exact event identities.
+  if (pinnedEventID) params.set('q', pinnedEventID)
+  else if (queryParam.trim()) params.set('q', queryParam.trim())
+  const requestURL = '/api/v1/path-events?' + params.toString()
+  const scopeParams = new URLSearchParams({ window: win, limit: '1', offset: '0', sort: 'time', order: 'desc' })
+  if (network) scopeParams.set('network', network)
+  const scopeURL = '/api/v1/path-events?' + scopeParams.toString()
+  const needsScopeRequest = Boolean(pinnedEventID || queryParam.trim())
+
   useEffect(() => {
     let cancelled = false
-    const params = new URLSearchParams({
-      window: win,
-      limit: String(ROUTE_PAGE),
-      offset: String(pinnedEventID ? 0 : (page - 1) * ROUTE_PAGE),
-      sort,
-      order,
-    })
-    if (network) params.set('network', network)
-    // Investigation links carry a stable event ID. Querying that ID keeps
-    // the linked row available even when it is not on the default first
-    // page; the store's route search includes exact event identities.
-    if (pinnedEventID) params.set('q', pinnedEventID)
-    else if (queryParam.trim()) params.set('q', queryParam.trim())
-    const requestURL = '/api/v1/path-events?' + params.toString()
-    const scopeParams = new URLSearchParams({ window: win, limit: '1', offset: '0', sort: 'time', order: 'desc' })
-    if (network) scopeParams.set('network', network)
-    const needsScopeRequest = Boolean(pinnedEventID || queryParam.trim())
     const load = () => {
       const inventoryRequest = apiGet<PathEventsResponse>(requestURL)
-      const scopeRequest = needsScopeRequest
-        ? apiGet<PathEventsResponse>('/api/v1/path-events?' + scopeParams.toString())
-        : inventoryRequest
+      const scopeRequest = needsScopeRequest ? apiGet<PathEventsResponse>(scopeURL) : inventoryRequest
       Promise.all([inventoryRequest, scopeRequest])
         .then(([res, scope]) => {
           if (!cancelled) {
             setData(res)
             setScopeTotal(scope.page?.total ?? scope.events.length)
+            setLoadedRequestURL(requestURL)
             setError(null)
           }
         })
@@ -186,7 +188,7 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
       cancelled = true
       clearInterval(id)
     }
-  }, [network, onAuthError, order, page, pinnedEventID, queryParam, retryKey, sort, win])
+  }, [needsScopeRequest, onAuthError, requestURL, retryKey, scopeURL])
 
   const events = data?.events ?? []
   const pageMeta = data?.page ?? { limit: ROUTE_PAGE, offset: 0, total: events.length, has_more: false }
@@ -380,6 +382,7 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
           }
           disclosure={{
             expandedKey: expandedEvent || null,
+            retainMissing: Boolean(pinnedEventID && loadedRequestURL !== requestURL),
             onExpandedKeyChange: (key) => setExpandedEvent(key ?? '', key === null ? 'replace' : 'push'),
             label: (_event, expanded) => (expanded ? 'Hide evidence' : 'Show evidence'),
             render: (event) => <EventDetails e={event} />,

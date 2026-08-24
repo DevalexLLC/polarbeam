@@ -24,6 +24,7 @@ export interface DataTableColumn<Row> {
 
 export interface DataTableDisclosure<Row> {
   expandedKey: string | null
+  retainMissing?: boolean
   onExpandedKeyChange: (key: string | null) => void
   label: (row: Row, expanded: boolean) => string
   render?: (row: Row, surface: 'desktop' | 'mobile') => ReactNode
@@ -44,6 +45,8 @@ function FloatingActionMenu({
   children: ReactNode
 }) {
   const menu = useRef<HTMLDivElement>(null)
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
 
   useLayoutEffect(() => {
     const place = () => {
@@ -63,14 +66,39 @@ function FloatingActionMenu({
       element.style.left = `${left}px`
       element.style.visibility = 'visible'
     }
+    const visible = () => {
+      const anchor = trigger.getBoundingClientRect()
+      const scroller = trigger.closest<HTMLElement>('.data-table-desktop')
+      const top = Math.max(0, scroller?.getBoundingClientRect().top ?? 0)
+      const bottom = Math.min(window.innerHeight, scroller?.getBoundingClientRect().bottom ?? window.innerHeight)
+      return anchor.bottom > top && anchor.top < bottom
+    }
+    const follow = () => {
+      if (visible()) {
+        place()
+        return
+      }
+      onCloseRef.current()
+      trigger.closest<HTMLElement>('.data-table-root')?.focus()
+    }
     place()
     menu.current?.querySelector<HTMLElement>('button, a, input, select, [tabindex]:not([tabindex="-1"])')?.focus()
     window.addEventListener('resize', place)
-    window.addEventListener('scroll', place, true)
+    window.addEventListener('scroll', follow, true)
     return () => {
       window.removeEventListener('resize', place)
-      window.removeEventListener('scroll', place, true)
+      window.removeEventListener('scroll', follow, true)
     }
+  }, [trigger])
+
+  useEffect(() => {
+    const dismiss = (event: PointerEvent) => {
+      const target = event.target as Node | null
+      if (target && (menu.current?.contains(target) || trigger.contains(target))) return
+      onCloseRef.current()
+    }
+    document.addEventListener('pointerdown', dismiss, true)
+    return () => document.removeEventListener('pointerdown', dismiss, true)
   }, [trigger])
 
   return createPortal(
@@ -80,7 +108,7 @@ function FloatingActionMenu({
       className="data-table-actions-menu"
       role="toolbar"
       tabIndex={-1}
-      data-action-key={id}
+      data-action-key={id.slice('data-table-actions-'.length)}
       aria-label={label}
       style={{ top: 0, left: 0, visibility: 'hidden' }}
       onKeyDown={(event) => {
@@ -160,7 +188,7 @@ export default function DataTable<Row>({
   )
 
   useEffect(() => {
-    if (expandedMissing) disclosure?.onExpandedKeyChange(null)
+    if (expandedMissing && !disclosure?.retainMissing) disclosure?.onExpandedKeyChange(null)
     if (actionMissing) actions?.onOpenKeyChange(null)
     if (focusedRow.current !== null && !keys.includes(focusedRow.current)) {
       focusedRow.current = null
@@ -268,7 +296,11 @@ export default function DataTable<Row>({
       aria-label={`${label} data table`}
       tabIndex={-1}
       onFocusCapture={(event) => {
-        focusedRow.current = (event.target as Element).closest<HTMLElement>('[data-row-key]')?.dataset.rowKey ?? null
+        const target = event.target as Element
+        focusedRow.current =
+          target.closest<HTMLElement>('[data-row-key]')?.dataset.rowKey ??
+          target.closest<HTMLElement>('[data-action-key]')?.dataset.actionKey ??
+          null
       }}
     >
       {initialState ?? (

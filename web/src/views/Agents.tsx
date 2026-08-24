@@ -264,6 +264,7 @@ export default function Agents({
   useTimezone() // re-render fmtTime tooltips on UTC/local toggle
   const [data, setData] = useState<AgentsResponse | null>(null)
   const [scopeSummary, setScopeSummary] = useState<AgentInventorySummary | null>(null)
+  const [loadedRequestURL, setLoadedRequestURL] = useState('')
   const [error, setError] = useState<unknown>(null)
   const [retryKey, setRetryKey] = useState(0)
   const [healthParam] = useRouteParam('health', 'all')
@@ -294,32 +295,33 @@ export default function Agents({
   }
   const pinnedAgentID = pinnedAgent.current === expanded ? expanded : null
 
+  const params = new URLSearchParams({
+    limit: String(AGENT_PAGE),
+    offset: String(pinnedAgentID ? 0 : (page - 1) * AGENT_PAGE),
+    sort: sort === 'status' ? 'health' : sort,
+    order,
+  })
+  if (network) params.set('network', network)
+  if (pinnedAgentID) params.set('q', pinnedAgentID)
+  else if (queryParam.trim()) params.set('q', queryParam.trim())
+  if (filter !== 'all') params.set('health', filter === 'healthy' ? 'clear' : filter)
+  const requestURL = '/api/v1/agents?' + params.toString()
+  const scopeParams = new URLSearchParams({ limit: '1', offset: '0', sort: 'health', order: 'asc' })
+  if (network) scopeParams.set('network', network)
+  const scopeURL = '/api/v1/agents?' + scopeParams.toString()
+  const needsScopeRequest = Boolean(pinnedAgentID || queryParam.trim() || filter !== 'all')
+
   useEffect(() => {
     let cancelled = false
-    const params = new URLSearchParams({
-      limit: String(AGENT_PAGE),
-      offset: String(pinnedAgentID ? 0 : (page - 1) * AGENT_PAGE),
-      sort: sort === 'status' ? 'health' : sort,
-      order,
-    })
-    if (network) params.set('network', network)
-    if (pinnedAgentID) params.set('q', pinnedAgentID)
-    else if (queryParam.trim()) params.set('q', queryParam.trim())
-    if (filter !== 'all') params.set('health', filter === 'healthy' ? 'clear' : filter)
-    const requestURL = '/api/v1/agents?' + params.toString()
-    const scopeParams = new URLSearchParams({ limit: '1', offset: '0', sort: 'health', order: 'asc' })
-    if (network) scopeParams.set('network', network)
-    const needsScopeRequest = Boolean(pinnedAgentID || queryParam.trim() || filter !== 'all')
     const load = () => {
       const inventoryRequest = apiGet<AgentsResponse>(requestURL)
-      const scopeRequest = needsScopeRequest
-        ? apiGet<AgentsResponse>('/api/v1/agents?' + scopeParams.toString())
-        : inventoryRequest
+      const scopeRequest = needsScopeRequest ? apiGet<AgentsResponse>(scopeURL) : inventoryRequest
       Promise.all([inventoryRequest, scopeRequest])
         .then(([res, scope]) => {
           if (!cancelled) {
             setData(res)
             setScopeSummary(scope.summary ?? null)
+            setLoadedRequestURL(requestURL)
             setError(null)
           }
         })
@@ -335,7 +337,7 @@ export default function Agents({
       cancelled = true
       clearInterval(id)
     }
-  }, [filter, network, onAuthError, order, page, pinnedAgentID, queryParam, retryKey, sort])
+  }, [needsScopeRequest, onAuthError, requestURL, retryKey, scopeURL])
 
   useEffect(() => {
     if (!expanded) {
@@ -693,6 +695,7 @@ export default function Agents({
           }
           disclosure={{
             expandedKey: expanded,
+            retainMissing: Boolean(pinnedAgentID && loadedRequestURL !== requestURL),
             onExpandedKeyChange: (key) =>
               updateRouteParams({ agent: key, probe: null }, key === null ? 'replace' : 'push'),
             label: (_row, open) => (open ? 'Hide probe evidence' : 'Show probe evidence'),

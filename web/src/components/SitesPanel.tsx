@@ -3,7 +3,6 @@ import { apiDelete, apiGet, apiPost, apiPut } from '../api'
 import { updateRouteParams } from '../routeState'
 import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
 import { fmtAgo } from '../format'
-import { useNetworkFilter } from '../networkFilter'
 import type { SitesConfigResponse, SiteConfig } from '../types'
 import ConfirmButton from './ConfirmButton'
 import DataTable, { type DataTableColumn } from './DataTable'
@@ -69,6 +68,7 @@ export default function SitesPanel({
   onAuthError: (err: unknown) => void
 }) {
   const [data, setData] = useState<SitesConfigResponse | null>(null)
+  const [loadedRequestURL, setLoadedRequestURL] = useState('')
   const [error, setError] = useState<unknown>(null)
   const [retryKey, setRetryKey] = useState(0)
   const [draft, setDraft] = useState<Draft | null>(null)
@@ -83,7 +83,6 @@ export default function SitesPanel({
   const [page, setPage] = useRouteNumber('page', 1)
   const [expandedRow, setExpandedRow] = useState<string | null>(null)
   const [actionRow, setActionRow] = useState<string | null>(null)
-  const { network } = useNetworkFilter()
   const scrolledSite = useRef<string | null>(null)
   const pinnedSite = useRef<string | null>(selectedSite)
 
@@ -101,7 +100,6 @@ export default function SitesPanel({
   })
   if (pinnedSiteID) params.set('q', pinnedSiteID)
   else if (queryParam.trim()) params.set('q', queryParam.trim())
-  if (network) params.set('network', network)
   const requestURL = '/api/v1/config/sites?' + params.toString()
 
   useEffect(() => {
@@ -111,6 +109,7 @@ export default function SitesPanel({
         .then((res) => {
           if (!cancelled) {
             setData(res)
+            setLoadedRequestURL(requestURL)
             setError(null)
           }
         })
@@ -129,7 +128,13 @@ export default function SitesPanel({
     }
   }, [onAuthError, requestURL, retryKey])
 
-  const reload = () => apiGet<SitesConfigResponse>(requestURL).then(setData).catch(onAuthError)
+  const reload = () =>
+    apiGet<SitesConfigResponse>(requestURL)
+      .then((res) => {
+        setData(res)
+        setLoadedRequestURL(requestURL)
+      })
+      .catch(onAuthError)
 
   const save = async () => {
     if (!draft) return
@@ -202,6 +207,7 @@ export default function SitesPanel({
     if (!data) return
     const selected = data.sites.find((site) => site.id === selectedSite)
     if (!selected) {
+      if (pinnedSiteID && loadedRequestURL !== requestURL) return
       onSelectedSite('', 'replace')
       return
     }
@@ -224,7 +230,7 @@ export default function SitesPanel({
       row.scrollIntoView({ block: 'nearest' })
       scrolledSite.current = selectedSite
     }
-  }, [data, draft?.name, editing, onSelectedSite, selectedSite])
+  }, [data, draft?.name, editing, loadedRequestURL, onSelectedSite, pinnedSiteID, requestURL, selectedSite])
 
   const pageMeta = data?.page ?? { limit: SITE_PAGE, offset: 0, total: data?.sites.length ?? 0, has_more: false }
   const pageCount = Math.max(1, Math.ceil(pageMeta.total / SITE_PAGE))

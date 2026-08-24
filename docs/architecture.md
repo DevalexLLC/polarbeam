@@ -174,8 +174,9 @@ or mutation responses, with inaccessible rows indistinguishable from missing
 ones. Site reference counts, target probe counts, and all probe rows are scoped
 before search or counting. An explicit Settings network still includes visible
 operator-published global targets so that plane can configure probes against
-them; the operational target inventory instead requires active assignment on
-the selected plane.
+them; Settings Sites ignores that top-bar filter because sites are shared
+vocabulary and an unreferenced new site must remain visible. The operational
+target inventory instead requires active assignment on the selected plane.
 
 The dashboard's Agents, Targets, Routes, and Settings Sites/Targets/Probes
 inventories render through the controlled, dependency-free `DataTable`.

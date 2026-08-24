@@ -204,6 +204,7 @@ export default function ProbesPanel({
   onAuthError: (err: unknown) => void
 }) {
   const [data, setData] = useState<ProbesConfigResponse | null>(null)
+  const [loadedRequestURL, setLoadedRequestURL] = useState('')
   const [registry, setRegistry] = useState<ProbeTypesResponse | null>(null)
   const [registryError, setRegistryError] = useState<unknown>(null)
   const [meshes, setMeshes] = useState<string[]>([])
@@ -287,6 +288,7 @@ export default function ProbesPanel({
         .then((probes) => {
           if (cancelled) return
           setData(probes)
+          setLoadedRequestURL(requestURL)
           setError(null)
         })
         .catch((err) => {
@@ -336,7 +338,13 @@ export default function ProbesPanel({
     }
   }, [onAuthError, retryKey])
 
-  const reload = () => apiGet<ProbesConfigResponse>(requestURL).then(setData).catch(onAuthError)
+  const reload = () =>
+    apiGet<ProbesConfigResponse>(requestURL)
+      .then((probes) => {
+        setData(probes)
+        setLoadedRequestURL(requestURL)
+      })
+      .catch(onAuthError)
 
   const create = async () => {
     if (!draft) return
@@ -461,6 +469,7 @@ export default function ProbesPanel({
     if (!data) return
     const selected = data.probes.find((probe) => probe.id === selectedProbe)
     if (!selected) {
+      if (pinnedProbeID && loadedRequestURL !== requestURL) return
       onSelectedProbe('', 'replace')
       return
     }
@@ -476,7 +485,7 @@ export default function ProbesPanel({
       row.scrollIntoView({ block: 'nearest' })
       scrolledProbe.current = selectedProbe
     }
-  }, [data, editID, onSelectedProbe, selectedProbe])
+  }, [data, editID, loadedRequestURL, onSelectedProbe, pinnedProbeID, requestURL, selectedProbe])
 
   const pageMeta = data?.page ?? { limit: PROBE_PAGE, offset: 0, total: probes.length, has_more: false }
   const pageCount = Math.max(1, Math.ceil(pageMeta.total / PROBE_PAGE))
@@ -840,6 +849,7 @@ export default function ProbesPanel({
             canWrite
               ? {
                   expandedKey: selectedProbe || null,
+                  retainMissing: Boolean(pinnedProbeID && loadedRequestURL !== requestURL),
                   onExpandedKeyChange: selectProbe,
                   label: (_probe, expanded) => (expanded ? 'Close editor' : 'Edit probe'),
                   render: editPanel,
