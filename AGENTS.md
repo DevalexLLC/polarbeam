@@ -49,8 +49,10 @@ protobuf field numbers and regenerate committed artifacts after source changes.
 Write Go tests as `*_test.go` using `TestXxx` names and table-driven cases where
 appropriate. Run focused tests with
 `go test -mod=vendor ./internal/server/httpapi -run TestName`, then run
-`make test` before submission. No numeric coverage threshold exists; cover new
-behavior, failure paths, and regressions. UI changes must pass `make web`.
+`make test` before submission. Dependency-free SPA unit and contract tests run
+with `cd web && pnpm test` and are included in `make web`. No numeric coverage
+threshold exists; cover new behavior, failure paths, and regressions. UI
+changes must pass `make web`.
 
 ## Commit & Pull Request Guidelines
 

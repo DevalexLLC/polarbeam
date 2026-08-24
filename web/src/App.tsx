@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError, apiGet, apiPost, setCsrfToken } from './api'
 import { capsOf, roleLabel } from './caps'
+import { PRIMARY_NAVIGATION, SETTINGS_NAVIGATION, navigationItemIsCurrent } from './navigation'
 import { reconcileNetworkFilter } from './networkFilter'
 import { canOpenSettings, resolveTab } from './settingsTabs'
 import type { AuthProviders, LoginResponse, NetworksConfigResponse, UIBanner, User } from './types'
 import BannerFrame from './components/BannerFrame'
 import ChangePasswordDialog from './components/ChangePasswordDialog'
 import LogoMark from './components/LogoMark'
+import MobileNavigation from './components/MobileNavigation'
 import ThemeToggle from './components/ThemeToggle'
 import TimezoneToggle from './components/TimezoneToggle'
 import TopbarFilter from './components/TopbarFilter'
@@ -76,15 +78,15 @@ function parseHash(hash: string): Route {
   return { view: 'overview' }
 }
 
-const NAV: Array<{ href: string; label: string; isActive: (r: Route) => boolean }> = [
-  // Pair detail is a drill-down reached from other views, so it keeps
-  // Overview lit; target detail lights Targets, its browseable index.
-  { href: '#/', label: 'Overview', isActive: (r) => r.view === 'overview' || r.view === 'pair' },
-  { href: '#/incidents', label: 'Incidents', isActive: (r) => r.view === 'incidents' },
-  { href: '#/routes', label: 'Routes', isActive: (r) => r.view === 'routes' },
-  { href: '#/targets', label: 'Targets', isActive: (r) => r.view === 'targets' || r.view === 'target' },
-  { href: '#/agents', label: 'Agents', isActive: (r) => r.view === 'agents' },
-]
+// Focus follows page navigation, not in-page state. Agent disclosure is
+// encoded in the hash for shareability, but expanding a row must leave focus
+// on that row; detail identities and Settings subsections are distinct pages.
+function routePageKey(route: Route): string {
+  if (route.view === 'pair') return `${route.view}/${route.a}/${route.b}`
+  if (route.view === 'target') return `${route.view}/${route.id}`
+  if (route.view === 'settings') return `${route.view}/${route.tab}`
+  return route.view
+}
 
 export default function App() {
   const [booted, setBooted] = useState(false)
@@ -98,12 +100,68 @@ export default function App() {
   // pickers must not read "not loaded yet" as "single-network install".
   const [networks, setNetworks] = useState<string[] | null>(null)
   const [route, setRoute] = useState<Route>(() => parseHash(location.hash))
+  const routeKey = JSON.stringify(route)
+  const pageKey = routePageKey(route)
+  const initialRouteRef = useRef(true)
 
   useEffect(() => {
     const onHash = () => setRoute(parseHash(location.hash))
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
+
+  // Navigation moves keyboard focus to the new page's heading. Views that
+  // wait for their first response are observed until their heading mounts;
+  // the observer is discarded on the next route change.
+  useEffect(() => {
+    if (initialRouteRef.current) {
+      initialRouteRef.current = false
+      return
+    }
+    const main = document.getElementById('main-content')
+    if (!main) return
+    let observer: MutationObserver | null = null
+    let timeout: number | null = null
+    const stopWaiting = () => {
+      observer?.disconnect()
+      observer = null
+      if (timeout !== null) window.clearTimeout(timeout)
+      timeout = null
+      document.removeEventListener('focusin', stopWaiting, true)
+      document.removeEventListener('pointerdown', stopWaiting, true)
+      document.removeEventListener('keydown', stopWaiting, true)
+    }
+    const focusHeading = () => {
+      const heading = main.querySelector<HTMLElement>('h1, h2')
+      if (!heading) return false
+      stopWaiting()
+      const previousTabIndex = heading.getAttribute('tabindex')
+      heading.tabIndex = -1
+      heading.focus()
+      heading.addEventListener(
+        'blur',
+        () => {
+          if (previousTabIndex === null) heading.removeAttribute('tabindex')
+          else heading.setAttribute('tabindex', previousTabIndex)
+        },
+        { once: true },
+      )
+      return true
+    }
+    const frame = requestAnimationFrame(() => {
+      if (focusHeading()) return
+      observer = new MutationObserver(focusHeading)
+      observer.observe(main, { childList: true, subtree: true })
+      document.addEventListener('focusin', stopWaiting, true)
+      document.addEventListener('pointerdown', stopWaiting, true)
+      document.addEventListener('keydown', stopWaiting, true)
+      timeout = window.setTimeout(stopWaiting, 5_000)
+    })
+    return () => {
+      cancelAnimationFrame(frame)
+      stopWaiting()
+    }
+  }, [pageKey])
 
   // Restore an existing session (and its CSRF token) on boot.
   useEffect(() => {
@@ -200,6 +258,24 @@ export default function App() {
   // tree at that moment anyway. A store would add a global that can drift
   // from `user`, and would make logout ordering a correctness bug.
   const caps = useMemo(() => (user ? capsOf(user) : null), [user])
+  const primaryNavigation = PRIMARY_NAVIGATION.map((item) => ({
+    ...item,
+    current: navigationItemIsCurrent(item.href, route.view),
+    sameRoute: item.href === (location.hash || '#/') || JSON.stringify(parseHash(item.href)) === routeKey,
+  }))
+  const mobileNavigation =
+    caps !== null && canOpenSettings(caps)
+      ? [
+          ...primaryNavigation,
+          {
+            ...SETTINGS_NAVIGATION,
+            current: navigationItemIsCurrent(SETTINGS_NAVIGATION.href, route.view),
+            sameRoute:
+              SETTINGS_NAVIGATION.href === location.hash ||
+              JSON.stringify(parseHash(SETTINGS_NAVIGATION.href)) === routeKey,
+          },
+        ]
+      : primaryNavigation
 
   // A hash naming a tab this role cannot open is rewritten to the one it
   // landed on, so the URL the user copies is honest. replaceState does not
@@ -262,15 +338,16 @@ export default function App() {
         <header className="topbar">
           <a className="brand" href="#/">
             <LogoMark className="logo-mark logo-mark-header" />
-            PolarBEAM
+            <span className="brand-name">PolarBEAM</span>
           </a>
+          <MobileNavigation items={mobileNavigation} routeKey={routeKey} />
           <nav className="topnav" aria-label="Primary navigation">
-            {NAV.map((item) => (
+            {primaryNavigation.map((item) => (
               <a
                 key={item.href}
                 href={item.href}
-                className={item.isActive(route) ? 'active' : ''}
-                aria-current={item.isActive(route) ? 'page' : undefined}
+                className={item.current ? 'active' : ''}
+                aria-current={item.current ? 'page' : undefined}
               >
                 {item.label}
               </a>

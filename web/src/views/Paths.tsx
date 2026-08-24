@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { apiGet } from '../api'
+import DisclosureChevron from '../components/DisclosureChevron'
 import PathGraph from '../components/PathGraph'
 import { fmtAgo, fmtTime } from '../format'
 import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
@@ -114,7 +115,8 @@ function EventRow({ e }: { e: PathEvent }) {
           aria-controls={detailsID}
           onClick={() => setExpanded(!expanded)}
         >
-          {expanded ? 'Hide details' : 'View details'} <span aria-hidden="true">{expanded ? '−' : '+'}</span>
+          {expanded ? 'Hide details' : 'View details'}
+          <DisclosureChevron expanded={expanded} />
         </button>
       </div>
       {expanded && (

@@ -7,6 +7,7 @@ import IncidentTimeline, {
   overlapsBucket,
   timelineGrid,
 } from '../components/IncidentTimeline'
+import DisclosureChevron from '../components/DisclosureChevron'
 import { fmtAgo, fmtTime } from '../format'
 import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
 import { useTimezone } from '../timezone'
@@ -126,7 +127,8 @@ function IncidentGroupRow({ group }: { group: IncidentGroup }) {
           <small>{group.open ? `active for ${fmtDuration(firstOpened, null)}` : 'resolved'}</small>
         </span>
         <span className="incident-toggle">
-          {expanded ? 'Hide details' : 'View details'} <span aria-hidden="true">{expanded ? '−' : '+'}</span>
+          {expanded ? 'Hide details' : 'View details'}
+          <DisclosureChevron expanded={expanded} />
         </span>
       </button>
       {expanded && (

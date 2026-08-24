@@ -100,7 +100,7 @@ web:
 	# resolvers disagree, which would make the dashboard and the outage
 	# detector grade the same measurement differently.
 	node web/tools/check-threshold-merge.ts
-	cd web && pnpm install --frozen-lockfile && pnpm run lint && pnpm run fmt:check && pnpm run build \
+	cd web && pnpm install --frozen-lockfile && pnpm run test && pnpm run lint && pnpm run fmt:check && pnpm run build \
 		&& node tools/gen-spa-licenses.mjs
 	$(MAKE) notices
 
