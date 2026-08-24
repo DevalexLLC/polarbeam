@@ -59,16 +59,18 @@ func (a *api) handleOutages(w http.ResponseWriter, r *http.Request) {
 }
 
 type pathEventJSON struct {
-	ID          string          `json:"id"`
-	Time        time.Time       `json:"time"`
-	AgentID     string          `json:"agent_id,omitempty"`
-	ProbeID     string          `json:"probe_id,omitempty"`
-	Agent       string          `json:"agent"`
-	Network     string          `json:"network"` // "" once the agent row is deleted
-	SrcSite     string          `json:"src_site"`
-	DstSite     *string         `json:"dst_site"`
-	Target      *string         `json:"target"`
-	TargetID    *string         `json:"target_id"` // null once the target row is deleted
+	ID      string    `json:"id"`
+	Time    time.Time `json:"time"`
+	AgentID string    `json:"agent_id,omitempty"`
+	ProbeID string    `json:"probe_id,omitempty"`
+	Agent   string    `json:"agent"`
+	Network string    `json:"network"` // "" once the agent row is deleted
+	SrcSite string    `json:"src_site"`
+	DstSite *string   `json:"dst_site"`
+	Target  *string   `json:"target"`
+	// Query mode retains the event's stable target ID after deletion;
+	// legacy mode returns null because it selects the joined display row.
+	TargetID    *string         `json:"target_id"`
 	OldPathHash string          `json:"old_path_hash"`
 	NewPathHash string          `json:"new_path_hash"`
 	OldHops     json.RawMessage `json:"old_hops"`

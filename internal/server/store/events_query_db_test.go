@@ -60,9 +60,11 @@ func TestQueryPathEventsFilteringSortingAndPaging(t *testing.T) {
 	// Reordered/duplicated addresses and RTT changes do not change a TTL.
 	insertPathQueryEvent(t, ctx, s, ids[0], base, f.aDef, probeIDs[0], f.tBDef,
 		`[{"ttl":1,"addrs":["10.0.0.2","10.0.0.1","10.0.0.1"],"rtt_us":[1]},
-		  {"ttl":2,"addrs":[],"rtt_us":[]}]`,
+		  {"ttl":2,"addrs":[],"rtt_us":[]},
+		  {"ttl":3000000000,"addrs":["10.0.0.3"],"rtt_us":[1]}]`,
 		`[{"ttl":1,"addrs":["10.0.0.1","10.0.0.2"],"rtt_us":[999]},
-		  {"ttl":2,"addrs":[],"rtt_us":[]}]`)
+		  {"ttl":2,"addrs":[],"rtt_us":[]},
+		  {"ttl":3000000000,"addrs":["10.0.0.3"],"rtt_us":[999]}]`)
 	// One removed silent TTL plus one added silent TTL = two changes.
 	insertPathQueryEvent(t, ctx, s, ids[1], base, f.aDef, probeIDs[1], serviceID,
 		`[{"ttl":1,"addrs":["10.0.0.1"]},{"ttl":2,"addrs":[]}]`,
@@ -228,10 +230,15 @@ func TestQueryPathEventsSafetyCapAndDefaultIndex(t *testing.T) {
 		t.Errorf("capped final page = len %d total %d truncated %v", len(events), total, truncated)
 	}
 
-	if _, err := s.Pool().Exec(ctx, `SET enable_seqscan = off`); err != nil {
+	conn, err := s.Pool().Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire plan connection: %v", err)
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(ctx, `SET enable_seqscan = off`); err != nil {
 		t.Fatalf("disable seqscan: %v", err)
 	}
-	rows, err := s.Pool().Query(ctx, `
+	rows, err := conn.Query(ctx, `
 		EXPLAIN SELECT pe.id
 		  FROM path_events pe
 		 WHERE pe.time > now() - interval '24 hours'
