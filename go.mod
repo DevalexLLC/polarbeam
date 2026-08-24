@@ -3,7 +3,7 @@ module github.com/devalexllc/polarbeam
 go 1.27.0
 
 require (
-	codeberg.org/miekg/dns v0.6.90
+	codeberg.org/miekg/dns v0.6.101
 	github.com/coreos/go-oidc/v3 v3.20.0
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/google/uuid v1.6.0
