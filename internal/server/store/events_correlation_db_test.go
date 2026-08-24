@@ -62,7 +62,8 @@ func TestListOutagesStableIdentitiesAndRelatedRoutes(t *testing.T) {
 	liveRoute, wrongRoute := uuid.New(), uuid.New()
 	offlineRoute, orphanRoute, legacyRoute := uuid.New(), uuid.New(), uuid.New()
 	insertPathQueryEvent(t, ctx, s, liveRoute, base.Add(time.Minute), f.aDef, liveProbe, f.tBDef, `[]`, `[]`)
-	// Identical live labels and target, but the wrong probe ID must not match.
+	// The traceroute probe is a different config from the failing probe; exact
+	// agent+target identity must still correlate it.
 	insertPathQueryEvent(t, ctx, s, wrongRoute, base.Add(30*time.Second), f.aDef, wrongProbe, f.tBDef, `[]`, `[]`)
 	insertPathQueryEvent(t, ctx, s, offlineRoute, base.Add(2*time.Hour+time.Minute), f.aMgmt, offlineProbe, f.tBMgmt, `[]`, `[]`)
 	// Neither resource exists, so only the event tables' stable IDs can join
@@ -72,7 +73,7 @@ func TestListOutagesStableIdentitiesAndRelatedRoutes(t *testing.T) {
 	// and external-target labels.
 	insertPathQueryEvent(t, ctx, s, legacyRoute, base.Add(6*time.Hour+time.Minute), f.aDef, legacyRouteProbe, serviceTarget, `[]`, `[]`)
 
-	outages, err := s.ListOutages(ctx, 24*time.Hour, nil)
+	outages, err := s.ListOutages(ctx, 24*time.Hour, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +88,7 @@ func TestListOutagesStableIdentitiesAndRelatedRoutes(t *testing.T) {
 	live := byID[liveOutage]
 	if live.AgentID != f.aDef || live.ProbeID == nil || *live.ProbeID != liveProbe ||
 		live.TargetID == nil || *live.TargetID != f.tBDef ||
-		!slices.Equal(pathEventIDs(live.RelatedRoutes), []uuid.UUID{liveRoute}) {
+		!slices.Equal(pathEventIDs(live.RelatedRoutes), []uuid.UUID{wrongRoute, liveRoute}) {
 		t.Errorf("live probe outage identities/routes = %+v", live)
 	}
 	offline := byID[offlineOutage]
@@ -105,5 +106,14 @@ func TestListOutagesStableIdentitiesAndRelatedRoutes(t *testing.T) {
 	legacy := byID[legacyOutage]
 	if legacy.ProbeID != nil || !slices.Contains(pathEventIDs(legacy.RelatedRoutes), legacyRoute) {
 		t.Errorf("legacy label fallback routes = %+v", legacy.RelatedRoutes)
+	}
+	withoutRoutes, err := s.ListOutages(ctx, 24*time.Hour, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, outage := range withoutRoutes {
+		if len(outage.RelatedRoutes) != 0 {
+			t.Errorf("opt-out outage %s unexpectedly has routes", outage.ID)
+		}
 	}
 }

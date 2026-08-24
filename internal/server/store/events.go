@@ -50,7 +50,7 @@ const incidentRouteWindow = 15 * time.Minute
 // closed branch's LIMIT must count only in-scope events, or a noisy foreign
 // tenant's 500 newest closed outages would crowd a scoped tenant's own
 // history out of the response entirely.
-func (s *Store) ListOutages(ctx context.Context, window time.Duration, networks []uuid.UUID) ([]OutageInfo, error) {
+func (s *Store) ListOutages(ctx context.Context, window time.Duration, networks []uuid.UUID, includeRoutes bool) ([]OutageInfo, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT oe.id, oe.kind, oe.agent_id, oe.probe_id, oe.target_id,
 			COALESCE(a.hostname, ''), COALESCE(n.name, ''),
@@ -97,7 +97,7 @@ func (s *Store) ListOutages(ctx context.Context, window time.Duration, networks 
 		return nil, err
 	}
 	rows.Close()
-	if len(out) == 0 {
+	if len(out) == 0 || !includeRoutes {
 		return out, nil
 	}
 	candidates, err := s.listIncidentRouteCandidates(ctx, window, networks)
@@ -196,15 +196,22 @@ func incidentRouteMatches(o OutageInfo, e PathEventInfo) bool {
 		return sameIncidentLabel(o.AgentHostname, e.AgentHostname) || sameIncidentLabel(o.SrcSite, e.SrcSite)
 	}
 
-	probeExact := usableUUIDPtr(o.ProbeID) && usableUUID(e.ProbeID)
-	if probeExact && *o.ProbeID != e.ProbeID {
-		return false
-	}
 	targetExact := usableUUIDPtr(o.TargetID) && usableUUIDPtr(e.TargetID)
 	if targetExact && *o.TargetID != *e.TargetID {
 		return false
 	}
-	if agentExact && probeExact && targetExact {
+	// A failure probe and a traceroute probe are different configurations,
+	// so their probe IDs normally differ. Exact agent+target identity is the
+	// cross-probe series key; probe ID becomes decisive only for legacy rows
+	// whose target identity is unavailable.
+	if agentExact && targetExact {
+		return true
+	}
+	probeExact := usableUUIDPtr(o.ProbeID) && usableUUID(e.ProbeID)
+	if probeExact && *o.ProbeID != e.ProbeID {
+		return false
+	}
+	if agentExact && probeExact {
 		return true
 	}
 

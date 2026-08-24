@@ -57,7 +57,17 @@ func (a *api) handleOutages(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "unknown window (want 24h|7d|30d|90d|365d)")
 		return
 	}
-	outages, err := a.db.ListOutages(r.Context(), spec.Window, scopeIDs(r.Context()))
+	includeRoutes := false
+	switch value := r.URL.Query().Get("include_routes"); value {
+	case "":
+	case "true":
+		includeRoutes = true
+	case "false":
+	default:
+		writeError(w, http.StatusBadRequest, "include_routes must be true or false")
+		return
+	}
+	outages, err := a.db.ListOutages(r.Context(), spec.Window, scopeIDs(r.Context()), includeRoutes)
 	if err != nil {
 		internalError(w, "list outages", err)
 		return

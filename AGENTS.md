@@ -67,12 +67,14 @@ and `truncated` signal aligned; `window`-only requests retain the legacy JSON
 shape and newest-500 behavior.
 
 Outage rows retain their stored `agent_id`, `probe_id`, and `target_id` even
-after display joins disappear. Each row correlates at most three deduplicated
-route events from the Routes view's same network-scoped newest-500 window:
-exact identities take precedence, label fallback is legacy-only, closed rows
-consider opening and closing ±15-minute windows, and open rows consider only
-opening. Keep incident resource links availability-gated and route links
-canonical with their network, window, and selected event.
+after display joins disappear. `include_routes=true` opts into at most three
+deduplicated route events from the Routes view's same network-scoped newest-500
+window; Overview polling must leave it off. Exact agent+target IDs correlate
+across the distinct failing and traceroute probe configs, with probe IDs used
+when a legacy target ID is absent and labels only when stable IDs are missing.
+Closed rows consider opening and closing ±15-minute windows; open rows consider
+only opening. Keep incident links availability-gated and canonical with their
+snapshot network, window, and selected event.
 
 Operational agent and target inventories derive health/status, scoped counts,
 summaries, search, ordering, and pagination in SQL. Keep `/api/v1/agents`

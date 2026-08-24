@@ -264,11 +264,12 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
   // the 30s poll, never on a re-render (hover, expand, timezone toggle).
   const [fetchedAt, setFetchedAt] = useState(0)
   const selectedBucket = selectedSlice || null
+  const snapshotWin = data && (WINDOWS as readonly string[]).includes(data.window) ? (data.window as Window) : win
 
   useEffect(() => {
     let cancelled = false
     const load = () =>
-      apiGet<OutagesResponse>(`/api/v1/outages?window=${win}`)
+      apiGet<OutagesResponse>(`/api/v1/outages?window=${win}&include_routes=true`)
         .then((res) => {
           if (!cancelled) {
             setData(res)
@@ -315,12 +316,11 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
   // spread across a chart claiming a year with everything else zero.
   const timeline = useMemo(() => {
     if (!fetchedAt || !data) return null
-    const dataWin = (WINDOWS as readonly string[]).includes(data.window) ? (data.window as Window) : win
-    const grid = timelineGrid(dataWin, fetchedAt)
+    const grid = timelineGrid(snapshotWin, fetchedAt)
     const bucket =
       selectedBucket != null && selectedBucket >= grid.startMs && selectedBucket < grid.endMs ? selectedBucket : null
-    return { grid, bucket, win: dataWin }
-  }, [data, win, fetchedAt, selectedBucket])
+    return { grid, bucket, win: snapshotWin }
+  }, [data, snapshotWin, fetchedAt, selectedBucket])
   const bucket = timeline?.bucket ?? null
   const groups = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -536,7 +536,7 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
             <IncidentGroupRow
               key={group.key}
               group={group}
-              win={win}
+              win={snapshotWin}
               expanded={expandedIncident === group.id}
               onToggle={() => setExpandedIncident(expandedIncident === group.id ? '' : group.id)}
             />

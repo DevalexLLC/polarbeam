@@ -37,14 +37,14 @@ func TestCorrelateIncidentRoutes(t *testing.T) {
 	overlap := event(uuid.New(), opened.Add(10*time.Minute))
 	farOpen := event(uuid.New(), opened.Add(-14*time.Minute))
 	outOfWindow := event(uuid.New(), opened.Add(-16*time.Minute))
-	mismatch := event(uuid.New(), opened.Add(time.Minute))
-	mismatch.ProbeID = uuid.New()
+	differentProbe := event(uuid.New(), opened.Add(time.Minute))
+	differentProbe.ProbeID = uuid.New()
 
 	outages := []OutageInfo{base}
 	correlateIncidentRoutes(outages, []PathEventInfo{
-		farOpen, overlap, mismatch, nearestClose, nearestOpen, nearestClose, outOfWindow,
+		farOpen, overlap, differentProbe, nearestClose, nearestOpen, nearestClose, outOfWindow,
 	})
-	if got, want := routeIDs(outages[0].RelatedRoutes), []uuid.UUID{nearestClose.ID, nearestOpen.ID, overlap.ID}; !slices.Equal(got, want) {
+	if got, want := routeIDs(outages[0].RelatedRoutes), []uuid.UUID{nearestClose.ID, differentProbe.ID, nearestOpen.ID}; !slices.Equal(got, want) {
 		t.Errorf("closed incident routes = %v, want nearest deduplicated %v", got, want)
 	}
 
@@ -67,8 +67,14 @@ func TestCorrelateIncidentRoutes(t *testing.T) {
 		t.Errorf("legacy label fallback = %v, want %s", got, legacyRoute.ID)
 	}
 
-	if incidentRouteMatches(base, mismatch) {
-		t.Error("usable mismatched probe IDs fell back to identical labels")
+	if !incidentRouteMatches(base, differentProbe) {
+		t.Error("different failure/traceroute probe IDs hid an exact agent+target route")
+	}
+	wrongTarget := differentProbe
+	wrongTargetID := uuid.New()
+	wrongTarget.TargetID = &wrongTargetID
+	if incidentRouteMatches(base, wrongTarget) {
+		t.Error("usable mismatched target IDs fell back to identical labels")
 	}
 
 	unrelated := legacyRoute
