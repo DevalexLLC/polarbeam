@@ -9,10 +9,29 @@
 #   cannot run `make web`, so web/dist/ and web/THIRD-PARTY-LICENSES go stale
 #   and the web-lint attribution check fails until a maintainer checks out
 #   the PR and runs `make web`. That is the intended fail-loud behavior, not
-#   a bug. Note: Dependabot PRs are exempt from the pnpm minimumReleaseAge
-#   policy's spirit only in that Dependabot proposes fresh versions — the
-#   install in CI still enforces the 14-day floor and will fail on too-young
-#   versions.
+#   a bug.
+#
+#   The cooldown exists because Dependabot only ever proposes `latest`, and
+#   web/pnpm-workspace.yaml sets minimumReleaseAgeStrict: true — so a
+#   `latest` inside the 14-day floor is not skipped, it hard-fails
+#   resolution (ERR_PNPM_STRICT_MIN_RELEASE_AGE_REQUIRES_SAVE on the retry,
+#   because Dependabot's fallback passes --no-save). The whole npm job then
+#   ends with no PR and no failing check — invisible outside the Dependabot
+#   Updates run list. Observed 2026-08-24: oxfmt, oxlint, vite, and
+#   @vitejs/plugin-react all failed this way, every candidate 3-6 days old.
+#   Packages that release faster than the floor (oxfmt and oxlint ship
+#   roughly weekly) would otherwise never be bumpable at all.
+#
+#   15 days, not 14, deliberately: Dependabot's cooldown is day-granular
+#   while pnpm's floor is 20160 MINUTES, so a version Dependabot deems
+#   eligible at exactly 14 days can still be minutes short for pnpm. The
+#   extra day costs one day of latency and removes the boundary race.
+#
+#   Residual gap, accepted: cooldown covers version updates ONLY — security
+#   updates bypass it by design, so a security bump can still propose a
+#   too-young version and hard-fail the same way. Strict mode is the reason,
+#   and keeping it is the deliberate call; a security advisory on a young
+#   web dep needs a maintainer to bump it by hand.
 #
 # github-actions — keeps the SHA pins fresh (Dependabot updates the pinned
 #   hash and the trailing version comment together).
@@ -26,6 +45,10 @@ updates:
     directory: "/web"
     schedule:
       interval: weekly
+    # Match web/pnpm-workspace.yaml's minimumReleaseAge (14d) plus a day of
+    # margin; see the npm caveat above.
+    cooldown:
+      default-days: 15
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
