@@ -64,10 +64,20 @@ export default function Chart({
         setAnnouncement('')
       })
     }
+    const onDoubleClick = () => {
+      if (!selectedRef.current) return
+      selectedRef.current = null
+      setSelectedRange(null)
+      setMode('live')
+      setAnnouncement('Returned to live data.')
+      plot.setData(dataRef.current)
+    }
     host.addEventListener('mousedown', onMouseDown)
+    host.addEventListener('dblclick', onDoubleClick)
     window.addEventListener('mouseup', onMouseUp)
     return () => {
       host.removeEventListener('mousedown', onMouseDown)
+      host.removeEventListener('dblclick', onDoubleClick)
       window.removeEventListener('mouseup', onMouseUp)
       ro.disconnect()
       plot.destroy()
@@ -89,6 +99,12 @@ export default function Chart({
     }
   }, [data])
 
+  useEffect(() => {
+    if (!announcement) return
+    const timer = window.setTimeout(() => setAnnouncement(''), 4_000)
+    return () => window.clearTimeout(timer)
+  }, [announcement])
+
   const returnLive = () => {
     selectedRef.current = null
     setSelectedRange(null)
@@ -109,11 +125,9 @@ export default function Chart({
               Return live
             </button>
           )}
-          {announcement && (
-            <span className="hint" role="status" aria-live="polite">
-              {announcement}
-            </span>
-          )}
+          <span className="hint" role="status" aria-live="polite">
+            {announcement}
+          </span>
         </div>
       )}
       {empty}

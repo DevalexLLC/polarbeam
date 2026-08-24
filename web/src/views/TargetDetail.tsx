@@ -500,8 +500,8 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
       plugins: [latestLegendPlugin()],
       ...(mode === 'utc' ? { tzDate: (ts: number) => uPlot.tzDate(new Date(ts * 1e3), 'Etc/UTC') } : {}),
     }
-    // Window flips only swap the data (setData resets scales); the id is
-    // covered by the route-keyed remount. Theme/timezone need new options.
+    // Theme/timezone flips rebuild the options. Window and other explicit
+    // investigation-context changes recreate through Chart's contextKey.
   }, [resolved, mode])
 
   if (error && !summary)
