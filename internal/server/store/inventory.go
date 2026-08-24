@@ -75,14 +75,12 @@ const agentInventoryCTE = `
 		       c.not_after, c.revoked_at,
 		       COALESCE(o.offline, false) AS offline,
 		       COALESCE(o.failing, 0) AS probes_failing,
-		       COALESCE(o.degraded, false) AS probe_degraded,
 		       COALESCE(ss.total, 0) AS probes_total,
 		       CASE
 		         WHEN c.revoked_at IS NOT NULL OR c.not_after < now()
 		              OR COALESCE(o.offline, false) THEN 'offline'
-		         WHEN COALESCE(o.failing, 0) > 0 OR COALESCE(o.degraded, false)
-		              THEN 'degraded'
 		         WHEN a.last_seen_at IS NULL THEN 'no_data'
+		         WHEN COALESCE(o.failing, 0) > 0 THEN 'degraded'
 		         ELSE 'healthy'
 		       END AS health
 		  FROM agents a
@@ -95,11 +93,10 @@ const agentInventoryCTE = `
 		  LEFT JOIN (
 		       SELECT oe.agent_id,
 		              bool_or(oe.kind = 'agent_offline') AS offline,
-		              count(ep.probe_id) FILTER (WHERE oe.kind = 'probe_failing') AS failing,
-		              bool_or(oe.kind = 'probe_degraded' AND ep.probe_id IS NOT NULL) AS degraded
+		              count(ep.probe_id) FILTER (WHERE oe.kind = 'probe_failing') AS failing
 		         FROM outage_events oe
 		         LEFT JOIN unnest($1::uuid[]) AS ep(probe_id)
-		           ON oe.kind IN ('probe_failing', 'probe_degraded')
+		           ON oe.kind = 'probe_failing'
 		          AND oe.probe_id = ep.probe_id
 		        WHERE oe.closed_at IS NULL
 		        GROUP BY oe.agent_id
@@ -311,6 +308,14 @@ const targetInventoryCTE = `
 		  JOIN sites source_site ON source_site.id = source_member.site_id
 		 WHERE vt.kind = 'agent'
 		   AND ($1::uuid[] IS NULL OR mesh.network_id = ANY($1))
+		   AND (EXISTS (
+		       SELECT 1 FROM agents source_agent
+		        WHERE source_agent.site_id = source_member.site_id
+		          AND source_agent.network_id = mesh.network_id
+		   ) OR NOT EXISTS (
+		       SELECT 1 FROM agents source_agent
+		        WHERE source_agent.site_id = source_member.site_id
+		   ))
 	), probe_aggregates AS (
 		SELECT target_id, count(DISTINCT config_id) AS probe_count,
 		       count(DISTINCT config_id) FILTER (WHERE enabled) AS enabled_probe_count,

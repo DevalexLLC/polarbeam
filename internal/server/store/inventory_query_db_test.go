@@ -61,9 +61,9 @@ func seedInventoryAgents(t *testing.T, ctx context.Context, s *store.Store) (net
 	if _, err := s.Pool().Exec(ctx, `
 		INSERT INTO outage_events
 		       (id, kind, agent_id, probe_id, target_id, probe_type, opened_at)
-		VALUES ($1, 'probe_degraded', $2, $3, $4, 1, $5)`,
+		VALUES ($1, 'probe_failing', $2, $3, $4, 1, $5)`,
 		openID, f.aDef, f.directID, f.tBDef, base); err != nil {
-		t.Fatalf("insert degraded outage: %v", err)
+		t.Fatalf("insert failing outage: %v", err)
 	}
 	if _, err := s.Pool().Exec(ctx, `
 		INSERT INTO series_state
@@ -71,7 +71,33 @@ func seedInventoryAgents(t *testing.T, ctx context.Context, s *store.Store) (net
 		        last_time, open_event_id)
 		VALUES ($1, $2, $3, 1, 2, $4, $5)`,
 		f.aDef, f.directID, f.tBDef, base, openID); err != nil {
-		t.Fatalf("insert degraded series: %v", err)
+		t.Fatalf("insert failing series: %v", err)
+	}
+	var svcTarget uuid.UUID
+	if err := s.Pool().QueryRow(ctx, `SELECT id FROM targets WHERE name = 'svc'`).Scan(&svcTarget); err != nil {
+		t.Fatalf("find svc target: %v", err)
+	}
+	degradedProbe, err := s.AddDirectProbe(ctx, "site-a", "svc", f.mgmt, netProbeSettings, true, "test", nil)
+	if err != nil {
+		t.Fatalf("add degraded probe: %v", err)
+	}
+	if _, err := s.Pool().Exec(ctx, `
+		INSERT INTO outage_events
+		       (kind, agent_id, probe_id, target_id, probe_type, opened_at)
+		VALUES ('probe_degraded', $1, $2, $3, 1, $4)`,
+		f.aMgmt, degradedProbe, svcTarget, base); err != nil {
+		t.Fatalf("insert threshold-degraded outage: %v", err)
+	}
+	noDataProbe, err := s.AddDirectProbe(ctx, "site-b", "svc", f.mgmt, netProbeSettings, true, "test", nil)
+	if err != nil {
+		t.Fatalf("add no-data failing probe: %v", err)
+	}
+	if _, err := s.Pool().Exec(ctx, `
+		INSERT INTO outage_events
+		       (kind, agent_id, probe_id, target_id, probe_type, opened_at)
+		VALUES ('probe_failing', $1, $2, $3, 1, $4)`,
+		f.bMgmt, noDataProbe, svcTarget, base); err != nil {
+		t.Fatalf("insert no-data failing outage: %v", err)
 	}
 	if _, err := s.Pool().Exec(ctx, `
 		INSERT INTO outage_events (kind, agent_id, opened_at)
@@ -391,6 +417,37 @@ func TestQueryOperationalTargetsAggregatesSortingPagingAndScope(t *testing.T) {
 	filter.Offset = 8
 	if page, pageSummary := query(filter); len(page) != 0 || pageSummary.Total != 7 {
 		t.Errorf("past-end target page = %v summary %+v", page, pageSummary)
+	}
+
+	_ = enrollNetAgent(t, ctx, s, "site-c", "c-mgmt", &f.mgmt)
+	dDef := enrollNetAgent(t, ctx, s, "site-d", "d-def", nil)
+	dTarget := agentTargetID(t, ctx, s, dDef)
+	if _, err := s.UpsertMeshGroup(ctx, "m2", nil); err != nil {
+		t.Fatalf("create cross-plane mesh: %v", err)
+	}
+	for _, site := range []string{"site-c", "site-d"} {
+		if err := s.AddMeshMember(ctx, "m2", site, nil); err != nil {
+			t.Fatalf("add cross-plane mesh member %s: %v", site, err)
+		}
+	}
+	if _, err := s.AddMeshProbe(ctx, "m2", netProbeSettings, true, "test", nil); err != nil {
+		t.Fatalf("add cross-plane mesh probe: %v", err)
+	}
+	filter = baseFilter
+	filter.Networks = []uuid.UUID{f.defaultNet}
+	rows, _ = query(filter)
+	foundDestination := false
+	for _, target := range rows {
+		if target.ID == dTarget {
+			foundDestination = true
+			if target.ProbeCount != 0 || target.EnabledProbeCount != 0 ||
+				len(target.ProbingSites) != 0 || target.Status != store.TargetStatusUnprobed {
+				t.Errorf("off-plane mesh source counted as active: %+v", target)
+			}
+		}
+	}
+	if !foundDestination {
+		t.Fatal("cross-plane mesh destination missing from default inventory")
 	}
 
 	for _, bad := range []store.TargetInventoryFilter{
