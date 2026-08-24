@@ -69,7 +69,41 @@ func toSiteConfigJSON(si store.SiteAdminInfo) siteConfigJSON {
 	}
 }
 
+var siteConfigListSpec = listQuerySpec{
+	Sorts:        []string{"name", "display_name", "created", "agents", "meshes", "probes"},
+	DefaultSort:  "name",
+	DefaultOrder: "asc",
+}
+
 func (a *api) handleSitesConfigGet(w http.ResponseWriter, r *http.Request) {
+	query, ok := readListQuery(w, r, siteConfigListSpec)
+	if !ok {
+		return
+	}
+	if !query.Mode {
+		a.handleSitesConfigLegacy(w, r)
+		return
+	}
+	scope, ok := a.listQueryScope(w, r, query)
+	if !ok {
+		return
+	}
+	sites, total, err := a.db.QuerySitesConfig(r.Context(), store.SiteConfigFilter{
+		Query: query.Query, Sort: query.Sort, Order: query.Order,
+		Limit: query.Limit, Offset: query.Offset, Networks: scope,
+	})
+	if err != nil {
+		internalError(w, "query sites config", err)
+		return
+	}
+	out := make([]siteConfigJSON, 0, len(sites))
+	for _, si := range sites {
+		out = append(out, toSiteConfigJSON(si))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sites": out, "page": query.page(total)})
+}
+
+func (a *api) handleSitesConfigLegacy(w http.ResponseWriter, r *http.Request) {
 	sites, err := a.db.ListSitesConfig(r.Context(), scopeIDs(r.Context()))
 	if err != nil {
 		internalError(w, "list sites config", err)
@@ -80,6 +114,15 @@ func (a *api) handleSitesConfigGet(w http.ResponseWriter, r *http.Request) {
 		out = append(out, toSiteConfigJSON(si))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sites": out})
+}
+
+func (a *api) handleSiteConfigGet(w http.ResponseWriter, r *http.Request) {
+	si, err := a.db.GetSiteConfig(r.Context(), r.PathValue("name"), scopeIDs(r.Context()))
+	if err != nil {
+		writeStoreError(w, "get site config", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toSiteConfigJSON(*si))
 }
 
 func (a *api) handleSiteConfigPost(w http.ResponseWriter, r *http.Request) {

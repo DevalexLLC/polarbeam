@@ -46,6 +46,8 @@ type DB interface {
 
 	ListSites(ctx context.Context, networks []uuid.UUID) ([]store.SiteInfo, error)
 	ListSitesConfig(ctx context.Context, networks []uuid.UUID) ([]store.SiteAdminInfo, error)
+	QuerySitesConfig(ctx context.Context, f store.SiteConfigFilter) ([]store.SiteAdminInfo, int64, error)
+	GetSiteConfig(ctx context.Context, name string, networks []uuid.UUID) (*store.SiteAdminInfo, error)
 	CreateSite(ctx context.Context, name string, up store.SiteUpdate) (uuid.UUID, error)
 	UpdateSite(ctx context.Context, name string, up store.SiteUpdate) error
 	DeleteSite(ctx context.Context, name string) (int64, error)
@@ -84,6 +86,8 @@ type DB interface {
 	DeleteNetworkThreshold(ctx context.Context, network string, scope []uuid.UUID) error
 
 	ListTargets(ctx context.Context, networks []uuid.UUID) ([]store.TargetInfo, error)
+	QueryTargetsConfig(ctx context.Context, f store.TargetConfigFilter) ([]store.TargetInfo, int64, error)
+	GetTargetConfig(ctx context.Context, name string, networks []uuid.UUID) (*store.TargetInfo, error)
 	QueryOperationalTargets(ctx context.Context, f store.TargetInventoryFilter) ([]store.OperationalTargetInfo, store.TargetInventorySummary, store.TargetInventorySummary, error)
 	UpsertExternalTarget(ctx context.Context, name, address string, port int32, url string, networkID *uuid.UUID, scope []uuid.UUID) (uuid.UUID, error)
 	DeleteTarget(ctx context.Context, name string, scope []uuid.UUID) error
@@ -93,6 +97,8 @@ type DB interface {
 	AddMeshMember(ctx context.Context, meshName, siteName string, scope []uuid.UUID) error
 	RemoveMeshMember(ctx context.Context, meshName, siteName string, scope []uuid.UUID) error
 	ListProbeConfigs(ctx context.Context, networks []uuid.UUID) ([]store.ProbeConfigInfo, error)
+	QueryProbeConfigs(ctx context.Context, f store.ProbeConfigFilter) ([]store.ProbeConfigInfo, int64, error)
+	GetProbeConfigScoped(ctx context.Context, id uuid.UUID, networks []uuid.UUID) (*store.ProbeConfigInfo, error)
 	GetProbeConfig(ctx context.Context, id uuid.UUID) (*store.ProbeConfigInfo, error)
 	AddDirectProbe(ctx context.Context, siteName, targetName string, networkID uuid.UUID, ps store.ProbeSettings, enabled bool, updatedBy string, scope []uuid.UUID) (uuid.UUID, error)
 	AddMeshProbe(ctx context.Context, meshName string, ps store.ProbeSettings, enabled bool, updatedBy string, scope []uuid.UUID) (uuid.UUID, error)
@@ -234,6 +240,7 @@ func newHandler(sdb DB, static fs.FS, providers OIDCProviders) http.Handler {
 	mux.Handle("PUT /api/v1/settings/ui-banner", adminWrite(a.handleBannerSettingsPut))
 	mux.Handle("GET /api/v1/config/probe-types", a.withSession(a.handleProbeTypes))
 	mux.Handle("GET /api/v1/config/targets", a.withSession(a.handleTargetsGet))
+	mux.Handle("GET /api/v1/config/targets/{name}", a.withSession(a.handleTargetConfigGet))
 	mux.Handle("POST /api/v1/config/targets", networkWrite(a.handleTargetPost))
 	mux.Handle("DELETE /api/v1/config/targets/{name}", networkWrite(a.handleTargetDelete))
 	mux.Handle("GET /api/v1/config/meshes", a.withSession(a.handleMeshesGet))
@@ -242,6 +249,7 @@ func newHandler(sdb DB, static fs.FS, providers OIDCProviders) http.Handler {
 	mux.Handle("POST /api/v1/config/meshes/{name}/members/{site}", networkWrite(a.handleMeshMemberPost))
 	mux.Handle("DELETE /api/v1/config/meshes/{name}/members/{site}", networkWrite(a.handleMeshMemberDelete))
 	mux.Handle("GET /api/v1/config/probes", a.withSession(a.handleProbesGet))
+	mux.Handle("GET /api/v1/config/probes/{id}", a.withSession(a.handleProbeGet))
 	mux.Handle("POST /api/v1/config/probes", networkWrite(a.handleProbePost))
 	mux.Handle("PUT /api/v1/config/probes/{id}", networkWrite(a.handleProbePut))
 	mux.Handle("DELETE /api/v1/config/probes/{id}", networkWrite(a.handleProbeDelete))
@@ -250,6 +258,7 @@ func newHandler(sdb DB, static fs.FS, providers OIDCProviders) http.Handler {
 	mux.Handle("PUT /api/v1/config/networks/{name}", adminWrite(a.handleNetworkPut))
 	mux.Handle("DELETE /api/v1/config/networks/{name}", adminWrite(a.handleNetworkDelete))
 	mux.Handle("GET /api/v1/config/sites", a.withSession(a.handleSitesConfigGet))
+	mux.Handle("GET /api/v1/config/sites/{name}", a.withSession(a.handleSiteConfigGet))
 	mux.Handle("POST /api/v1/config/sites", adminWrite(a.handleSiteConfigPost))
 	mux.Handle("PUT /api/v1/config/sites/{name}", adminWrite(a.handleSiteConfigPut))
 	mux.Handle("DELETE /api/v1/config/sites/{name}", adminWrite(a.handleSiteConfigDelete))

@@ -66,11 +66,17 @@ type fakeDB struct {
 	paths    []store.CurrentPath
 	pathMTUs []store.CurrentPathMTU
 
-	targets     []store.TargetInfo
-	meshes      []store.MeshGroupInfo
-	probes      []store.ProbeConfigInfo
-	siteConfigs []store.SiteAdminInfo
-	joinTokens  []store.JoinTokenInfo
+	targets                []store.TargetInfo
+	meshes                 []store.MeshGroupInfo
+	probes                 []store.ProbeConfigInfo
+	siteConfigs            []store.SiteAdminInfo
+	joinTokens             []store.JoinTokenInfo
+	lastSiteConfigQuery    store.SiteConfigFilter
+	siteConfigQueryTotal   int64
+	lastTargetConfigQuery  store.TargetConfigFilter
+	targetConfigQueryTotal int64
+	lastProbeConfigQuery   store.ProbeConfigFilter
+	probeConfigQueryTotal  int64
 
 	userAccounts []store.UserAccountInfo
 	loginMonths  []store.LoginMonthStat

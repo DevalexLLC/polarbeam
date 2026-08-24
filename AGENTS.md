@@ -79,6 +79,13 @@ matches, while `scope_summary` retains the network-scoped header context. An
 explicit network includes external targets only when an enabled direct probe
 assigns them to that network.
 
+Settings Sites, Targets, and Probes preserve their complete legacy responses
+without list parameters. Query mode uses SQL-side tenant scope, literal search,
+stable ID tie breakers, and `page` metadata. Keep the query sort/filter names in
+their handler allowlists aligned with `settings_inventory.go`. Their
+`/{identity}` GET routes return the existing resource object directly and must
+hide inaccessible resources behind the same 404 shape as missing ones.
+
 ## Coding Style & Naming Conventions
 
 Format Go with `gofmt`; use tabs, lowercase packages, and conventional

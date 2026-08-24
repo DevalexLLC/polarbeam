@@ -22,6 +22,25 @@ func (f *fakeDB) ListSitesConfig(_ context.Context, networks []uuid.UUID) ([]sto
 	return f.siteConfigs, nil
 }
 
+func (f *fakeDB) QuerySitesConfig(_ context.Context, filter store.SiteConfigFilter) ([]store.SiteAdminInfo, int64, error) {
+	f.recordScope("QuerySitesConfig", filter.Networks)
+	f.lastSiteConfigQuery = filter
+	start := min(filter.Offset, len(f.siteConfigs))
+	end := min(start+filter.Limit, len(f.siteConfigs))
+	return f.siteConfigs[start:end], f.siteConfigQueryTotal, nil
+}
+
+func (f *fakeDB) GetSiteConfig(_ context.Context, name string, networks []uuid.UUID) (*store.SiteAdminInfo, error) {
+	f.recordScope("GetSiteConfig", networks)
+	for i := range f.siteConfigs {
+		if f.siteConfigs[i].Name == name {
+			si := f.siteConfigs[i]
+			return &si, nil
+		}
+	}
+	return nil, fmt.Errorf("site %q does not exist%w", name, store.ErrNotFound)
+}
+
 func (f *fakeDB) CreateSite(_ context.Context, name string, up store.SiteUpdate) (uuid.UUID, error) {
 	for _, s := range f.siteConfigs {
 		if s.Name == name {
@@ -224,6 +243,56 @@ func TestSiteConfigAuth(t *testing.T) {
 	adminCookie, _ := configLogin(t, h, f, "admin")
 	if w := doConfig(t, h, "POST", "/api/v1/config/tokens", `{"site":"x","ttl_ms":1000}`, adminCookie, ""); w.Code != http.StatusForbidden {
 		t.Errorf("admin token POST without CSRF = %d, want 403", w.Code)
+	}
+}
+
+func TestSiteConfigQueryAndDetail(t *testing.T) {
+	f := newFakeDB()
+	netID := uuid.New()
+	f.networks = append(f.networks, store.NetworkAdminInfo{ID: netID, Name: "corp"})
+	f.siteConfigs = []store.SiteAdminInfo{
+		{SiteInfo: store.SiteInfo{ID: uuid.New(), Name: "lon", DisplayName: "London"}, AgentCount: 4, CreatedAt: time.Now()},
+		{SiteInfo: store.SiteInfo{ID: uuid.New(), Name: "nyc", Location: "New York"}, ProbeCount: 7, CreatedAt: time.Now()},
+	}
+	f.siteConfigQueryTotal = 5
+	h := newTestAPI(t, f)
+	cookie, _ := configLogin(t, h, f, "viewer")
+
+	legacy := doConfig(t, h, "GET", "/api/v1/config/sites", "", cookie, "")
+	if legacy.Code != http.StatusOK || strings.Contains(legacy.Body.String(), `"page"`) {
+		t.Fatalf("legacy sites = %d %s", legacy.Code, legacy.Body)
+	}
+
+	w := doConfig(t, h, "GET",
+		"/api/v1/config/sites?network=corp&q=new&sort=agents&order=desc&limit=1&offset=1", "", cookie, "")
+	filter := f.lastSiteConfigQuery
+	if w.Code != http.StatusOK || filter.Query != "new" || filter.Sort != "agents" ||
+		filter.Order != "desc" || filter.Limit != 1 || filter.Offset != 1 ||
+		!slices.Equal(filter.Networks, []uuid.UUID{netID}) {
+		t.Fatalf("site query = %d filter %+v body %s", w.Code, filter, w.Body)
+	}
+	var pageBody struct {
+		Sites []siteConfigJSON `json:"sites"`
+		Page  listPageJSON     `json:"page"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &pageBody); err != nil {
+		t.Fatal(err)
+	}
+	if len(pageBody.Sites) != 1 || pageBody.Sites[0].Name != "nyc" ||
+		pageBody.Page != (listPageJSON{Limit: 1, Offset: 1, Total: 5, HasMore: true}) {
+		t.Errorf("site query body = %+v", pageBody)
+	}
+
+	detail := doConfig(t, h, "GET", "/api/v1/config/sites/lon", "", cookie, "")
+	var site siteConfigJSON
+	if detail.Code != http.StatusOK || json.Unmarshal(detail.Body.Bytes(), &site) != nil || site.Name != "lon" {
+		t.Errorf("site detail = %d %+v body %s", detail.Code, site, detail.Body)
+	}
+	if missing := doConfig(t, h, "GET", "/api/v1/config/sites/missing", "", cookie, ""); missing.Code != http.StatusNotFound {
+		t.Errorf("missing site detail = %d, want 404: %s", missing.Code, missing.Body)
+	}
+	if invalid := doConfig(t, h, "GET", "/api/v1/config/sites?sort=bogus", "", cookie, ""); invalid.Code != http.StatusBadRequest {
+		t.Errorf("invalid site query = %d, want 400: %s", invalid.Code, invalid.Body)
 	}
 }
 
