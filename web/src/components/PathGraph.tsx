@@ -160,8 +160,10 @@ function buildGraph(paths: GraphPath[]) {
   return { columns, nodes, edges, srcMembers, dstMembers }
 }
 
-// Geometry constants: 11px mono labels, two-line nodes.
-const CHAR_W = 6.7
+// Geometry constants: fixed 12px SVG labels (0.75rem at the reference root),
+// two-line nodes. Fixed user units keep text measurement and rectangles in
+// the same coordinate system at non-default browser font settings.
+const CHAR_W = 7.3
 const PAD_X = 8
 const NODE_H = 34
 const TERM_H = 38
@@ -169,7 +171,7 @@ const COL_GAP = 42
 const ROW_GAP = 12
 const MARGIN = 4
 // The SVG scales down to fit its container, but no further than this —
-// below it the 11px labels stop being legible, so scroll-x takes over.
+// below it the labels stop being legible, so scroll-x takes over.
 const MIN_SCALE = 0.7
 
 function nodeWidth(label: string): number {

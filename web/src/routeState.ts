@@ -1,3 +1,5 @@
+import { isTopologyMode } from './topologyMode.ts'
+
 export type HistoryMode = 'push' | 'replace'
 export type RouteNavigationBlocker = (nextHash: string, mode: HistoryMode) => boolean
 
@@ -116,7 +118,8 @@ export function canonicalizeRouteHash(hash: string, options: CanonicalRouteOptio
   }
 
   if (route === 'overview') {
-    setNonDefault(out, 'topology', oneOf(source, 'topology', ['map', 'matrix'], 'map'), 'map')
+    const topology = source.get('topology')
+    if (topology && isTopologyMode(topology)) out.set('topology', topology)
   } else if (route === 'incidents') {
     setNonDefault(out, 'window', oneOf(source, 'window', WINDOWS, '24h'), '24h')
     setNonDefault(out, 'status', oneOf(source, 'status', ['active', 'all', 'resolved'], 'active'), 'active')

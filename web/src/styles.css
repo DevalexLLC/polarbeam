@@ -770,7 +770,7 @@ table.matrix td.empty {
   color: var(--ink-3);
   background: var(--surface-2);
   padding: 0.5rem 0.45rem;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
 }
 
 table.matrix td.cell {
@@ -803,7 +803,7 @@ table.matrix td.cell > a:hover {
 
 .cell-sub {
   max-width: 11rem;
-  font-size: 0.62rem;
+  font-size: 0.75rem;
   line-height: 1.35;
   color: var(--ink-2);
 }
@@ -814,7 +814,7 @@ table.matrix td.cell > a:hover {
   justify-content: center;
   gap: 0.3rem;
   color: var(--ink-2);
-  font-size: 0.6rem;
+  font-size: 0.75rem;
   font-weight: 650;
 }
 
@@ -1530,12 +1530,12 @@ tr.hop-changed td {
 }
 
 .path-graph .pg-label {
-  font-size: 11px;
+  font-size: 12px;
   fill: var(--ink);
 }
 
 .path-graph .pg-sub {
-  font-size: 10px;
+  font-size: 12px;
   fill: var(--ink-3);
 }
 
@@ -1619,7 +1619,7 @@ tr.hop-changed td {
 }
 
 .pg-key {
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   font-weight: 650;
   text-transform: uppercase;
   padding: 0.08rem 0.4rem;
@@ -1844,10 +1844,50 @@ ol.hops li {
   position: relative;
 }
 
+.map-viewport-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.65rem;
+}
+
+.map-viewport-toolbar button {
+  min-width: var(--minimum-target);
+  min-height: var(--minimum-target);
+  padding: 0.3rem 0.55rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+}
+
+.map-viewport-toolbar button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.map-zoom-readout {
+  margin-left: auto;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
+
 .worldmap {
   display: block;
   width: 100%;
   height: auto;
+  cursor: grab;
+  touch-action: pan-y;
+  user-select: none;
+}
+
+.worldmap.map-dragging {
+  cursor: grabbing;
 }
 
 .map-bg {
@@ -1866,6 +1906,7 @@ ol.hops li {
    target at phone viewports. */
 .map-site-hit {
   fill: transparent;
+  pointer-events: all;
 }
 
 /* Leader marks tie a decluttered bubble back to its true projection.
@@ -1873,6 +1914,17 @@ ol.hops li {
    (for z-order), and alarms stay the map's only pop of color. */
 .map-leaders {
   pointer-events: none;
+}
+
+.map-label-leaders {
+  pointer-events: none;
+}
+
+.map-label-leader {
+  stroke: var(--ink-3);
+  stroke-width: 1;
+  opacity: 0.55;
+  vector-effect: non-scaling-stroke;
 }
 
 .map-leader {
@@ -1951,6 +2003,35 @@ ol.hops li {
   opacity: 0.55;
 }
 
+.map-site-label {
+  position: absolute;
+  z-index: 2;
+  max-width: 16rem;
+  padding: 0.08rem 0.3rem;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--surface);
+  color: var(--ink-2);
+  text-overflow: ellipsis;
+  transform: translate(0.7rem, calc(-100% - 0.35rem));
+  white-space: nowrap;
+  pointer-events: none;
+  font-family: var(--sans);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.map-site-label.selected {
+  color: var(--ink);
+  border-color: var(--border-strong);
+  font-weight: 750;
+}
+
+.map-site-label-right {
+  transform: translate(calc(-100% - 0.7rem), calc(-100% - 0.35rem));
+}
+
 .map-legend {
   display: flex;
   align-items: center;
@@ -1958,7 +2039,7 @@ ol.hops li {
   flex-wrap: wrap;
   margin-top: 0.6rem;
   color: var(--ink-3);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
 }
 
 .map-legend .legend-item {
@@ -2030,7 +2111,7 @@ ol.hops li {
 .map-tip-pill {
   padding: 0.05rem 0.5rem;
   border-radius: 999px;
-  font-size: 0.66rem;
+  font-size: 0.75rem;
   font-weight: 650;
   letter-spacing: 0.03em;
   white-space: nowrap;
@@ -2056,7 +2137,7 @@ ol.hops li {
 
 .map-tip-sub {
   color: var(--ink-3);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
 }
 
 .map-tip-value {
@@ -2068,7 +2149,7 @@ ol.hops li {
 
 .map-tip-value small {
   color: var(--ink-3);
-  font-size: 0.68rem;
+  font-size: 0.75rem;
   font-weight: 500;
 }
 
@@ -2103,7 +2184,7 @@ ol.hops li {
 .map-tip-caption {
   margin-top: 0.3rem;
   color: var(--ink-2);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
 }
 
 .map-tip-links {
@@ -2124,7 +2205,7 @@ ol.hops li {
   padding: 0.18rem 0.1rem;
   border-radius: calc(var(--radius) - 4px);
   color: var(--accent);
-  font-size: 0.73rem;
+  font-size: 0.75rem;
   font-weight: 550;
   text-decoration: none;
 }
@@ -2180,6 +2261,112 @@ ol.hops li {
   .map-legend-hint {
     display: none;
   }
+}
+
+/* Health-ranked topology list: rows rather than nested cards keep dense
+   deployments scannable and flatten naturally at the phone breakpoint. */
+.topology-sites {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  list-style: none;
+}
+
+.topology-site + .topology-site {
+  border-top: 1px solid var(--border);
+}
+
+.topology-site-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(10rem, auto);
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.7rem 0.8rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.topology-site-summary:hover,
+.topology-site-summary[aria-expanded='true'] {
+  background: var(--surface-2);
+}
+
+.topology-site-identity,
+.topology-site-health {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.topology-site-identity > strong,
+.topology-site-identity > span,
+.topology-site-health > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topology-site-identity > span,
+.topology-site-health > span {
+  color: var(--ink-3);
+  font-size: 0.78rem;
+}
+
+.topology-site-health {
+  text-align: right;
+}
+
+.topology-site-ok .topology-site-health > strong {
+  color: var(--status-ok);
+}
+
+.topology-site-warn .topology-site-health > strong,
+.topology-site-crit .topology-site-health > strong {
+  color: var(--status-degraded);
+}
+
+.topology-site-down .topology-site-health > strong {
+  color: var(--status-down);
+}
+
+.topology-site-stale .topology-site-health > strong {
+  color: var(--ink-3);
+}
+
+.topology-site-detail {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem 1rem;
+  flex-wrap: wrap;
+  padding: 0.65rem 0.8rem 0.75rem 2.15rem;
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+  color: var(--ink-2);
+  font-size: 0.8rem;
+}
+
+.topology-site-peers {
+  display: flex;
+  gap: 0.35rem 0.8rem;
+  flex-wrap: wrap;
+}
+
+.topology-site-peers a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.topology-site-peers a:hover,
+.topology-site-peers a:focus-visible {
+  text-decoration: underline;
 }
 
 /* ---- threshold settings panel ---- */
@@ -3329,7 +3516,7 @@ td.fleet-uptime {
   overflow: hidden;
   max-width: 100%;
   color: var(--ink-2);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3358,7 +3545,7 @@ td.fleet-uptime {
   grid-template-columns: repeat(12, 1fr);
   margin-top: 0.35rem;
   color: var(--ink-3);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   text-align: center;
 }
 
@@ -3399,7 +3586,7 @@ td.fleet-uptime {
   justify-content: space-between;
   margin-top: 0.35rem;
   color: var(--ink-3);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
 }
 
 .itl-bar-open.sev-warn {
@@ -4289,7 +4476,31 @@ table.data-table tbody tr:last-child > td {
     display: block;
   }
   .overview-main-row > .card {
+    margin-right: -0.85rem;
     margin-bottom: 1rem;
+    margin-left: -0.85rem;
+    border-right: 0;
+    border-left: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .topology-sites {
+    margin-right: -0.95rem;
+    margin-left: -0.95rem;
+    border-right: 0;
+    border-left: 0;
+    border-radius: 0;
+  }
+  .topology-site-summary {
+    grid-template-columns: auto minmax(0, 1fr);
+    min-height: 64px;
+  }
+  .topology-site-health {
+    grid-column: 2;
+    text-align: left;
+  }
+  .topology-site-detail {
+    padding-left: 2.45rem;
   }
   .progressive-footer {
     align-items: stretch;

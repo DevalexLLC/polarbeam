@@ -32,7 +32,7 @@ export const SEVERITY_LABEL: Record<Severity, string> = {
   ok: 'Healthy',
   warn: 'Degraded',
   crit: 'Degraded',
-  stale: 'Stale',
+  stale: 'No data',
   down: 'Down',
 }
 

@@ -57,6 +57,9 @@ test('network is URL-only and reconciles against accessible planes', () => {
 
 test('route schemas preserve each supported view state in stable order', () => {
   assert.equal(canonicalizeRouteHash('#/?topology=matrix&network=blue').hash, '#/?network=blue&topology=matrix')
+  assert.equal(canonicalizeRouteHash('#/?topology=sites').hash, '#/?topology=sites')
+  assert.equal(canonicalizeRouteHash('#/?topology=map').hash, '#/?topology=map')
+  assert.equal(canonicalizeRouteHash('#/?topology=invalid').hash, '#/')
   assert.equal(
     canonicalizeRouteHash('#/incidents?incident=i1&slice=1720000000000&q=dns&status=resolved&window=7d').hash,
     '#/incidents?window=7d&status=resolved&q=dns&slice=1720000000000&incident=i1',
