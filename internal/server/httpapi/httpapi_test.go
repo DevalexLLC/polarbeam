@@ -1516,15 +1516,22 @@ func TestEventsEndpoints(t *testing.T) {
 	f := newFakeDB()
 	closed := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
 	dst, target, ptype := "nyc", "nyc-agent", int16(1)
+	agentID, probeID, targetID := uuid.New(), uuid.New(), uuid.New()
+	routeID := uuid.New()
 	degradedErr := "latency at or above critical threshold (40ms)"
 	f.outages = []store.OutageInfo{
-		{ID: uuid.New(), Kind: "probe_failing", AgentHostname: "syd-1", Network: "corp", SrcSite: "syd",
+		{ID: uuid.New(), Kind: "probe_failing", AgentID: agentID, ProbeID: &probeID, TargetID: &targetID,
+			AgentHostname: "syd-1", Network: "corp", SrcSite: "syd",
 			DstSite: &dst, TargetName: &target, ProbeType: &ptype,
-			OpenedAt: closed.Add(-time.Hour)},
+			OpenedAt: closed.Add(-time.Hour), RelatedRoutes: []store.PathEventInfo{{
+				ID: routeID, Time: closed.Add(-50 * time.Minute), AgentID: agentID, ProbeID: probeID, TargetID: &targetID,
+				AgentHostname: "syd-1", Network: "corp", SrcSite: "syd", DstSite: &dst, TargetName: &target,
+			}}},
 		// No Network: the agent row is gone, the plane serves as "".
-		{ID: uuid.New(), Kind: "agent_offline", AgentHostname: "lon-1", SrcSite: "lon",
+		{ID: uuid.New(), Kind: "agent_offline", AgentID: uuid.New(), AgentHostname: "lon-1", SrcSite: "lon",
 			OpenedAt: closed.Add(-2 * time.Hour), ClosedAt: &closed},
-		{ID: uuid.New(), Kind: "probe_degraded", AgentHostname: "syd-1", Network: "corp", SrcSite: "syd",
+		{ID: uuid.New(), Kind: "probe_degraded", AgentID: agentID, ProbeID: &probeID, TargetID: &targetID,
+			AgentHostname: "syd-1", Network: "corp", SrcSite: "syd",
 			DstSite: &dst, TargetName: &target, ProbeType: &ptype,
 			OpenedAt: closed.Add(-30 * time.Minute), Error: &degradedErr},
 	}
@@ -1548,6 +1555,13 @@ func TestEventsEndpoints(t *testing.T) {
 	}
 	if !strings.Contains(body, `"kind":"probe_degraded"`) || !strings.Contains(body, degradedErr) {
 		t.Errorf("outages body missing probe_degraded passthrough: %s", body)
+	}
+	if !strings.Contains(body, `"agent_id":"`+agentID.String()+`"`) ||
+		!strings.Contains(body, `"probe_id":"`+probeID.String()+`"`) ||
+		!strings.Contains(body, `"target_id":"`+targetID.String()+`"`) ||
+		!strings.Contains(body, `"route_events":[{"id":"`+routeID.String()+`"`) ||
+		!strings.Contains(body, `"probe_id":null,"target_id":null`) {
+		t.Errorf("outages body missing stable identities or correlated routes: %s", body)
 	}
 	// The plane passes through, and a deleted agent's empty plane stays "".
 	if !strings.Contains(body, `"network":"corp"`) || !strings.Contains(body, `"network":""`) {

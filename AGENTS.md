@@ -66,6 +66,14 @@ stable ID tie breakers, SQL-side changed-TTL calculation, capped `page.total`,
 and `truncated` signal aligned; `window`-only requests retain the legacy JSON
 shape and newest-500 behavior.
 
+Outage rows retain their stored `agent_id`, `probe_id`, and `target_id` even
+after display joins disappear. Each row correlates at most three deduplicated
+route events from the Routes view's same network-scoped newest-500 window:
+exact identities take precedence, label fallback is legacy-only, closed rows
+consider opening and closing ±15-minute windows, and open rows consider only
+opening. Keep incident resource links availability-gated and route links
+canonical with their network, window, and selected event.
+
 Operational agent and target inventories derive health/status, scoped counts,
 summaries, search, ordering, and pagination in SQL. Keep `/api/v1/agents`
 without list parameters on its exact legacy response; `/api/v1/targets` is the

@@ -432,6 +432,9 @@ export interface TargetHealthResponse {
 export interface OutageEvent {
   id: string
   kind: 'probe_failing' | 'agent_offline' | 'probe_degraded'
+  agent_id: string
+  probe_id: string | null
+  target_id: string | null
   agent: string
   network: string // '' once the agent row is deleted
   src_site: string
@@ -441,6 +444,20 @@ export interface OutageEvent {
   opened_at: string
   closed_at: string | null
   error: string | null
+  route_events: IncidentRouteEvent[]
+}
+
+export interface IncidentRouteEvent {
+  id: string
+  time: string
+  agent_id: string
+  probe_id: string
+  target_id: string | null
+  agent: string
+  network: string
+  src_site: string
+  dst_site: string | null
+  target: string | null
 }
 
 export interface OutagesResponse {

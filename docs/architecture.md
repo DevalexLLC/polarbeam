@@ -136,6 +136,16 @@ caps the newest 500 matching events, so `page.total` never exceeds 500 and
 legacy window-only response described in the endpoint inventory below, query
 mode retains `target_id` after its display row is deleted.
 
+`GET /api/v1/outages` retains each event's stable agent, probe, and target IDs
+independently of its live display joins. Every outage also carries up to three
+deduplicated route changes from the same network-scoped newest-500 set used by
+the Routes view, ordered by distance from its opening or closing timestamp
+inside a ±15-minute window (open incidents use only opening). Correlation uses
+the full agent/probe/target identity when present and falls back to stable
+display labels only for legacy rows missing an identity. Incident links keep
+the selected plane and time window in canonical hash-route state; deleted
+resources remain unlinked historical text.
+
 `GET /api/v1/agents` query mode returns a stable page plus filtered health
 summary (`offline`, `degraded`, `healthy`, `no_data`); requests without list
 parameters retain the original complete-feed response. Its health fold matches

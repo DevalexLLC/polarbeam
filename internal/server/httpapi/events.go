@@ -7,21 +7,48 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/devalexllc/polarbeam/internal/server/store"
 )
 
 type outageJSON struct {
-	ID        string     `json:"id"`
-	Kind      string     `json:"kind"`
-	Agent     string     `json:"agent"`
-	Network   string     `json:"network"` // "" once the agent row is deleted
-	SrcSite   string     `json:"src_site"`
-	DstSite   *string    `json:"dst_site"`
-	Target    *string    `json:"target"`
-	ProbeType *string    `json:"probe_type"`
-	OpenedAt  time.Time  `json:"opened_at"`
-	ClosedAt  *time.Time `json:"closed_at"`
-	Error     *string    `json:"error"`
+	ID          string              `json:"id"`
+	Kind        string              `json:"kind"`
+	AgentID     string              `json:"agent_id"`
+	ProbeID     *string             `json:"probe_id"`
+	TargetID    *string             `json:"target_id"`
+	Agent       string              `json:"agent"`
+	Network     string              `json:"network"` // "" once the agent row is deleted
+	SrcSite     string              `json:"src_site"`
+	DstSite     *string             `json:"dst_site"`
+	Target      *string             `json:"target"`
+	ProbeType   *string             `json:"probe_type"`
+	OpenedAt    time.Time           `json:"opened_at"`
+	ClosedAt    *time.Time          `json:"closed_at"`
+	Error       *string             `json:"error"`
+	RouteEvents []incidentRouteJSON `json:"route_events"`
+}
+
+type incidentRouteJSON struct {
+	ID       string    `json:"id"`
+	Time     time.Time `json:"time"`
+	AgentID  string    `json:"agent_id"`
+	ProbeID  string    `json:"probe_id"`
+	TargetID *string   `json:"target_id"`
+	Agent    string    `json:"agent"`
+	Network  string    `json:"network"`
+	SrcSite  string    `json:"src_site"`
+	DstSite  *string   `json:"dst_site"`
+	Target   *string   `json:"target"`
+}
+
+func optionalUUIDString(id *uuid.UUID) *string {
+	if id == nil {
+		return nil
+	}
+	value := id.String()
+	return &value
 }
 
 func (a *api) handleOutages(w http.ResponseWriter, r *http.Request) {
@@ -42,10 +69,21 @@ func (a *api) handleOutages(w http.ResponseWriter, r *http.Request) {
 			name := probeTypeName(*o.ProbeType)
 			probeType = &name
 		}
+		routes := make([]incidentRouteJSON, len(o.RelatedRoutes))
+		for j, event := range o.RelatedRoutes {
+			routes[j] = incidentRouteJSON{
+				ID: event.ID.String(), Time: event.Time,
+				AgentID: event.AgentID.String(), ProbeID: event.ProbeID.String(), TargetID: optionalUUIDString(event.TargetID),
+				Agent: event.AgentHostname, Network: event.Network, SrcSite: event.SrcSite,
+				DstSite: event.DstSite, Target: event.TargetName,
+			}
+		}
 		out[i] = outageJSON{
-			ID: o.ID.String(), Kind: o.Kind, Agent: o.AgentHostname, Network: o.Network, SrcSite: o.SrcSite,
+			ID: o.ID.String(), Kind: o.Kind,
+			AgentID: o.AgentID.String(), ProbeID: optionalUUIDString(o.ProbeID), TargetID: optionalUUIDString(o.TargetID),
+			Agent: o.AgentHostname, Network: o.Network, SrcSite: o.SrcSite,
 			DstSite: o.DstSite, Target: o.TargetName, ProbeType: probeType,
-			OpenedAt: o.OpenedAt, ClosedAt: o.ClosedAt, Error: o.Error,
+			OpenedAt: o.OpenedAt, ClosedAt: o.ClosedAt, Error: o.Error, RouteEvents: routes,
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -129,14 +167,9 @@ func (a *api) handlePathEvents(w http.ResponseWriter, r *http.Request) {
 func toPathEventJSON(events []store.PathEventInfo, queryMode bool) []pathEventJSON {
 	out := make([]pathEventJSON, len(events))
 	for i, e := range events {
-		var targetID *string
-		if e.TargetID != nil {
-			s := e.TargetID.String()
-			targetID = &s
-		}
 		row := pathEventJSON{
 			ID: e.ID.String(), Time: e.Time, Agent: e.AgentHostname, Network: e.Network, SrcSite: e.SrcSite,
-			DstSite: e.DstSite, Target: e.TargetName, TargetID: targetID,
+			DstSite: e.DstSite, Target: e.TargetName, TargetID: optionalUUIDString(e.TargetID),
 			OldPathHash: hex.EncodeToString(e.OldPathHash),
 			NewPathHash: hex.EncodeToString(e.NewPathHash),
 			OldHops:     json.RawMessage(e.OldHops),

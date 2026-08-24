@@ -3770,6 +3770,37 @@ td.users-actions .inline-confirm:disabled {
   white-space: nowrap;
 }
 
+.incident-investigation {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(12rem, 1fr) minmax(18rem, 2fr);
+  gap: 1rem;
+  padding: 0.35rem 0 0.25rem;
+}
+
+.incident-resource-links,
+.incident-route-links {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.8rem;
+}
+
+.incident-resource-links a,
+.incident-route-links a {
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.incident-route-links .eyebrow {
+  flex-basis: 100%;
+}
+
+.incident-route-links .hint {
+  font-size: 0.75rem;
+}
+
 .progressive-footer {
   display: flex;
   align-items: center;

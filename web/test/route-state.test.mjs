@@ -2,11 +2,17 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   canonicalizeRouteHash,
+  incidentAgentHref,
+  incidentPairHref,
+  incidentTargetHref,
   inheritRouteNetwork,
   routeNumberParam,
   routeParam,
+  routeEventHref,
+  subscribeRouteState,
   targetDetailHref,
   targetInventoryHref,
+  updateRouteParams,
 } from '../src/routeState.ts'
 
 test('canonical state omits defaults, unknown keys, and invalid values', () => {
@@ -78,6 +84,84 @@ test('route schemas preserve each supported view state in stable order', () => {
     canonicalizeRouteHash('#/settings?probe=p1&site=s1&subsection=direct&section=probes').hash,
     '#/settings?section=probes&subsection=direct&probe=p1',
   )
+})
+
+test('incident route links preserve plane and window and select the event', () => {
+  assert.equal(
+    routeEventHref('event-2', '30d', '#/incidents?network=blue&window=30d&slice=1720000000000&incident=i1'),
+    '#/routes?network=blue&window=30d&event=event-2',
+  )
+  assert.equal(routeEventHref('event-1', '24h', '#/incidents?incident=i1'), '#/routes?event=event-1')
+})
+
+test('incident resource links are scoped and unavailable identities stay plain', () => {
+  const source = '#/incidents?network=blue&window=7d&incident=i1'
+  assert.equal(
+    incidentAgentHref('agent-1', 'probe-1', 'lon-1', source),
+    '#/agents?network=blue&agent=agent-1&probe=probe-1',
+  )
+  assert.equal(incidentAgentHref('agent-1', 'probe-1', '', source), null)
+  assert.equal(incidentPairHref('lon', 'nyc', '7d', source), '#/pair/lon/nyc?network=blue&window=7d')
+  assert.equal(incidentPairHref('lon', null, '7d', source), null)
+  assert.equal(
+    incidentTargetHref('target-1', 'probe-1', 'edge', '7d', source),
+    '#/target/target-1?network=blue&window=7d&probe=probe-1',
+  )
+  assert.equal(incidentTargetHref('target-1', 'probe-1', null, '7d', source), null)
+})
+
+test('incident expansion follows browser Back and Forward history', () => {
+  const locationDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'location')
+  const historyDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'history')
+  const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  const browserWindow = new EventTarget()
+  const browserLocation = { hash: '#/incidents?window=7d&slice=1720000000000' }
+  const entries = [browserLocation.hash]
+  let position = 0
+  const browserHistory = {
+    pushState(_state, _title, hash) {
+      entries.splice(position + 1)
+      entries.push(hash)
+      position++
+      browserLocation.hash = hash
+    },
+    replaceState(_state, _title, hash) {
+      entries[position] = hash
+      browserLocation.hash = hash
+    },
+    back() {
+      if (position === 0) return
+      browserLocation.hash = entries[--position]
+      browserWindow.dispatchEvent(new Event('popstate'))
+    },
+    forward() {
+      if (position === entries.length - 1) return
+      browserLocation.hash = entries[++position]
+      browserWindow.dispatchEvent(new Event('popstate'))
+    },
+  }
+  Object.defineProperty(globalThis, 'location', { configurable: true, value: browserLocation })
+  Object.defineProperty(globalThis, 'history', { configurable: true, value: browserHistory })
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: browserWindow })
+  try {
+    const observed = []
+    const unsubscribe = subscribeRouteState(() => observed.push(routeParam(browserLocation.hash, 'incident')))
+    updateRouteParams({ incident: 'i-copy' })
+    assert.equal(browserLocation.hash, '#/incidents?window=7d&slice=1720000000000&incident=i-copy')
+    browserHistory.back()
+    assert.equal(routeParam(browserLocation.hash, 'incident'), '')
+    browserHistory.forward()
+    assert.equal(routeParam(browserLocation.hash, 'incident'), 'i-copy')
+    assert.deepEqual(observed, ['i-copy', '', 'i-copy'])
+    unsubscribe()
+  } finally {
+    if (locationDescriptor) Object.defineProperty(globalThis, 'location', locationDescriptor)
+    else delete globalThis.location
+    if (historyDescriptor) Object.defineProperty(globalThis, 'history', historyDescriptor)
+    else delete globalThis.history
+    if (windowDescriptor) Object.defineProperty(globalThis, 'window', windowDescriptor)
+    else delete globalThis.window
+  }
 })
 
 test('typed readers use canonical values and safe integer fallbacks', () => {

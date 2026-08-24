@@ -4,6 +4,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,6 +17,9 @@ import (
 type OutageInfo struct {
 	ID            uuid.UUID
 	Kind          string
+	AgentID       uuid.UUID
+	ProbeID       *uuid.UUID // nil for agent_offline and legacy rows
+	TargetID      *uuid.UUID // nil for agent_offline and legacy rows
 	AgentHostname string
 	Network       string // "" once the agent row is deleted
 	SrcSite       string
@@ -25,7 +29,10 @@ type OutageInfo struct {
 	OpenedAt      time.Time
 	ClosedAt      *time.Time // nil = still open
 	Error         *string
+	RelatedRoutes []PathEventInfo
 }
+
+const incidentRouteWindow = 15 * time.Minute
 
 // ListOutages returns open events (always, uncapped) plus up to 500
 // events closed within the window, newest first. The two disjoint
@@ -45,17 +52,18 @@ type OutageInfo struct {
 // history out of the response entirely.
 func (s *Store) ListOutages(ctx context.Context, window time.Duration, networks []uuid.UUID) ([]OutageInfo, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT oe.id, oe.kind, COALESCE(a.hostname, ''), COALESCE(n.name, ''),
+		SELECT oe.id, oe.kind, oe.agent_id, oe.probe_id, oe.target_id,
+			COALESCE(a.hostname, ''), COALESCE(n.name, ''),
 			COALESCE(src.name, ''),
 			dst.name, t.name, oe.probe_type, oe.opened_at, oe.closed_at, oe.open_error
 		FROM (
-			SELECT id, kind, agent_id, target_id, probe_type, opened_at, closed_at, open_error
+			SELECT id, kind, agent_id, probe_id, target_id, probe_type, opened_at, closed_at, open_error
 			FROM outage_events
 			WHERE closed_at IS NULL
 			  AND ($2::uuid[] IS NULL
 			       OR agent_id IN (SELECT id FROM agents WHERE network_id = ANY($2)))
 			UNION ALL
-			(SELECT id, kind, agent_id, target_id, probe_type, opened_at, closed_at, open_error
+			(SELECT id, kind, agent_id, probe_id, target_id, probe_type, opened_at, closed_at, open_error
 			FROM outage_events
 			WHERE closed_at > now() - $1::interval
 			  AND ($2::uuid[] IS NULL
@@ -78,13 +86,26 @@ func (s *Store) ListOutages(ctx context.Context, window time.Duration, networks 
 	var out []OutageInfo
 	for rows.Next() {
 		var o OutageInfo
-		if err := rows.Scan(&o.ID, &o.Kind, &o.AgentHostname, &o.Network, &o.SrcSite,
+		if err := rows.Scan(&o.ID, &o.Kind, &o.AgentID, &o.ProbeID, &o.TargetID,
+			&o.AgentHostname, &o.Network, &o.SrcSite,
 			&o.DstSite, &o.TargetName, &o.ProbeType, &o.OpenedAt, &o.ClosedAt, &o.Error); err != nil {
 			return nil, fmt.Errorf("scan outage: %w", err)
 		}
 		out = append(out, o)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	if len(out) == 0 {
+		return out, nil
+	}
+	candidates, err := s.listIncidentRouteCandidates(ctx, window, networks)
+	if err != nil {
+		return nil, err
+	}
+	correlateIncidentRoutes(out, candidates)
+	return out, nil
 }
 
 // PathEventInfo is one path_events row joined with display names. Hops are
@@ -107,6 +128,160 @@ type PathEventInfo struct {
 	OldHops     []byte
 	NewHops     []byte
 	ChangedHops int
+}
+
+// listIncidentRouteCandidates uses the Routes page's same stable newest-500
+// window, but skips hop payloads that incident cards never render. A related
+// route link therefore names an event available in the preserved window.
+func (s *Store) listIncidentRouteCandidates(ctx context.Context, window time.Duration, networks []uuid.UUID) ([]PathEventInfo, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT pe.id, pe.time, pe.agent_id, pe.probe_id, pe.target_id,
+		       COALESCE(a.hostname, ''), COALESCE(n.name, ''),
+		       COALESCE(src.name, ''), dst.name, t.name
+		  FROM path_events pe
+		  LEFT JOIN agents a ON a.id = pe.agent_id
+		  LEFT JOIN networks n ON n.id = a.network_id
+		  LEFT JOIN sites src ON src.id = a.site_id
+		  LEFT JOIN targets t ON t.id = pe.target_id
+		  LEFT JOIN agents ta ON ta.id = t.agent_id
+		  LEFT JOIN sites dst ON dst.id = ta.site_id
+		 WHERE pe.time > now() - $1::interval
+		   AND ($2::uuid[] IS NULL OR a.network_id = ANY($2))
+		 ORDER BY pe.time DESC, pe.id DESC
+		 LIMIT 500`, window, networks)
+	if err != nil {
+		return nil, fmt.Errorf("list incident route candidates: %w", err)
+	}
+	defer rows.Close()
+	var out []PathEventInfo
+	for rows.Next() {
+		var e PathEventInfo
+		if err := rows.Scan(&e.ID, &e.Time, &e.AgentID, &e.ProbeID, &e.TargetID,
+			&e.AgentHostname, &e.Network, &e.SrcSite, &e.DstSite, &e.TargetName); err != nil {
+			return nil, fmt.Errorf("scan incident route candidate: %w", err)
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func usableUUID(id uuid.UUID) bool { return id != uuid.Nil }
+
+func usableUUIDPtr(id *uuid.UUID) bool { return id != nil && usableUUID(*id) }
+
+func sameIncidentLabel(a, b string) bool {
+	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
+	return a != "" && b != "" && strings.EqualFold(a, b)
+}
+
+func sameIncidentLabelPtr(a, b *string) bool {
+	return a != nil && b != nil && sameIncidentLabel(*a, *b)
+}
+
+// incidentRouteMatches gives usable stable IDs absolute precedence: an ID
+// mismatch never degrades into a same-label match. Labels are consulted only
+// when a legacy row lacks one of the identities needed for an exact match.
+func incidentRouteMatches(o OutageInfo, e PathEventInfo) bool {
+	agentExact := usableUUID(o.AgentID) && usableUUID(e.AgentID)
+	if agentExact && o.AgentID != e.AgentID {
+		return false
+	}
+	if o.Kind == "agent_offline" {
+		if agentExact {
+			return true
+		}
+		return sameIncidentLabel(o.AgentHostname, e.AgentHostname) || sameIncidentLabel(o.SrcSite, e.SrcSite)
+	}
+
+	probeExact := usableUUIDPtr(o.ProbeID) && usableUUID(e.ProbeID)
+	if probeExact && *o.ProbeID != e.ProbeID {
+		return false
+	}
+	targetExact := usableUUIDPtr(o.TargetID) && usableUUIDPtr(e.TargetID)
+	if targetExact && *o.TargetID != *e.TargetID {
+		return false
+	}
+	if agentExact && probeExact && targetExact {
+		return true
+	}
+
+	sameSource := sameIncidentLabel(o.AgentHostname, e.AgentHostname) || sameIncidentLabel(o.SrcSite, e.SrcSite)
+	sameDestination := sameIncidentLabelPtr(o.DstSite, e.DstSite) || sameIncidentLabelPtr(o.TargetName, e.TargetName)
+	return sameSource && sameDestination
+}
+
+func incidentRouteDistance(o OutageInfo, at time.Time) (time.Duration, bool) {
+	best := absDuration(at.Sub(o.OpenedAt))
+	matched := best <= incidentRouteWindow
+	if o.ClosedAt != nil {
+		closedDistance := absDuration(at.Sub(*o.ClosedAt))
+		if closedDistance <= incidentRouteWindow && (!matched || closedDistance < best) {
+			best, matched = closedDistance, true
+		}
+	}
+	return best, matched
+}
+
+func absDuration(value time.Duration) time.Duration {
+	if value < 0 {
+		return -value
+	}
+	return value
+}
+
+func incidentRouteKey(e PathEventInfo) string {
+	if usableUUID(e.ID) {
+		return e.ID.String()
+	}
+	return fmt.Sprintf("legacy:%d:%s:%s:%s:%s", e.Time.UnixNano(), e.AgentHostname,
+		e.SrcSite, pointerString(e.DstSite), pointerString(e.TargetName))
+}
+
+func pointerString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func correlateIncidentRoutes(outages []OutageInfo, candidates []PathEventInfo) {
+	type rankedRoute struct {
+		path     PathEventInfo
+		distance time.Duration
+	}
+	for i := range outages {
+		seen := make(map[string]struct{})
+		matches := make([]rankedRoute, 0, 3)
+		for _, candidate := range candidates {
+			distance, inWindow := incidentRouteDistance(outages[i], candidate.Time)
+			if !inWindow || !incidentRouteMatches(outages[i], candidate) {
+				continue
+			}
+			key := incidentRouteKey(candidate)
+			if _, duplicate := seen[key]; duplicate {
+				continue
+			}
+			seen[key] = struct{}{}
+			matches = append(matches, rankedRoute{path: candidate, distance: distance})
+		}
+		sort.Slice(matches, func(a, b int) bool {
+			if matches[a].distance != matches[b].distance {
+				return matches[a].distance < matches[b].distance
+			}
+			if !matches[a].path.Time.Equal(matches[b].path.Time) {
+				return matches[a].path.Time.After(matches[b].path.Time)
+			}
+			return matches[a].path.ID.String() > matches[b].path.ID.String()
+		})
+		limit := min(3, len(matches))
+		outages[i].RelatedRoutes = make([]PathEventInfo, limit)
+		for j := range limit {
+			outages[i].RelatedRoutes[j] = matches[j].path
+		}
+	}
 }
 
 // PathEventFilter is the validated query-mode contract for route changes.
@@ -139,7 +314,7 @@ func (s *Store) ListPathEvents(ctx context.Context, window time.Duration, networ
 		LEFT JOIN sites dst ON dst.id = ta.site_id
 		WHERE pe.time > now() - $1::interval
 		  AND ($2::uuid[] IS NULL OR a.network_id = ANY($2))
-		ORDER BY pe.time DESC
+		ORDER BY pe.time DESC, pe.id DESC
 		LIMIT 500`, window, networks)
 	if err != nil {
 		return nil, fmt.Errorf("list path events: %w", err)
