@@ -66,6 +66,19 @@ stable ID tie breakers, SQL-side changed-TTL calculation, capped `page.total`,
 and `truncated` signal aligned; `window`-only requests retain the legacy JSON
 shape and newest-500 behavior.
 
+Operational agent and target inventories derive health/status, scoped counts,
+summaries, search, ordering, and pagination in SQL. Keep `/api/v1/agents`
+without list parameters on its exact legacy response; `/api/v1/targets` is the
+read-only operational inventory, while `/api/v1/config/targets` remains the
+administrative resource. Query-mode agent health must mirror the legacy Agents
+view: unusable certificate/offline, never seen, then failing probes;
+threshold-only `probe_degraded` incidents do not degrade the agent row. Target
+aggregates must scope source agents and probe configuration before counting or
+searching shared global targets. Its filtered `summary` drives paging and empty
+matches, while `scope_summary` retains the network-scoped header context. An
+explicit network includes external targets only when an enabled direct probe
+assigns them to that network.
+
 ## Coding Style & Naming Conventions
 
 Format Go with `gofmt`; use tabs, lowercase packages, and conventional

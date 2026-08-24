@@ -36,6 +36,12 @@ type fakeDB struct {
 	pathEventTotal      int64
 	pathEventTruncated  bool
 	agents              []store.AgentListInfo
+	lastAgentQuery      store.AgentInventoryFilter
+	agentQuerySummary   store.AgentInventorySummary
+	operationalTargets  []store.OperationalTargetInfo
+	lastTargetQuery     store.TargetInventoryFilter
+	targetQuerySummary  store.TargetInventorySummary
+	targetScopeSummary  store.TargetInventorySummary
 	networks            []store.NetworkAdminInfo
 	agentHealth         []store.AgentHealthBucket
 	// probe type the last AgentHealthSeries call was told to exclude
@@ -385,6 +391,20 @@ func (f *fakeDB) ListSites(_ context.Context, networks []uuid.UUID) ([]store.Sit
 func (f *fakeDB) ListAgents(_ context.Context, networks []uuid.UUID) ([]store.AgentListInfo, error) {
 	f.recordScope("ListAgents", networks)
 	return f.agents, nil
+}
+func (f *fakeDB) QueryAgents(_ context.Context, filter store.AgentInventoryFilter) ([]store.AgentListInfo, store.AgentInventorySummary, error) {
+	f.recordScope("QueryAgents", filter.Networks)
+	f.lastAgentQuery = filter
+	start := min(filter.Offset, len(f.agents))
+	end := min(start+filter.Limit, len(f.agents))
+	return f.agents[start:end], f.agentQuerySummary, nil
+}
+func (f *fakeDB) QueryOperationalTargets(_ context.Context, filter store.TargetInventoryFilter) ([]store.OperationalTargetInfo, store.TargetInventorySummary, store.TargetInventorySummary, error) {
+	f.recordScope("QueryOperationalTargets", filter.Networks)
+	f.lastTargetQuery = filter
+	start := min(filter.Offset, len(f.operationalTargets))
+	end := min(start+filter.Limit, len(f.operationalTargets))
+	return f.operationalTargets[start:end], f.targetQuerySummary, f.targetScopeSummary, nil
 }
 func (f *fakeDB) AgentHealthSeries(_ context.Context, _, _ time.Duration, excludeProbeType int16, networks []uuid.UUID) ([]store.AgentHealthBucket, error) {
 	f.recordScope("AgentHealthSeries", networks)
@@ -1725,6 +1745,163 @@ func TestAgentsHealthFields(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("agents body missing %s: %s", want, body)
 		}
+	}
+	var legacy map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if len(legacy) != 1 || legacy["page"] != nil || legacy["summary"] != nil {
+		t.Errorf("legacy agents top-level shape = %v", legacy)
+	}
+	if _, present := legacy["agents"].([]any)[0].(map[string]any)["health"]; present {
+		t.Errorf("legacy agent unexpectedly carries health: %v", legacy)
+	}
+}
+
+func TestAgentsQueryMode(t *testing.T) {
+	f := newFakeDB()
+	netID := uuid.New()
+	f.networks = append(f.networks, store.NetworkAdminInfo{ID: netID, Name: "corp"})
+	f.agents = []store.AgentListInfo{{
+		ID: uuid.New(), Site: "lon", Network: "corp", Hostname: "edge",
+		Health: store.AgentHealthDegraded,
+	}}
+	f.agentQuerySummary = store.AgentInventorySummary{Total: 3, Degraded: 2, Healthy: 1}
+	h := newTestAPI(t, f)
+	cookie, _ := loginAndCookie(t, h, f)
+
+	req := httptest.NewRequest("GET",
+		"/api/v1/agents?network=corp&q=%20edge%20&health=degraded&sort=version&order=desc&limit=1&offset=0", nil)
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("query agents = %d %s", w.Code, w.Body)
+	}
+	filter := f.lastAgentQuery
+	if filter.Query != "edge" || filter.Health != store.AgentHealthDegraded ||
+		filter.Sort != "version" || filter.Order != "desc" || filter.Limit != 1 ||
+		filter.Offset != 0 || !slices.Equal(filter.Networks, []uuid.UUID{netID}) {
+		t.Errorf("agent store filter = %+v", filter)
+	}
+	var body struct {
+		Agents  []map[string]any `json:"agents"`
+		Page    listPageJSON     `json:"page"`
+		Summary agentSummaryJSON `json:"summary"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Agents) != 1 || body.Agents[0]["health"] != store.AgentHealthDegraded {
+		t.Errorf("query agents body = %+v", body)
+	}
+	if body.Page != (listPageJSON{Limit: 1, Total: 3, HasMore: true}) ||
+		body.Summary != (agentSummaryJSON{Total: 3, Degraded: 2, Healthy: 1}) {
+		t.Errorf("agent metadata = page %+v summary %+v", body.Page, body.Summary)
+	}
+
+	req = httptest.NewRequest("GET", "/api/v1/agents?q=edge", nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK || f.lastAgentQuery.Sort != "health" ||
+		f.lastAgentQuery.Order != "asc" || f.lastAgentQuery.Limit != 100 {
+		t.Errorf("agent query defaults = %d %+v", w.Code, f.lastAgentQuery)
+	}
+}
+
+func TestAgentAndTargetQueriesRejectInvalidListParams(t *testing.T) {
+	f := newFakeDB()
+	h := newTestAPI(t, f)
+	cookie, _ := loginAndCookie(t, h, f)
+	for _, path := range []string{
+		"/api/v1/agents?health=bogus",
+		"/api/v1/agents?sort=bogus",
+		"/api/v1/targets?kind=bogus",
+		"/api/v1/targets?status=healthy",
+		"/api/v1/targets?limit=101",
+	} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest("GET", path, nil)
+			req.AddCookie(cookie)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+			if w.Code != http.StatusBadRequest || !strings.HasPrefix(w.Body.String(), `{"error":`) {
+				t.Errorf("%s = %d %s, want uniform 400", path, w.Code, w.Body)
+			}
+		})
+	}
+}
+
+func TestOperationalTargetsQuery(t *testing.T) {
+	f := newFakeDB()
+	netID, agentID := uuid.New(), uuid.New()
+	f.networks = append(f.networks, store.NetworkAdminInfo{ID: netID, Name: "corp"})
+	site, hostname := "lon", "edge"
+	f.operationalTargets = []store.OperationalTargetInfo{{
+		ID: uuid.New(), Kind: "agent", Name: "agent:" + agentID.String(),
+		Network: "corp", CreatedAt: time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC),
+		ProbeCount: 4, EnabledProbeCount: 3, ProbingSites: []string{"nyc", "sfo"},
+		OpenIncidents: 1, Status: store.TargetStatusIncident,
+		AgentID: &agentID, AgentSite: &site, AgentHostname: &hostname,
+	}}
+	f.targetQuerySummary = store.TargetInventorySummary{
+		Total: 4, External: 2, Agent: 2, Incident: 1,
+		Unprobed: 1, NoIncidents: 2,
+	}
+	f.targetScopeSummary = store.TargetInventorySummary{
+		Total: 8, External: 3, Agent: 5, Incident: 3,
+		Unprobed: 2, NoIncidents: 3,
+	}
+	h := newTestAPI(t, f)
+	cookie, _ := loginAndCookie(t, h, f)
+
+	req := httptest.NewRequest("GET", "/api/v1/targets", nil)
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK || f.lastTargetQuery.Sort != "name" ||
+		f.lastTargetQuery.Order != "asc" || f.lastTargetQuery.Limit != 100 {
+		t.Fatalf("default operational targets = %d filter %+v body %s", w.Code, f.lastTargetQuery, w.Body)
+	}
+	var body struct {
+		Targets      []operationalTargetJSON `json:"targets"`
+		Page         listPageJSON            `json:"page"`
+		Summary      targetSummaryJSON       `json:"summary"`
+		ScopeSummary targetSummaryJSON       `json:"scope_summary"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Targets) != 1 || body.Targets[0].AgentID == nil ||
+		*body.Targets[0].AgentID != agentID.String() ||
+		!slices.Equal(body.Targets[0].ProbingSites, []string{"nyc", "sfo"}) ||
+		body.Targets[0].OpenIncidents != 1 {
+		t.Errorf("operational target body = %+v", body)
+	}
+	if body.Page != (listPageJSON{Limit: 100, Total: 4}) ||
+		body.Summary != (targetSummaryJSON{
+			Total: 4, External: 2, Agent: 2, Incident: 1,
+			Unprobed: 1, NoIncidents: 2,
+		}) || body.ScopeSummary != (targetSummaryJSON{
+		Total: 8, External: 3, Agent: 5, Incident: 3,
+		Unprobed: 2, NoIncidents: 3,
+	}) {
+		t.Errorf("target metadata = page %+v summary %+v scope summary %+v",
+			body.Page, body.Summary, body.ScopeSummary)
+	}
+
+	req = httptest.NewRequest("GET",
+		"/api/v1/targets?network=corp&q=lon&kind=agent&status=incident&sort=probes&order=desc&limit=1&offset=0", nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	filter := f.lastTargetQuery
+	if w.Code != http.StatusOK || filter.Query != "lon" || filter.Kind != "agent" ||
+		filter.Status != store.TargetStatusIncident || filter.Sort != "probes" ||
+		filter.Order != "desc" || filter.Limit != 1 || !filter.RequireScopedActivity ||
+		!slices.Equal(filter.Networks, []uuid.UUID{netID}) {
+		t.Errorf("explicit target query = %d %+v %s", w.Code, filter, w.Body)
 	}
 }
 
