@@ -1,9 +1,10 @@
 import { Fragment, useState } from 'react'
-import { apiDelete } from '../api'
+import { apiDelete, apiGet } from '../api'
 import type { Caps } from '../caps'
 import { fmtAgo } from '../format'
 import type { PlaneChoice } from '../plane'
 import { initialPlane, planeReady } from '../plane'
+import { useSettingsDraft, useSettingsMutation } from '../settingsMutation'
 import type { NetworkThreshold, SettingsResponse } from '../types'
 import ConfirmButton from './ConfirmButton'
 import PlaneField from './PlaneField'
@@ -42,9 +43,16 @@ export default function NetworkThresholdsPanel({
   onAuthError: (err: unknown) => void
 }) {
   const [editKey, setEditKey] = useState<string | null>(null)
+  const [editDirty, setEditDirty] = useState(false)
   const [adding, setAdding] = useState(false)
   const [addNetworkDraft, setAddNetwork] = useState<string | null>(null)
   const [rowError, setRowError] = useState('')
+  const feedback = useSettingsMutation()
+  useSettingsDraft('new-network-thresholds', 'New network thresholds', adding && addNetworkDraft !== null, () => {
+    setAdding(false)
+    setAddNetwork(null)
+    setRowError('')
+  })
 
   const global = settings.thresholds
   const defaults = settings.network_defaults
@@ -66,10 +74,13 @@ export default function NetworkThresholdsPanel({
     setRowError('')
     try {
       await apiDelete(networkThresholdURL(d.network))
+      feedback.success(`Network thresholds for ${d.network} deleted.`)
       onChanged()
     } catch (err) {
       onAuthError(err)
-      setRowError(err instanceof Error ? err.message : String(err))
+      const message = err instanceof Error ? err.message : String(err)
+      setRowError(message)
+      feedback.error(`Network thresholds for ${d.network} were not deleted: ${message}`)
     }
   }
 
@@ -136,13 +147,31 @@ export default function NetworkThresholdsPanel({
                           type="button"
                           className="secondary-button"
                           aria-expanded={editKey === d.network}
-                          onClick={() => setEditKey(editKey === d.network ? null : d.network)}
+                          onClick={() => {
+                            if (editKey === d.network && editDirty) {
+                              feedback.confirm({
+                                action: 'Discard changes',
+                                resource: `Network thresholds for ${d.network}`,
+                                consequence: 'This closes the editor and discards your local threshold changes.',
+                                confirmLabel: 'Discard',
+                                cancelLabel: 'Stay',
+                                onConfirm: () => {
+                                  setEditKey(null)
+                                  setEditDirty(false)
+                                },
+                              })
+                              return
+                            }
+                            setEditKey(editKey === d.network ? null : d.network)
+                            setEditDirty(false)
+                          }}
                         >
                           {editKey === d.network ? 'Close' : 'Edit'}
                         </button>
                         <ConfirmButton
                           label="Delete"
-                          confirmLabel="Confirm? Network returns to global thresholds"
+                          resource={`Network thresholds for ${d.network}`}
+                          consequence="This network will return to the global thresholds."
                           onConfirm={() => void remove(d)}
                         />
                       </td>
@@ -155,6 +184,7 @@ export default function NetworkThresholdsPanel({
                           <h3 className="eyebrow">Edit defaults · {d.network}</h3>
                           <ThresholdOverrideForm
                             url={networkThresholdURL(d.network)}
+                            resource={`Network thresholds for ${d.network}`}
                             override={d}
                             inherited={global}
                             canWrite={canWrite}
@@ -164,6 +194,11 @@ export default function NetworkThresholdsPanel({
                               onChanged()
                             }}
                             onAuthError={onAuthError}
+                            loadLatest={async () => {
+                              const latest = await apiGet<SettingsResponse>('/api/v1/settings')
+                              return latest.network_defaults.find((item) => item.network === d.network) ?? null
+                            }}
+                            onDirtyChange={setEditDirty}
                           />
                         </div>
                       </td>
@@ -205,6 +240,7 @@ export default function NetworkThresholdsPanel({
               {addable && (
                 <ThresholdOverrideForm
                   url={networkThresholdURL(addNetwork)}
+                  resource={`Network thresholds for ${addNetwork}`}
                   override={null}
                   inherited={global}
                   canWrite={canWrite}
@@ -215,6 +251,10 @@ export default function NetworkThresholdsPanel({
                     onChanged()
                   }}
                   onAuthError={onAuthError}
+                  loadLatest={async () => {
+                    const latest = await apiGet<SettingsResponse>('/api/v1/settings')
+                    return latest.network_defaults.find((item) => item.network === addNetwork) ?? null
+                  }}
                 />
               )}
               {!addable && (

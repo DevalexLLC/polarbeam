@@ -9,6 +9,8 @@ import {
   routeNumberParam,
   routeParam,
   routeEventHref,
+  routeChangeDiscardsSettingsDraft,
+  setRouteNavigationBlocker,
   subscribeRouteState,
   targetDetailHref,
   targetInventoryHref,
@@ -28,7 +30,7 @@ test('legacy route paths canonicalize without losing selection', () => {
   assert.equal(canonicalizeRouteHash('#/outages?status=resolved').hash, '#/incidents?status=resolved')
   assert.equal(canonicalizeRouteHash('#/paths?q=ny').hash, '#/routes?q=ny')
   assert.equal(canonicalizeRouteHash('#/agents/a%2Fb').hash, '#/agents?agent=a%2Fb')
-  assert.equal(canonicalizeRouteHash('#/settings/probes').hash, '#/settings?section=probes')
+  assert.equal(canonicalizeRouteHash('#/settings/probes').hash, '#/settings?section=monitoring&subsection=probes')
 })
 
 test('unknown and malformed target paths remain recoverable routes', () => {
@@ -81,18 +83,22 @@ test('route schemas preserve each supported view state in stable order', () => {
   )
   assert.equal(canonicalizeRouteHash('#/pair/ny/lon?window=365d').hash, '#/pair/ny/lon?window=365d')
   assert.equal(
-    canonicalizeRouteHash('#/settings?probe=p1&site=s1&subsection=direct&section=probes').hash,
-    '#/settings?section=probes&subsection=direct&probe=p1',
+    canonicalizeRouteHash('#/settings?probe=p1&site=s1&section=probes').hash,
+    '#/settings?section=monitoring&subsection=probes&probe=p1',
   )
   assert.equal(
     canonicalizeRouteHash(
-      '#/settings?section=probes&type=dns&enabled=false&mode=direct&page=3&order=desc&sort=updated&q=ny&probe=p1',
+      '#/settings?section=monitoring&subsection=probes&type=dns&enabled=false&mode=direct&page=3&order=desc&sort=updated&q=ny&probe=p1',
     ).hash,
-    '#/settings?section=probes&q=ny&page=3&order=desc&sort=updated&mode=direct&enabled=false&type=dns&probe=p1',
+    '#/settings?section=monitoring&subsection=probes&q=ny&page=3&order=desc&sort=updated&mode=direct&enabled=false&type=dns&probe=p1',
   )
   assert.equal(
     canonicalizeRouteHash('#/settings?section=sites&site=site-id&page=2&sort=agents&q=lon').hash,
-    '#/settings?section=sites&q=lon&page=2&sort=agents&site=site-id',
+    '#/settings?section=infrastructure&subsection=sites&q=lon&page=2&sort=agents&site=site-id',
+  )
+  assert.equal(
+    canonicalizeRouteHash('#/settings?section=access&subsection=banner').hash,
+    '#/settings?section=access&subsection=users',
   )
 })
 
@@ -172,6 +178,61 @@ test('incident expansion follows browser Back and Forward history', () => {
     if (windowDescriptor) Object.defineProperty(globalThis, 'window', windowDescriptor)
     else delete globalThis.window
   }
+})
+
+test('route mutations stop at the installed dirty-form blocker', () => {
+  const locationDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'location')
+  const historyDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'history')
+  const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  const browserWindow = new EventTarget()
+  const browserLocation = { hash: '#/settings?section=monitoring&subsection=thresholds' }
+  const browserHistory = {
+    pushState(_state, _title, hash) {
+      browserLocation.hash = hash
+    },
+    replaceState(_state, _title, hash) {
+      browserLocation.hash = hash
+    },
+  }
+  Object.defineProperty(globalThis, 'location', { configurable: true, value: browserLocation })
+  Object.defineProperty(globalThis, 'history', { configurable: true, value: browserHistory })
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: browserWindow })
+  try {
+    let attempted = ''
+    setRouteNavigationBlocker((hash) => {
+      attempted = hash
+      return false
+    })
+    const result = updateRouteParams({ section: 'appearance', subsection: 'banner' })
+    assert.equal(attempted, '#/settings?section=appearance&subsection=banner')
+    assert.equal(result, '#/settings?section=monitoring&subsection=thresholds')
+    assert.equal(browserLocation.hash, '#/settings?section=monitoring&subsection=thresholds')
+  } finally {
+    setRouteNavigationBlocker(null)
+    if (locationDescriptor) Object.defineProperty(globalThis, 'location', locationDescriptor)
+    else delete globalThis.location
+    if (historyDescriptor) Object.defineProperty(globalThis, 'history', historyDescriptor)
+    else delete globalThis.history
+    if (windowDescriptor) Object.defineProperty(globalThis, 'window', windowDescriptor)
+    else delete globalThis.window
+  }
+})
+
+test('dirty settings drafts allow local URL state but guard destructive context changes', () => {
+  const site = '#/settings?section=infrastructure&subsection=sites&site=site-1'
+  assert.equal(routeChangeDiscardsSettingsDraft(site, site + '&q=lon&page=2'), false)
+  assert.equal(routeChangeDiscardsSettingsDraft(site, '#/settings?section=infrastructure&subsection=sites&q=lon'), true)
+  assert.equal(
+    routeChangeDiscardsSettingsDraft(site, '#/settings?section=monitoring&subsection=targets&site=site-1'),
+    true,
+  )
+  assert.equal(
+    routeChangeDiscardsSettingsDraft(
+      site,
+      '#/settings?network=blue&section=infrastructure&subsection=sites&site=site-1',
+    ),
+    true,
+  )
 })
 
 test('typed readers use canonical values and safe integer fallbacks', () => {

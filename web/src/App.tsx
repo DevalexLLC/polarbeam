@@ -11,7 +11,8 @@ import {
   subscribeRouteState,
   updateRouteParams,
 } from './routeState'
-import { SETTINGS_TABS, canOpenSettings, resolveTab } from './settingsTabs'
+import { SETTINGS_TABS, canOpenSettings, resolveTab, settingsTabDef } from './settingsTabs'
+import { useSettingsMutation } from './settingsMutation'
 import type { SettingsTab } from './settingsTabs'
 import type { AuthProviders, LoginResponse, NetworksConfigResponse, UIBanner, User } from './types'
 import BannerFrame from './components/BannerFrame'
@@ -82,7 +83,10 @@ function parseHash(hash: string): Route {
     // open is a question only answerable once the session is known, so it is
     // resolved at render (resolveTab) rather than here: parseHash runs from
     // a useState initializer before /auth/me returns.
-    return { view: 'settings', tab: routeParam(hash, 'section') || decodeSegment(parts[1] ?? '') }
+    return {
+      view: 'settings',
+      tab: routeParam(hash, 'subsection') || routeParam(hash, 'section') || decodeSegment(parts[1] ?? ''),
+    }
   }
   return { view: 'not-found', path: parts.map(decodeSegment).join('/') }
 }
@@ -112,6 +116,7 @@ function routeTitle(route: Route, settingsTab: SettingsTab | null): string {
 }
 
 export default function App() {
+  const { clearNotifications, guardAction } = useSettingsMutation()
   const [booted, setBooted] = useState(false)
   const [user, setUser] = useState<User | null>(null)
   const [serverVersion, setServerVersion] = useState('')
@@ -284,6 +289,7 @@ export default function App() {
   // tree at that moment anyway. A store would add a global that can drift
   // from `user`, and would make logout ordering a correctness bug.
   const caps = useMemo(() => (user ? capsOf(user) : null), [user])
+  useEffect(() => clearNotifications(), [clearNotifications, user])
   const primaryNavigation = PRIMARY_NAVIGATION.map((item) => ({
     ...item,
     href: inheritRouteNetwork(item.href),
@@ -310,7 +316,8 @@ export default function App() {
   useEffect(() => {
     if (route.view !== 'settings' || settingsTab === null) return
     if (route.tab === settingsTab) return
-    updateRouteParams({ section: settingsTab === 'thresholds' ? null : settingsTab }, 'replace')
+    const destination = settingsTabDef(settingsTab)
+    updateRouteParams({ section: destination.group, subsection: destination.tab }, 'replace')
     setRoute({ view: 'settings', tab: settingsTab })
   }, [route, settingsTab])
 
@@ -439,7 +446,7 @@ export default function App() {
                     Change password
                   </button>
                 )}
-                <button type="button" onClick={logout}>
+                <button type="button" onClick={() => guardAction(() => void logout())}>
                   Log out
                 </button>
               </div>

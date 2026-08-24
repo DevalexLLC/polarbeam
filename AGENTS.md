@@ -40,6 +40,13 @@ sorts, or row selections must use that module rather than component state or
 local storage: discrete actions push history, debounced text input replaces
 the current entry, and default or invalid values are omitted.
 
+Settings navigation uses canonical `section` group and `subsection` tab
+parameters from `web/src/settingsTabs.ts`. Every editable Settings surface
+must register drafts through `web/src/settingsMutation.tsx`, use its shared
+toast and confirmation services, and compare a freshly fetched server value
+with the loaded snapshot immediately before a full-state update. Never merge
+or force-save a concurrent edit; offer the confirmed server-version reload.
+
 Pair and target uPlot charts share investigation-range behavior through
 `web/src/components/Chart.tsx` and pure reconciliation in
 `web/src/chartRange.ts`. Every caller must pass a context key containing all

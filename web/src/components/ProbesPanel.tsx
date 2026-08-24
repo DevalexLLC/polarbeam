@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { apiDelete, apiGet, apiPost, apiPut } from '../api'
+import { ApiError, apiDelete, apiGet, apiPost, apiPut } from '../api'
 import { fmtAgo } from '../format'
 import { useNetworkFilter } from '../networkFilter'
 import { updateRouteParams } from '../routeState'
+import { useConcurrentSettingsDraft, useSettingsMutation } from '../settingsMutation'
+import { serverSnapshotChanged } from '../settingsSnapshot'
 import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
 import type {
   MeshesConfigResponse,
@@ -47,6 +49,12 @@ interface ProbeDraft {
   params: Record<string, string>
 }
 
+interface ProbeEditSnapshot {
+  exists: boolean
+  draft: ProbeDraft
+  enabled: boolean
+}
+
 function newDraft(plane: string): ProbeDraft {
   return {
     mode: 'mesh',
@@ -76,6 +84,17 @@ function draftFrom(p: ProbeConfig): ProbeDraft {
     trainCount: p.train_count ? String(p.train_count) : '',
     trainSpacingMs: p.train_spacing_ms ? String(p.train_spacing_ms) : '',
     params: { ...p.params },
+  }
+}
+
+function mutationSnapshot(p: ProbeConfig) {
+  return {
+    interval_ms: p.interval_ms,
+    timeout_ms: p.timeout_ms,
+    train_count: p.train_count,
+    train_spacing_ms: p.train_spacing_ms,
+    params: p.params,
+    enabled: p.enabled,
   }
 }
 
@@ -229,7 +248,6 @@ export default function ProbesPanel({
   // Create form
   const [draft, setDraft] = useState<ProbeDraft | null>(null)
   const [formErrors, setFormErrors] = useState<string[]>([])
-  const [savedFlash, setSavedFlash] = useState(false)
   const [warnings, setWarnings] = useState<string[]>([])
 
   // Inline edit
@@ -238,6 +256,45 @@ export default function ProbesPanel({
   const [editErrors, setEditErrors] = useState<string[]>([])
   const scrolledProbe = useRef<string | null>(null)
   const pinnedProbe = useRef<string | null>(selectedProbe)
+  const feedback = useSettingsMutation()
+  const blankProbe = newDraft(initialPlane(plane))
+  const createGuard = useConcurrentSettingsDraft({
+    id: 'new-probe',
+    label: 'New probe',
+    loaded: blankProbe,
+    current: draft ?? blankProbe,
+    editing: draft !== null,
+    discard: () => {
+      setDraft(null)
+      setFormErrors([])
+    },
+    reload: setDraft,
+  })
+  const loadedEditProbe = editID ? data?.probes.find((probe) => probe.id === editID) : undefined
+  const loadedEdit: ProbeEditSnapshot | null = loadedEditProbe
+    ? { exists: true, draft: draftFrom(loadedEditProbe), enabled: loadedEditProbe.enabled }
+    : null
+  const currentEdit: ProbeEditSnapshot | null =
+    editDraft && loadedEdit ? { ...loadedEdit, draft: editDraft } : loadedEdit
+  const editGuard = useConcurrentSettingsDraft({
+    id: `probe-edit:${editID ?? 'none'}`,
+    label: loadedEditProbe ? `Probe ${assignmentLabel(loadedEditProbe)}` : 'Probe',
+    loaded: loadedEdit,
+    current: currentEdit,
+    editing: editDraft !== null,
+    discard: () => {
+      setEditID(null)
+      setEditDraft(null)
+      setEditErrors([])
+    },
+    reload: (latest) => {
+      if (latest.exists) setEditDraft(latest.draft)
+      else {
+        setEditID(null)
+        setEditDraft(null)
+      }
+    },
+  })
 
   if (!selectedProbe) pinnedProbe.current = null
   else if (pinnedProbe.current !== selectedProbe) {
@@ -351,7 +408,10 @@ export default function ProbesPanel({
     const specs = paramSpecsFor(registry, draft.type, draft.mode)
     const { errors, body } = validate(draft, specs)
     setFormErrors(errors)
-    if (!body) return
+    if (!body) {
+      feedback.error(`New probe: ${errors.join('; ')}`)
+      return
+    }
     setBusy(true)
     try {
       // A mesh template inherits its mesh's plane and the server rejects
@@ -375,11 +435,13 @@ export default function ProbesPanel({
       // until the next create, since the form closes on success.
       setWarnings(res.warnings ?? [])
       setDraft(null)
-      setSavedFlash(true)
+      feedback.success(res.warnings?.length ? 'Probe added with warnings.' : 'Probe added.')
       await reload()
     } catch (err) {
       onAuthError(err)
-      setFormErrors([err instanceof Error ? err.message : String(err)])
+      const message = err instanceof Error ? err.message : String(err)
+      setFormErrors([message])
+      feedback.error(`Probe was not added: ${message}`)
     } finally {
       setBusy(false)
     }
@@ -390,9 +452,24 @@ export default function ProbesPanel({
     const specs = paramSpecsFor(registry, p.type, p.mesh ? 'mesh' : 'direct')
     const { errors, body } = validate(editDraft, specs)
     setEditErrors(errors)
-    if (!body) return
+    if (!body) {
+      feedback.error(`Probe ${assignmentLabel(p)}: ${errors.join('; ')}`)
+      return
+    }
     setBusy(true)
     try {
+      const currentServer = await editGuard.checkForConflict(async () => {
+        try {
+          const latest = await apiGet<ProbeConfig>('/api/v1/config/probes/' + p.id)
+          return { exists: true, draft: draftFrom(latest), enabled: latest.enabled }
+        } catch (requestError) {
+          if (requestError instanceof ApiError && requestError.status === 404) {
+            return { exists: false, draft: newDraft(initialPlane(plane)), enabled: false }
+          }
+          throw requestError
+        }
+      })
+      if (!currentServer) return
       const res = await apiPut<{ warnings?: string[] }>('/api/v1/config/probes/' + p.id, {
         ...body,
         enabled: p.enabled,
@@ -403,11 +480,15 @@ export default function ProbesPanel({
       setWarnings(res.warnings ?? [])
       setEditID(null)
       setEditDraft(null)
+      editGuard.release()
       onSelectedProbe('', 'replace')
+      feedback.success(res.warnings?.length ? 'Probe saved with warnings.' : 'Probe saved.')
       await reload()
     } catch (err) {
       onAuthError(err)
-      setEditErrors([err instanceof Error ? err.message : String(err)])
+      const message = err instanceof Error ? err.message : String(err)
+      setEditErrors([message])
+      feedback.error(`Probe was not saved: ${message}`)
     } finally {
       setBusy(false)
     }
@@ -417,22 +498,41 @@ export default function ProbesPanel({
     setBusy(true)
     setRowError('')
     try {
+      let latest: ProbeConfig
+      try {
+        latest = await apiGet<ProbeConfig>('/api/v1/config/probes/' + p.id)
+      } catch (requestError) {
+        if (requestError instanceof ApiError && requestError.status === 404) {
+          feedback.conflict(`Probe ${assignmentLabel(p)}`, () => void reload())
+          return
+        }
+        throw requestError
+      }
+      if (serverSnapshotChanged(mutationSnapshot(p), mutationSnapshot(latest))) {
+        feedback.conflict(`Probe ${assignmentLabel(p)}`, () => {
+          setData((current) =>
+            current
+              ? { ...current, probes: current.probes.map((probe) => (probe.id === latest.id ? latest : probe)) }
+              : current,
+          )
+        })
+        return
+      }
       const res = await apiPut<{ warnings?: string[] }>('/api/v1/config/probes/' + p.id, {
-        interval_ms: p.interval_ms,
-        timeout_ms: p.timeout_ms,
-        train_count: p.train_count,
-        train_spacing_ms: p.train_spacing_ms,
-        params: p.params,
+        ...mutationSnapshot(latest),
         enabled: nextEnabled,
       })
       // Re-enabling a probe configured before the advisory existed is the
       // one moment an upgraded installation hears about it, so this write
       // reports warnings like the others.
       setWarnings(res.warnings ?? [])
+      feedback.success(nextEnabled ? 'Probe enabled.' : 'Probe disabled.')
       await reload()
     } catch (err) {
       onAuthError(err)
-      setRowError(err instanceof Error ? err.message : String(err))
+      const message = err instanceof Error ? err.message : String(err)
+      setRowError(message)
+      feedback.error(`Probe state was not changed: ${message}`)
     } finally {
       setBusy(false)
     }
@@ -443,11 +543,19 @@ export default function ProbesPanel({
     setRowError('')
     try {
       await apiDelete('/api/v1/config/probes/' + p.id)
-      if (selectedProbe === p.id) onSelectedProbe('', 'replace')
+      if (selectedProbe === p.id) {
+        editGuard.release()
+        setEditID(null)
+        setEditDraft(null)
+        onSelectedProbe('', 'replace')
+      }
+      feedback.success('Probe deleted.')
       await reload()
     } catch (err) {
       onAuthError(err)
-      setRowError(err instanceof Error ? err.message : String(err))
+      const message = err instanceof Error ? err.message : String(err)
+      setRowError(message)
+      feedback.error(`Probe was not deleted: ${message}`)
     } finally {
       setBusy(false)
     }
@@ -531,7 +639,6 @@ export default function ProbesPanel({
           placeholder={placeholder}
           disabled={busy}
           onChange={(e) => {
-            setSavedFlash(false)
             set((prev) => ({ ...prev, [key]: e.target.value }))
           }}
         />
@@ -714,7 +821,7 @@ export default function ProbesPanel({
         )}
         <div className="threshold-foot">
           <span className="hint">Edits keep the probe's series history and incident state.</span>
-          <button className="primary" disabled={busy} onClick={() => saveEdit(probe)}>
+          <button className="primary" disabled={busy || !editGuard.dirty} onClick={() => saveEdit(probe)}>
             {busy ? 'Saving…' : 'Save changes'}
           </button>
         </div>
@@ -880,17 +987,32 @@ export default function ProbesPanel({
                       >
                         Edit
                       </button>
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        disabled={busy}
-                        onClick={() => setEnabled(probe, !probe.enabled)}
-                      >
-                        {probe.enabled ? 'Disable' : 'Enable'}
-                      </button>
+                      {probe.enabled ? (
+                        <ConfirmButton
+                          label="Disable"
+                          resource={`Probe ${assignmentLabel(probe)}`}
+                          consequence="This stops new measurements and may close incidents that depend on this probe."
+                          disabled={busy}
+                          onConfirm={() => setEnabled(probe, false)}
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          disabled={busy}
+                          onClick={() => setEnabled(probe, true)}
+                        >
+                          Enable
+                        </button>
+                      )}
                       <ConfirmButton
                         label="Delete"
-                        confirmLabel={probe.mesh ? 'Confirm? Removes every expanded pair series' : 'Confirm delete?'}
+                        resource={`Probe ${assignmentLabel(probe)}`}
+                        consequence={
+                          probe.mesh
+                            ? 'This removes every expanded pair workload and retires their measurement series.'
+                            : 'This permanently removes the probe and retires its measurement series.'
+                        }
                         disabled={busy}
                         onConfirm={() => remove(probe)}
                       />
@@ -1032,10 +1154,11 @@ export default function ProbesPanel({
             <div className="threshold-foot">
               <span className="hint">Agents at the affected sites start probing within ~30 seconds.</span>
               <span className="threshold-actions">
-                {savedFlash && <span className="hint">saved</span>}
                 <button
                   className="primary"
-                  disabled={busy || !draft || (createDraft.mode === 'direct' && !planeReady(plane))}
+                  disabled={
+                    busy || !draft || !createGuard.dirty || (createDraft.mode === 'direct' && !planeReady(plane))
+                  }
                   onClick={create}
                 >
                   {busy ? 'Saving…' : 'Add probe'}

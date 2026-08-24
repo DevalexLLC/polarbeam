@@ -4,6 +4,7 @@ import RoleWall from './RoleWall'
 import SettingsPageError from './SettingsPageError'
 import { apiGet, apiPut } from '../api'
 import { fmtAgo } from '../format'
+import { useConcurrentSettingsDraft, useSettingsMutation } from '../settingsMutation'
 import type { BannerSettings, BannerSettingsPut, UIBanner } from '../types'
 
 const POLL_MS = 30_000
@@ -46,7 +47,21 @@ export default function BannerSettingsPanel({
   const [draft, setDraft] = useState<Draft | null>(null)
   const [formErrors, setFormErrors] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
-  const [savedFlash, setSavedFlash] = useState(false)
+  const feedback = useSettingsMutation()
+  const loadedDraft = data ? draftFrom(data) : null
+  const current = draft ?? loadedDraft
+  const guard = useConcurrentSettingsDraft({
+    id: 'banner',
+    label: 'Screen banner',
+    loaded: loadedDraft,
+    current,
+    editing: draft !== null,
+    discard: () => {
+      setDraft(null)
+      setFormErrors([])
+    },
+    reload: setDraft,
+  })
 
   // Admin-only GET (updated_by usernames), so viewers get a static
   // explanation instead of a doomed fetch.
@@ -97,35 +112,40 @@ export default function BannerSettingsPanel({
       </div>
     )
   }
-
-  const current = draft ?? draftFrom(data)
-  const saved = draftFrom(data)
-  const dirty = current.enabled !== saved.enabled || current.text !== saved.text
+  const form = current ?? draftFrom(data)
 
   const update = (patch: Partial<Draft>) => {
-    setSavedFlash(false)
     setDraft((d) => ({ ...(d ?? draftFrom(data)), ...patch }))
   }
 
   const save = async () => {
-    const { errors, body } = validate(current)
+    const { errors, body } = validate(form)
     setFormErrors(errors)
-    if (errors.length > 0) return
+    if (errors.length > 0) {
+      feedback.error(`Screen banner: ${errors.join('; ')}`)
+      return
+    }
     setSaving(true)
     try {
+      const currentServer = await guard.checkForConflict(async () =>
+        draftFrom(await apiGet<BannerSettings>('/api/v1/settings/ui-banner')),
+      )
+      if (!currentServer) return
       const res = await apiPut<BannerSettings>('/api/v1/settings/ui-banner', body)
       setData(res)
       // Clear the draft so the form resumes following server state (the
       // 30 s poll converges other admins' edits instead of shadowing them).
       setDraft(null)
-      setSavedFlash(true)
+      feedback.success('Screen banner saved.')
       // The bands update instantly for the editing admin; everyone else
       // converges through the app-level 30 s poll. Mirror the open
       // endpoint's redaction: a disabled banner carries no text.
       onSaved({ enabled: res.enabled, text: res.enabled ? res.text : '' })
     } catch (err) {
       onAuthError(err)
-      setFormErrors([err instanceof Error ? err.message : String(err)])
+      const message = err instanceof Error ? err.message : String(err)
+      setFormErrors([message])
+      feedback.error(`Screen banner was not saved: ${message}`)
     } finally {
       setSaving(false)
     }
@@ -164,21 +184,21 @@ export default function BannerSettingsPanel({
             <input
               type="checkbox"
               role="switch"
-              aria-checked={current.enabled}
-              checked={current.enabled}
+              aria-checked={form.enabled}
+              checked={form.enabled}
               disabled={saving}
               onChange={(e) => update({ enabled: e.target.checked })}
             />
             <span className="oidc-enable-copy">
               <span className="oidc-enable-title">Show the banner</span>
               <span className="hint">
-                {current.enabled
+                {form.enabled
                   ? 'Every screen carries the text below, sign-in included.'
                   : 'No banner is shown anywhere.'}
               </span>
             </span>
-            <span className={current.enabled ? 'oidc-enable-state is-on' : 'oidc-enable-state'}>
-              {current.enabled ? 'Enabled' : 'Disabled'}
+            <span className={form.enabled ? 'oidc-enable-state is-on' : 'oidc-enable-state'}>
+              {form.enabled ? 'Enabled' : 'Disabled'}
             </span>
           </label>
           <label className="threshold-field">
@@ -186,7 +206,7 @@ export default function BannerSettingsPanel({
             <span className="threshold-input">
               <input
                 type="text"
-                value={current.text}
+                value={form.text}
                 placeholder="PROPRIETARY"
                 maxLength={MAX_TEXT_CHARS}
                 disabled={saving}
@@ -209,8 +229,7 @@ export default function BannerSettingsPanel({
               {data.updated_by ? ` · last set by ${data.updated_by} ${fmtAgo(data.updated_at)}` : ''}
             </span>
             <span className="threshold-actions">
-              {savedFlash && <span className="hint">saved</span>}
-              <button type="submit" className="primary" disabled={saving || !dirty}>
+              <button type="submit" className="primary" disabled={saving || !guard.dirty}>
                 {saving ? 'Saving…' : 'Save'}
               </button>
             </span>

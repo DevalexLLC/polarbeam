@@ -6,6 +6,7 @@ import type { Caps } from '../caps'
 import { canWriteRow } from '../caps'
 import type { PlaneChoice } from '../plane'
 import { initialPlane, planeReady } from '../plane'
+import { useSettingsDraft, useSettingsMutation } from '../settingsMutation'
 import type { PathThresholdOverride, SettingsResponse, SitesResponse } from '../types'
 import ConfirmButton from './ConfirmButton'
 import PathThresholdEditor, { pathThresholdURL } from './PathThresholdEditor'
@@ -51,12 +52,26 @@ export default function PathThresholdsPanel({
 }) {
   const [siteNames, setSiteNames] = useState<string[]>([])
   const [editKey, setEditKey] = useState<string | null>(null)
+  const [editDirty, setEditDirty] = useState(false)
   const [addA, setAddA] = useState('')
   const [addB, setAddB] = useState('')
   const [addNetworkDraft, setAddNetwork] = useState<string | null>(null)
   const addNetwork = addNetworkDraft ?? initialPlane(plane)
   const [adding, setAdding] = useState(false)
   const [rowError, setRowError] = useState('')
+  const feedback = useSettingsMutation()
+  useSettingsDraft(
+    'new-path-thresholds',
+    'New path threshold override',
+    adding && (addA !== '' || addB !== '' || addNetworkDraft !== null),
+    () => {
+      setAdding(false)
+      setAddA('')
+      setAddB('')
+      setAddNetwork(null)
+      setRowError('')
+    },
+  )
 
   // Site names feed the add-override selects only; whoever may write an
   // override is the audience, and a one-shot fetch is enough — a site
@@ -91,10 +106,13 @@ export default function PathThresholdsPanel({
     setRowError('')
     try {
       await apiDelete(pathThresholdURL(o.a, o.b, o.network))
+      feedback.success(`Path thresholds for ${o.a} ↔ ${o.b} deleted.`)
       onChanged()
     } catch (err) {
       onAuthError(err)
-      setRowError(err instanceof Error ? err.message : String(err))
+      const message = err instanceof Error ? err.message : String(err)
+      setRowError(message)
+      feedback.error(`Path thresholds for ${o.a} ↔ ${o.b} were not deleted: ${message}`)
     }
   }
 
@@ -188,13 +206,31 @@ export default function PathThresholdsPanel({
                                 type="button"
                                 className="secondary-button"
                                 aria-expanded={editKey === key}
-                                onClick={() => setEditKey(editKey === key ? null : key)}
+                                onClick={() => {
+                                  if (editKey === key && editDirty) {
+                                    feedback.confirm({
+                                      action: 'Discard changes',
+                                      resource: `Path thresholds for ${o.a} ↔ ${o.b}`,
+                                      consequence: 'This closes the editor and discards your local threshold changes.',
+                                      confirmLabel: 'Discard',
+                                      cancelLabel: 'Stay',
+                                      onConfirm: () => {
+                                        setEditKey(null)
+                                        setEditDirty(false)
+                                      },
+                                    })
+                                    return
+                                  }
+                                  setEditKey(editKey === key ? null : key)
+                                  setEditDirty(false)
+                                }}
                               >
                                 {editKey === key ? 'Close' : 'Edit'}
                               </button>
                               <ConfirmButton
                                 label="Delete"
-                                confirmLabel="Confirm? Pair returns to inherited thresholds"
+                                resource={`Path thresholds for ${o.a} ↔ ${o.b}`}
+                                consequence="This pair will return to its inherited thresholds."
                                 onConfirm={() => void remove(o)}
                               />
                             </>
@@ -228,6 +264,7 @@ export default function PathThresholdsPanel({
                                 onChanged()
                               }}
                               onAuthError={onAuthError}
+                              onDirtyChange={setEditDirty}
                             />
                           </div>
                         </td>

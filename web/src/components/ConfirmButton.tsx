@@ -1,51 +1,40 @@
-import { useEffect, useRef, useState } from 'react'
-
-// Two-step destructive action: the first click arms the button (label flips
-// to the confirm text carrying the blast radius), the second commits; it
-// disarms itself after a pause. Keyboard-accessible with no modal/overlay
-// machinery, which this codebase deliberately has none of.
-const ARM_MS = 4000
+import { useSettingsMutation } from '../settingsMutation'
 
 export default function ConfirmButton({
   label,
-  confirmLabel,
+  resource,
+  consequence,
   disabled = false,
   title,
   onConfirm,
 }: {
   label: string
-  confirmLabel: string
+  resource: string
+  consequence: string
   disabled?: boolean
   title?: string
   onConfirm: () => void
 }) {
-  const [armed, setArmed] = useState(false)
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-
-  useEffect(() => () => clearTimeout(timer.current), [])
-
-  const click = () => {
-    if (!armed) {
-      setArmed(true)
-      clearTimeout(timer.current)
-      timer.current = setTimeout(() => setArmed(false), ARM_MS)
-      return
-    }
-    clearTimeout(timer.current)
-    setArmed(false)
-    onConfirm()
-  }
+  const { confirm } = useSettingsMutation()
 
   return (
     <button
       type="button"
-      className={'secondary-button inline-confirm' + (armed ? ' armed' : '')}
+      className="secondary-button inline-confirm"
       disabled={disabled}
       title={title}
-      aria-live="polite"
-      onClick={click}
+      onClick={(event) =>
+        confirm({
+          action: label,
+          resource,
+          consequence,
+          confirmLabel: label,
+          onConfirm,
+          trigger: event.currentTarget,
+        })
+      }
     >
-      {armed ? confirmLabel : label}
+      {label}
     </button>
   )
 }

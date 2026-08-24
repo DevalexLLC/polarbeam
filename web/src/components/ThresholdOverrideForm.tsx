@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { apiDelete, apiPut } from '../api'
+import { useConcurrentSettingsDraft, useSettingsMutation } from '../settingsMutation'
 import type { ThresholdOverrideFields, ThresholdSettings } from '../types'
 
 // The shared editor for one row of the threshold stack. Every layer below
@@ -95,6 +96,7 @@ function validate(d: Draft, global: ThresholdSettings): { errors: string[]; body
 
 export default function ThresholdOverrideForm({
   url,
+  resource,
   override,
   inherited,
   canWrite,
@@ -102,10 +104,13 @@ export default function ThresholdOverrideForm({
   onCancel,
   onChanged,
   onAuthError,
+  loadLatest,
+  onDirtyChange,
 }: {
   // The row's own endpoint. Both callers address a single row, so the verb
   // is always PUT and the delete is always this same URL.
   url: string
+  resource: string
   override: ThresholdOverrideFields | null
   // What an empty field falls back to: the layers outside this one, already
   // folded. For a plane-qualified pair row that is the plane's defaults over
@@ -123,58 +128,91 @@ export default function ThresholdOverrideForm({
   // went out of its way to report.
   onChanged: (warnings: string[]) => void
   onAuthError: (err: unknown) => void
+  loadLatest: () => Promise<ThresholdOverrideFields | null>
+  onDirtyChange?: (dirty: boolean) => void
 }) {
   const [draft, setDraft] = useState<Draft | null>(null)
   const [errors, setErrors] = useState<string[]>([])
   const [warnings, setWarnings] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
+  const feedback = useSettingsMutation()
 
   const current = draft ?? draftFrom(override)
+  const guard = useConcurrentSettingsDraft({
+    id: `threshold-override:${url}`,
+    label: resource,
+    loaded: draftFrom(override),
+    current,
+    editing: draft !== null,
+    discard: () => {
+      setDraft(null)
+      setErrors([])
+      setWarnings([])
+    },
+    reload: setDraft,
+  })
+  useEffect(() => {
+    onDirtyChange?.(guard.dirty)
+    return () => onDirtyChange?.(false)
+  }, [guard.dirty, onDirtyChange])
 
-  const save = async () => {
-    const allEmpty = Object.values(current).every((v) => v.trim() === '')
-    if (allEmpty && !override) {
-      setErrors(['set at least one value — empty fields inherit ' + emptyHint])
-      return
-    }
+  const persist = async (remove: boolean) => {
     setSaving(true)
     try {
-      if (allEmpty) {
-        // Every field cleared on an existing row = remove it.
+      const currentServer = await guard.checkForConflict(async () => draftFrom(await loadLatest()))
+      if (!currentServer) return
+      if (remove) {
         await apiDelete(url)
       } else {
         const { errors: errs, body } = validate(current, inherited)
         setErrors(errs)
         if (!body) {
-          setSaving(false)
+          feedback.error(`${resource}: ${errs.join('; ')}`)
           return
         }
-        // The write can succeed WITH caveats: a new network default can
-        // leave this plane's pair rows inverted, and a pair override can
-        // name a plane neither site carries yet. The server reports those
-        // as advisory warnings rather than refusing, so dropping them would
-        // tell the operator "saved" and silently swallow the "but…".
         const res = await apiPut<{ warnings?: string[] }>(url, body)
         if (res?.warnings?.length) {
           setWarnings(res.warnings)
           setDraft(null)
+          feedback.success(`${resource} saved with warnings.`)
           onChanged(res.warnings)
-          setSaving(false)
           return
         }
       }
       setErrors([])
       setWarnings([])
-      // Clear the draft so the form resumes following server state (same
-      // poll-reconciliation contract as the global thresholds form).
       setDraft(null)
+      feedback.success(remove ? `${resource} removed.` : `${resource} saved.`)
       onChanged([])
     } catch (err) {
       onAuthError(err)
-      setErrors([err instanceof Error ? err.message : String(err)])
+      const message = err instanceof Error ? err.message : String(err)
+      setErrors([message])
+      feedback.error(`${resource} was not saved: ${message}`)
     } finally {
       setSaving(false)
     }
+  }
+
+  const save = () => {
+    const allEmpty = Object.values(current).every((v) => v.trim() === '')
+    if (allEmpty && !override) {
+      const message = 'set at least one value — empty fields inherit ' + emptyHint
+      setErrors([message])
+      feedback.error(`${resource}: ${message}`)
+      return
+    }
+    if (allEmpty) {
+      feedback.confirm({
+        action: 'Remove override',
+        resource,
+        consequence: `This removes the row and returns it to ${emptyHint}.`,
+        confirmLabel: 'Remove',
+        onConfirm: () => void persist(true),
+      })
+      return
+    }
+    void persist(false)
   }
 
   const field = (label: string, unit: string, key: keyof Draft, inheritValue: string) => (
@@ -193,9 +231,6 @@ export default function ThresholdOverrideForm({
       </span>
     </label>
   )
-
-  const savedDraft = draftFrom(override)
-  const dirty = (Object.keys(current) as (keyof Draft)[]).some((key) => current[key] !== savedDraft[key])
 
   // threshold-settings-page is load-bearing: the bare .threshold-panel is
   // an absolutely-positioned popover, and this editor always renders
@@ -234,11 +269,29 @@ export default function ThresholdOverrideForm({
           {canWrite ? (
             <span className="threshold-actions">
               {onCancel && (
-                <button type="button" className="secondary-button" onClick={onCancel} disabled={saving}>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => {
+                    if (!guard.dirty) {
+                      onCancel()
+                      return
+                    }
+                    feedback.confirm({
+                      action: 'Discard changes',
+                      resource,
+                      consequence: 'This closes the editor and discards your local threshold changes.',
+                      confirmLabel: 'Discard',
+                      cancelLabel: 'Stay',
+                      onConfirm: onCancel,
+                    })
+                  }}
+                  disabled={saving}
+                >
                   Cancel
                 </button>
               )}
-              <button className="primary" onClick={() => void save()} disabled={saving || !dirty}>
+              <button className="primary" onClick={save} disabled={saving || !guard.dirty}>
                 {saving ? 'Saving…' : 'Save'}
               </button>
             </span>

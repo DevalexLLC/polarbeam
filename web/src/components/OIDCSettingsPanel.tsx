@@ -4,6 +4,7 @@ import RoleWall from './RoleWall'
 import SettingsPageError from './SettingsPageError'
 import { apiGet, apiPost, apiPut } from '../api'
 import { fmtAgo } from '../format'
+import { useConcurrentSettingsDraft, useSettingsMutation } from '../settingsMutation'
 import type { OIDCDiscoveryInfo, OIDCRoleRule, OIDCSettings, OIDCSettingsPut, UnmatchedRole } from '../types'
 
 const POLL_MS = 30_000
@@ -154,11 +155,26 @@ export default function OIDCSettingsPanel({
   const [draft, setDraft] = useState<Draft | null>(null)
   const [formErrors, setFormErrors] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
-  const [savedFlash, setSavedFlash] = useState(false)
   const [warnings, setWarnings] = useState<string[]>([])
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null)
   const testSeq = useRef(0)
+  const feedback = useSettingsMutation()
+  const loadedDraft = data ? draftFrom(data) : null
+  const guardCurrent = draft ?? loadedDraft
+  const guard = useConcurrentSettingsDraft({
+    id: 'authentication',
+    label: 'OpenID Connect settings',
+    loaded: loadedDraft,
+    current: guardCurrent,
+    editing: draft !== null,
+    discard: () => {
+      setDraft(null)
+      setFormErrors([])
+      setWarnings([])
+    },
+    reload: setDraft,
+  })
 
   // Unlike the other config tabs this GET is admin-only (issuer and claim
   // mapping are IdP topology), so viewers get a static explanation instead
@@ -211,21 +227,13 @@ export default function OIDCSettingsPanel({
     )
   }
 
-  const current = draft ?? draftFrom(data)
-  const saved = draftFrom(data)
-  // roleRules is the one structured field: draftFrom copies it, so a
-  // reference compare would report the form permanently dirty. Compare it by
-  // value and the rest identity-wise, as before.
-  const dirty = (Object.keys(current) as (keyof Draft)[]).some((k) =>
-    k === 'roleRules' ? JSON.stringify(current.roleRules) !== JSON.stringify(saved.roleRules) : current[k] !== saved[k],
-  )
+  const current = guardCurrent ?? draftFrom(data)
 
   const updateRule = (i: number, patch: Partial<OIDCRoleRule>) => {
     update({ roleRules: current.roleRules.map((r, j) => (j === i ? { ...r, ...patch } : r)) })
   }
 
   const update = (patch: Partial<Draft>) => {
-    setSavedFlash(false)
     // A discovery result describes the values it was run against — any
     // edit invalidates it, and bumping the sequence drops an in-flight
     // test's late response.
@@ -237,19 +245,30 @@ export default function OIDCSettingsPanel({
   const save = async () => {
     const { errors, body } = validate(current, data, true)
     setFormErrors(errors)
-    if (errors.length > 0) return
+    if (errors.length > 0) {
+      feedback.error(`OpenID Connect settings: ${errors.join('; ')}`)
+      return
+    }
     setSaving(true)
     try {
+      const currentServer = await guard.checkForConflict(async () =>
+        draftFrom(await apiGet<OIDCSettings>('/api/v1/settings/oidc')),
+      )
+      if (!currentServer) return
       const res = await apiPut<OIDCSettings>('/api/v1/settings/oidc', body)
       setWarnings(res.warnings ?? [])
       setData(res)
       // Clear the draft so the form resumes following server state (the
       // 30 s poll converges other admins' edits instead of shadowing them).
       setDraft(null)
-      setSavedFlash(true)
+      feedback.success(
+        res.warnings?.length ? 'OpenID Connect settings saved with warnings.' : 'OpenID Connect settings saved.',
+      )
     } catch (err) {
       onAuthError(err)
-      setFormErrors([err instanceof Error ? err.message : String(err)])
+      const message = err instanceof Error ? err.message : String(err)
+      setFormErrors([message])
+      feedback.error(`OpenID Connect settings were not saved: ${message}`)
     } finally {
       setSaving(false)
     }
@@ -259,10 +278,12 @@ export default function OIDCSettingsPanel({
     const { errors, body } = validate({ ...current, enabled: false }, data, false)
     if (current.issuer.trim() === '') {
       setTestResult({ ok: false, text: 'Enter an issuer URL first.' })
+      feedback.error('OpenID Connect test: enter an issuer URL first.')
       return
     }
     if (errors.length > 0) {
       setFormErrors(errors)
+      feedback.error(`OpenID Connect test: ${errors.join('; ')}`)
       return
     }
     const seq = ++testSeq.current
@@ -272,11 +293,14 @@ export default function OIDCSettingsPanel({
       const info = await apiPost<OIDCDiscoveryInfo>('/api/v1/settings/oidc/test', body)
       if (testSeq.current === seq) {
         setTestResult({ ok: true, text: `Discovery OK — token endpoint ${info.token_endpoint}` })
+        feedback.success('OpenID Connect connection succeeded.')
       }
     } catch (err) {
       onAuthError(err)
       if (testSeq.current === seq) {
-        setTestResult({ ok: false, text: err instanceof Error ? err.message : String(err) })
+        const message = err instanceof Error ? err.message : String(err)
+        setTestResult({ ok: false, text: message })
+        feedback.error(`OpenID Connect connection failed: ${message}`)
       }
     } finally {
       setTesting(false)
@@ -532,11 +556,10 @@ export default function OIDCSettingsPanel({
               {data.updated_by ? ` · last set by ${data.updated_by} ${fmtAgo(data.updated_at)}` : ''}
             </span>
             <span className="threshold-actions">
-              {savedFlash && <span className="hint">saved</span>}
               <button type="button" className="secondary-button" onClick={test} disabled={testing || saving}>
                 {testing ? 'Testing…' : 'Test connection'}
               </button>
-              <button type="submit" className="primary" disabled={saving || !dirty}>
+              <button type="submit" className="primary" disabled={saving || !guard.dirty}>
                 {saving ? 'Saving…' : 'Save'}
               </button>
             </span>
