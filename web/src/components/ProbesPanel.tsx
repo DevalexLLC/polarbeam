@@ -14,6 +14,7 @@ import type { PlaneChoice } from '../plane'
 import { initialPlane, networkField, planeReady } from '../plane'
 import ConfirmButton from './ConfirmButton'
 import PlaneField from './PlaneField'
+import SettingsPageError from './SettingsPageError'
 
 const POLL_MS = 30_000
 const PROBE_PAGE = 25
@@ -203,10 +204,12 @@ export default function ProbesPanel({
 }) {
   const [data, setData] = useState<ProbesConfigResponse | null>(null)
   const [registry, setRegistry] = useState<ProbeTypesResponse | null>(null)
+  const [registryError, setRegistryError] = useState<unknown>(null)
   const [meshes, setMeshes] = useState<string[]>([])
   const [sites, setSites] = useState<string[]>([])
   const [targets, setTargets] = useState<string[]>([])
-  const [error, setError] = useState('')
+  const [error, setError] = useState<unknown>(null)
+  const [retryKey, setRetryKey] = useState(0)
   const [rowError, setRowError] = useState('')
   const [visible, setVisible] = useState(PROBE_PAGE)
   const [busy, setBusy] = useState(false)
@@ -223,10 +226,27 @@ export default function ProbesPanel({
   const [editErrors, setEditErrors] = useState<string[]>([])
   const scrolledProbe = useRef<string | null>(null)
 
-  // The registry is static per server version: one fetch, no poll.
+  // Static per server version: fetch once on entry (and on an explicit
+  // retry), independently from the 30-second configuration poll.
   useEffect(() => {
-    apiGet<ProbeTypesResponse>('/api/v1/config/probe-types').then(setRegistry).catch(onAuthError)
-  }, [onAuthError])
+    let cancelled = false
+    apiGet<ProbeTypesResponse>('/api/v1/config/probe-types')
+      .then((res) => {
+        if (!cancelled) {
+          setRegistry(res)
+          setRegistryError(null)
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return
+        onAuthError(err)
+        console.error('probe type registry request failed', err)
+        setRegistryError(err)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [onAuthError, retryKey])
 
   useEffect(() => {
     let cancelled = false
@@ -246,12 +266,13 @@ export default function ProbesPanel({
           // (mesh expansion resolves peers), so the server rejects direct
           // probes against them.
           setTargets(targetsRes.targets.filter((t) => t.kind === 'external').map((t) => t.name))
-          setError('')
+          setError(null)
         })
         .catch((err) => {
           if (cancelled) return
           onAuthError(err)
-          setError(err instanceof Error ? err.message : String(err))
+          console.error('probe settings request failed', err)
+          setError(err)
         })
     }
     load()
@@ -260,7 +281,7 @@ export default function ProbesPanel({
       cancelled = true
       clearInterval(id)
     }
-  }, [onAuthError])
+  }, [onAuthError, retryKey])
 
   const reload = () => apiGet<ProbesConfigResponse>('/api/v1/config/probes').then(setData).catch(onAuthError)
 
@@ -409,15 +430,18 @@ export default function ProbesPanel({
     }
   }, [data, editID, onSelectedProbe, selectedProbe, visible])
 
-  if (error && !data) {
+  const initialError = !registry ? registryError : !data ? error : null
+  if (initialError !== null && (!data || !registry)) {
     return (
-      <div className="state-panel state-error">
-        <h2>Probes unavailable</h2>
-        <p>{error}</p>
-      </div>
+      <SettingsPageError
+        title="Probes unavailable"
+        subject="probes"
+        error={initialError}
+        onRetry={() => setRetryKey((key) => key + 1)}
+      />
     )
   }
-  if (!data) {
+  if (!data || !registry) {
     return (
       <div className="state-panel" role="status">
         <span className="state-spinner" />
@@ -556,7 +580,7 @@ export default function ProbesPanel({
 
   return (
     <>
-      {error && (
+      {(error !== null || registryError !== null) && (
         <div className="inline-alert" role="status">
           Refresh failed. Showing the last successful snapshot.
         </div>

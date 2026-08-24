@@ -8,9 +8,10 @@ import IncidentTimeline, {
   timelineGrid,
 } from '../components/IncidentTimeline'
 import DisclosureChevron from '../components/DisclosureChevron'
+import PageError from '../components/PageError'
 import { fmtAgo, fmtTime } from '../format'
 import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
-import { updateRouteParams } from '../routeState'
+import { inheritRouteNetwork, updateRouteParams } from '../routeState'
 import { useTimezone } from '../timezone'
 import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
 import type { OutageEvent, OutagesResponse, Window } from '../types'
@@ -196,7 +197,8 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
   const win = windowParam as Window
   const filter = statusParam as IncidentFilter
   const [data, setData] = useState<OutagesResponse | null>(null)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<unknown>(null)
+  const [retryKey, setRetryKey] = useState(0)
   // The timeline's "now" is fetch time, so its bucket grid only shifts on
   // the 30s poll, never on a re-render (hover, expand, timezone toggle).
   const [fetchedAt, setFetchedAt] = useState(0)
@@ -214,12 +216,13 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
             // grid and hide returned incidents off either edge.
             const serverNow = Date.parse(res.now)
             setFetchedAt(Number.isFinite(serverNow) ? serverNow : Date.now())
-            setError('')
+            setError(null)
           }
         })
         .catch((err) => {
           onAuthError(err)
-          if (!cancelled) setError(err instanceof Error ? err.message : String(err))
+          console.error('incidents request failed', err)
+          if (!cancelled) setError(err)
         })
     load()
     const id = setInterval(load, POLL_MS)
@@ -227,7 +230,7 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
       cancelled = true
       clearInterval(id)
     }
-  }, [win, onAuthError])
+  }, [win, onAuthError, retryKey])
 
   // The global top-bar network filter scopes everything on this view —
   // groups, timeline, chips, and button counts all derive from this subset.
@@ -291,10 +294,14 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
 
   if (error && !data)
     return (
-      <div className="state-panel state-error">
-        <h1>Incidents unavailable</h1>
-        <p>{error}</p>
-      </div>
+      <PageError
+        title="Incidents unavailable"
+        subject="incidents"
+        error={error}
+        backHref={inheritRouteNetwork('#/')}
+        backLabel="Back to Overview"
+        onRetry={() => setRetryKey((key) => key + 1)}
+      />
     )
   if (!data)
     return (
@@ -323,7 +330,7 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
         </div>
       </div>
 
-      {error && (
+      {error !== null && (
         <div className="inline-alert" role="status">
           Refresh failed. Showing the last successful snapshot.
         </div>

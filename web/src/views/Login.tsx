@@ -26,10 +26,15 @@ export default function Login({ sso, onLogin }: { sso: boolean; onLogin: (res: L
   // Surface a callback failure carried in the hash, then clean the URL so
   // a reload or bookmark does not replay the stale error.
   useEffect(() => {
-    const m = /^#\/sso-error=([a-z-]+)$/.exec(location.hash)
-    if (!m) return
-    setError(SSO_ERRORS[m[1]] ?? 'Single sign-on failed. Details are in the server log.')
-    history.replaceState(null, '', location.pathname + location.search)
+    const consumeSSOError = () => {
+      const m = /^#\/sso-error=([a-z-]+)$/.exec(location.hash)
+      if (!m) return
+      setError(SSO_ERRORS[m[1]] ?? 'Single sign-on failed. Details are in the server log.')
+      history.replaceState(null, '', location.pathname + location.search)
+    }
+    consumeSSOError()
+    window.addEventListener('hashchange', consumeSSOError)
+    return () => window.removeEventListener('hashchange', consumeSSOError)
   }, [])
 
   async function submit(e: FormEvent) {
@@ -45,7 +50,8 @@ export default function Login({ sso, onLogin }: { sso: boolean; onLogin: (res: L
       } else if (err instanceof ApiError && err.status === 429) {
         setError('Too many attempts — wait a minute and try again.')
       } else {
-        setError('Login failed: ' + (err instanceof Error ? err.message : String(err)))
+        console.error('login request failed', err)
+        setError('Sign-in is temporarily unavailable. Try again.')
       }
     } finally {
       setBusy(false)

@@ -7,6 +7,7 @@ import { useTimezone } from '../timezone'
 import type { LoginMonth, Role, UserAccount, UserCreateResponse, UsersResponse } from '../types'
 import ConfirmButton from './ConfirmButton'
 import RoleWall from './RoleWall'
+import SettingsPageError from './SettingsPageError'
 
 const POLL_MS = 30_000
 
@@ -218,7 +219,8 @@ export default function UsersPanel({
 }) {
   useTimezone() // re-render fmtTime renders on UTC/local toggle
   const [data, setData] = useState<UsersResponse | null>(null)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<unknown>(null)
+  const [retryKey, setRetryKey] = useState(0)
   const [query, setQuery] = useState('') // raw input
   const [q, setQ] = useState('') // debounced, applied to the fetch
   const [role, setRole] = useState<RoleFilter>('')
@@ -294,13 +296,14 @@ export default function UsersPanel({
         .then((res) => {
           if (!cancelled) {
             setData(res)
-            setError('')
+            setError(null)
           }
         })
         .catch((err) => {
           if (cancelled) return
           onAuthError(err)
-          setError(err instanceof Error ? err.message : String(err))
+          console.error('user settings request failed', err)
+          setError(err)
         })
     }
     load()
@@ -309,7 +312,7 @@ export default function UsersPanel({
       cancelled = true
       clearInterval(id)
     }
-  }, [canWrite, onAuthError, q, role, status, source, offset, refresh])
+  }, [canWrite, onAuthError, q, role, status, source, offset, refresh, retryKey])
 
   // Only a local, scoped account has an editable scope: the server refuses
   // the field for a global role, and a federated account's networks are
@@ -418,10 +421,12 @@ export default function UsersPanel({
   }
   if (error && !data) {
     return (
-      <div className="state-panel state-error">
-        <h2>User accounts unavailable</h2>
-        <p>{error}</p>
-      </div>
+      <SettingsPageError
+        title="User accounts unavailable"
+        subject="user accounts"
+        error={error}
+        onRetry={() => setRetryKey((key) => key + 1)}
+      />
     )
   }
   if (!data) {
@@ -435,7 +440,7 @@ export default function UsersPanel({
 
   return (
     <>
-      {error && (
+      {error !== null && (
         <div className="inline-alert" role="status">
           Refresh failed. Showing the last successful snapshot.
         </div>

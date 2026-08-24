@@ -9,6 +9,7 @@ import { inheritRouteNetwork } from '../routeState'
 import type { TargetsConfigResponse, TargetConfig } from '../types'
 import ConfirmButton from './ConfirmButton'
 import PlaneField from './PlaneField'
+import SettingsPageError from './SettingsPageError'
 
 const POLL_MS = 30_000
 
@@ -53,7 +54,8 @@ export default function TargetsPanel({
   onAuthError: (err: unknown) => void
 }) {
   const [data, setData] = useState<TargetsConfigResponse | null>(null)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<unknown>(null)
+  const [retryKey, setRetryKey] = useState(0)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [editing, setEditing] = useState(false) // draft edits an existing target (name locked)
   const [formErrors, setFormErrors] = useState<string[]>([])
@@ -67,13 +69,14 @@ export default function TargetsPanel({
         .then((res) => {
           if (!cancelled) {
             setData(res)
-            setError('')
+            setError(null)
           }
         })
         .catch((err) => {
           if (cancelled) return
           onAuthError(err)
-          setError(err instanceof Error ? err.message : String(err))
+          console.error('target settings request failed', err)
+          setError(err)
         })
     }
     load()
@@ -82,7 +85,7 @@ export default function TargetsPanel({
       cancelled = true
       clearInterval(id)
     }
-  }, [onAuthError])
+  }, [onAuthError, retryKey])
 
   const reload = () => apiGet<TargetsConfigResponse>('/api/v1/config/targets').then(setData).catch(onAuthError)
 
@@ -118,7 +121,8 @@ export default function TargetsPanel({
       await reload()
     } catch (err) {
       onAuthError(err)
-      setError(err instanceof Error ? err.message : String(err))
+      console.error('target delete failed', err)
+      setError(err)
     }
   }
 
@@ -137,10 +141,12 @@ export default function TargetsPanel({
 
   if (error && !data) {
     return (
-      <div className="state-panel state-error">
-        <h2>Targets unavailable</h2>
-        <p>{error}</p>
-      </div>
+      <SettingsPageError
+        title="Targets unavailable"
+        subject="targets"
+        error={error}
+        onRetry={() => setRetryKey((key) => key + 1)}
+      />
     )
   }
   if (!data) {
@@ -180,7 +186,7 @@ export default function TargetsPanel({
 
   return (
     <>
-      {error && (
+      {error !== null && (
         <div className="inline-alert" role="status">
           Refresh failed. Showing the last successful snapshot.
         </div>

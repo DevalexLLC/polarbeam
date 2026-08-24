@@ -3,6 +3,7 @@ import { apiDelete, apiGet, apiPost, apiPut } from '../api'
 import { fmtAgo } from '../format'
 import type { SitesConfigResponse, SiteConfig } from '../types'
 import ConfirmButton from './ConfirmButton'
+import SettingsPageError from './SettingsPageError'
 
 const POLL_MS = 30_000
 
@@ -63,7 +64,8 @@ export default function SitesPanel({
   onAuthError: (err: unknown) => void
 }) {
   const [data, setData] = useState<SitesConfigResponse | null>(null)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<unknown>(null)
+  const [retryKey, setRetryKey] = useState(0)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [editing, setEditing] = useState(false) // draft edits an existing site (name locked)
   const [formErrors, setFormErrors] = useState<string[]>([])
@@ -78,13 +80,14 @@ export default function SitesPanel({
         .then((res) => {
           if (!cancelled) {
             setData(res)
-            setError('')
+            setError(null)
           }
         })
         .catch((err) => {
           if (cancelled) return
           onAuthError(err)
-          setError(err instanceof Error ? err.message : String(err))
+          console.error('site settings request failed', err)
+          setError(err)
         })
     }
     load()
@@ -93,7 +96,7 @@ export default function SitesPanel({
       cancelled = true
       clearInterval(id)
     }
-  }, [onAuthError])
+  }, [onAuthError, retryKey])
 
   const reload = () => apiGet<SitesConfigResponse>('/api/v1/config/sites').then(setData).catch(onAuthError)
 
@@ -136,7 +139,8 @@ export default function SitesPanel({
       await reload()
     } catch (err) {
       onAuthError(err)
-      setError(err instanceof Error ? err.message : String(err))
+      console.error('site delete failed', err)
+      setError(err)
     }
   }
 
@@ -192,10 +196,12 @@ export default function SitesPanel({
 
   if (error && !data) {
     return (
-      <div className="state-panel state-error">
-        <h2>Sites unavailable</h2>
-        <p>{error}</p>
-      </div>
+      <SettingsPageError
+        title="Sites unavailable"
+        subject="sites"
+        error={error}
+        onRetry={() => setRetryKey((key) => key + 1)}
+      />
     )
   }
   if (!data) {
@@ -227,7 +233,7 @@ export default function SitesPanel({
 
   return (
     <>
-      {error && (
+      {error !== null && (
         <div className="inline-alert" role="status">
           Refresh failed. Showing the last successful snapshot.
         </div>

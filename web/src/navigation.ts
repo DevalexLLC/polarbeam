@@ -8,6 +8,7 @@ export type PrimaryView =
   | 'agents'
   | 'settings'
   | 'about'
+  | 'not-found'
 
 export interface NavigationItem {
   href: string
