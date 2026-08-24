@@ -22,7 +22,7 @@ export function getNetworkFilter(): string {
 }
 
 export function setNetworkFilter(next: string) {
-  updateRouteParams({ network: next || null })
+  updateRouteParams({ network: next || null, page: null })
 }
 
 // Called by App after each networks fetch. Clears a filter naming an

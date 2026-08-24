@@ -368,10 +368,16 @@ func pathEventMatchingSQL(countProbe bool) string {
 		 WHERE pe.time > now() - $1::interval
 		   AND ($2::uuid[] IS NULL OR a.network_id = ANY($2))
 		   AND ($3 = ''
-		        OR COALESCE(a.hostname, '') ILIKE '%' || $3 || '%'
-		        OR COALESCE(src.name, '') ILIKE '%' || $3 || '%'
-		        OR COALESCE(dst.name, '') ILIKE '%' || $3 || '%'
-		        OR COALESCE(t.name, '') ILIKE '%' || $3 || '%')
+		        OR pe.id::text = $3
+		        OR (position('->' IN $3) = 0 AND (
+		             COALESCE(a.hostname, '') ILIKE '%' || $3 || '%'
+		             OR COALESCE(src.name, '') ILIKE '%' || $3 || '%'
+		             OR COALESCE(dst.name, '') ILIKE '%' || $3 || '%'
+		             OR COALESCE(t.name, '') ILIKE '%' || $3 || '%'))
+		        OR (position('->' IN $3) > 0
+		            AND COALESCE(src.name, '') ILIKE '%' || btrim(split_part($3, '->', 1)) || '%'
+		            AND COALESCE(dst.name, t.name, '') ILIKE '%' ||
+		                btrim(substring($3 FROM position('->' IN $3) + 2)) || '%'))
 		 ORDER BY pe.time DESC, pe.id DESC
 		 LIMIT ` + limit
 }
@@ -415,7 +421,7 @@ func (s *Store) QueryPathEvents(ctx context.Context, window time.Duration, f Pat
 	if err != nil {
 		return nil, 0, false, err
 	}
-	query := escapeLike(strings.TrimSpace(f.Query))
+	query := escapeLike(strings.TrimSpace(strings.ReplaceAll(f.Query, "→", "->")))
 
 	countSQL := `WITH matching AS MATERIALIZED (` + pathEventMatchingSQL(true) + `)
 		SELECT LEAST(count(*), 500), count(*) > 500 FROM matching`

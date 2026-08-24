@@ -98,6 +98,15 @@ hide inaccessible resources behind the same 404 shape as missing ones. Unlike
 the operational target view, an explicit Settings network retains visible
 operator-published global targets so tenants can assign probes to them.
 
+Operational inventories use `web/src/components/DataTable.tsx`. Keep its sort,
+page, disclosure, and action state controlled by stable resource IDs. Every
+adopted view requests 25 rows from its query-mode endpoint; search, filters,
+network, and sorting reset page one. Desktop uses the component's semantic
+table and sticky scrolling header. Mobile uses its separate flat list:
+identity, status, and primary evidence remain visible, while secondary
+metadata stays behind the full-width disclosure target. Do not restore the
+generic CSS that turns every table cell into a nested mobile card.
+
 ## Coding Style & Naming Conventions
 
 Format Go with `gofmt`; use tabs, lowercase packages, and conventional

@@ -159,6 +159,10 @@ func TestSettingsSiteInventoryQueryAndDetail(t *testing.T) {
 	if rows, total = query(filter); len(rows) != 0 || total != 0 {
 		t.Errorf("literal site wildcard = %v total %d", siteConfigIDs(rows), total)
 	}
+	filter.Query = f.siteA.String()
+	if rows, total = query(filter); len(rows) != 1 || total != 1 || rows[0].ID != f.siteA {
+		t.Errorf("stable site ID search = %v total %d", siteConfigIDs(rows), total)
+	}
 	filter = base
 	filter.Networks = []uuid.UUID{f.mgmt}
 	rows, total = query(filter)
@@ -263,6 +267,10 @@ func TestSettingsTargetInventoryQueryAndDetail(t *testing.T) {
 	filter.Query = "svc%_"
 	if rows, total = query(filter); len(rows) != 0 || total != 0 {
 		t.Errorf("literal target wildcard = %v total %d", targetConfigIDs(rows), total)
+	}
+	filter.Query = f.serviceTarget.String()
+	if rows, total = query(filter); len(rows) != 1 || total != 1 || rows[0].ID != f.serviceTarget {
+		t.Errorf("stable target ID search = %v total %d", targetConfigIDs(rows), total)
 	}
 	filter = base
 	filter.Networks = []uuid.UUID{f.mgmt}
@@ -379,6 +387,10 @@ func TestSettingsProbeInventoryQueryAndDetail(t *testing.T) {
 	filter.Query = "tcp%_"
 	if rows, total = query(filter); len(rows) != 0 || total != 0 {
 		t.Errorf("literal probe wildcard = %v total %d", probeConfigIDs(rows), total)
+	}
+	filter.Query, filter.Mode, filter.Enabled, filter.ProbeType = f.mgmtDirect.String(), "", nil, 0
+	if rows, total = query(filter); len(rows) != 1 || total != 1 || rows[0].ID != f.mgmtDirect {
+		t.Errorf("stable probe ID search = %v total %d", probeConfigIDs(rows), total)
 	}
 	filter = base
 	filter.Networks = []uuid.UUID{f.mgmt}

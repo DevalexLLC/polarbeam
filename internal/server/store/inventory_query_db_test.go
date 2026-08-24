@@ -104,6 +104,11 @@ func seedInventoryAgents(t *testing.T, ctx context.Context, s *store.Store) (net
 		VALUES ('agent_offline', $1, $2)`, f.bDef, base); err != nil {
 		t.Fatalf("insert offline outage: %v", err)
 	}
+	if _, err := s.Pool().Exec(ctx, `
+		UPDATE agents SET dropped_results = 1, last_dropped_at = $1
+		 WHERE id = $2`, base, f.aMgmt); err != nil {
+		t.Fatalf("mark recent spool loss: %v", err)
+	}
 	return f, base
 }
 
@@ -123,7 +128,7 @@ func TestQueryAgentsFilteringSortingPagingAndScope(t *testing.T) {
 	if want := []uuid.UUID{f.bDef, f.aDef, f.bMgmt, f.aMgmt}; !slices.Equal(agentInventoryIDs(rows), want) {
 		t.Errorf("health order = %v, want %v", agentInventoryIDs(rows), want)
 	}
-	if summary != (store.AgentInventorySummary{Total: 4, Offline: 1, Degraded: 1, Healthy: 1, NoData: 1}) {
+	if summary != (store.AgentInventorySummary{Total: 4, Offline: 1, Degraded: 1, Healthy: 1, NoData: 1, Attention: 4, DroppedResults: 1}) {
 		t.Errorf("agent summary = %+v", summary)
 	}
 
@@ -172,15 +177,25 @@ func TestQueryAgentsFilteringSortingPagingAndScope(t *testing.T) {
 	filter.Query, filter.Health = "", store.AgentHealthDegraded
 	rows, summary = query(filter)
 	if !slices.Equal(agentInventoryIDs(rows), []uuid.UUID{f.aDef}) ||
-		summary != (store.AgentInventorySummary{Total: 1, Degraded: 1}) {
+		summary != (store.AgentInventorySummary{Total: 1, Degraded: 1, Attention: 1}) {
 		t.Errorf("degraded filter = ids %v summary %+v", agentInventoryIDs(rows), summary)
+	}
+	filter.Health = store.AgentHealthAttention
+	rows, summary = query(filter)
+	if len(rows) != 4 || summary.Attention != 4 || summary.DroppedResults != 1 {
+		t.Errorf("attention filter = ids %v summary %+v", agentInventoryIDs(rows), summary)
+	}
+	filter.Health = store.AgentHealthHealthy
+	rows, summary = query(filter)
+	if len(rows) != 0 || summary.Total != 0 {
+		t.Errorf("actionably healthy filter = ids %v summary %+v", agentInventoryIDs(rows), summary)
 	}
 
 	filter = baseFilter
 	filter.Networks = []uuid.UUID{f.mgmt}
 	rows, summary = query(filter)
 	if !slices.Equal(agentInventoryIDs(rows), []uuid.UUID{f.bMgmt, f.aMgmt}) ||
-		summary != (store.AgentInventorySummary{Total: 2, Healthy: 1, NoData: 1}) {
+		summary != (store.AgentInventorySummary{Total: 2, Healthy: 1, NoData: 1, Attention: 2, DroppedResults: 1}) {
 		t.Errorf("mgmt scope = ids %v summary %+v", agentInventoryIDs(rows), summary)
 	}
 
@@ -190,7 +205,7 @@ func TestQueryAgentsFilteringSortingPagingAndScope(t *testing.T) {
 	for offset := range 4 {
 		filter.Offset = offset
 		page, pageSummary := query(filter)
-		if pageSummary.Total != 4 || len(page) != 1 {
+		if pageSummary.Total != 4 || pageSummary.Attention != 4 || pageSummary.DroppedResults != 1 || len(page) != 1 {
 			t.Fatalf("agent page %d = len %d summary %+v", offset, len(page), pageSummary)
 		}
 		paged = append(paged, page[0].ID)

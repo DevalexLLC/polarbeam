@@ -23,8 +23,9 @@ const POLL_MS = 30_000
 // dropped_results is a lifetime running total that never resets, so it must
 // not flag attention forever — only drops recent enough to still be
 // actionable count. Ordered like the Agents view's health fold so the reason
-// shown is the most severe one; must stay in lockstep with needsAttention
-// in Agents.tsx so the fleet card and the Attention filter agree.
+// shown is the most severe one; must stay in lockstep with needs_attention
+// in internal/server/store/inventory.go so the fleet card and the server-side
+// Agents Attention filter agree.
 const DROP_ATTENTION_MS = 24 * 60 * 60 * 1000
 // Agents renew their cert at 2/3 lifetime (10 days left on the 30-day
 // cert), so a healthy fleet always sits inside a 30-day window — the warn

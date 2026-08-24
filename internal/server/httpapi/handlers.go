@@ -65,18 +65,20 @@ type agentJSON struct {
 }
 
 type agentSummaryJSON struct {
-	Total    int64 `json:"total"`
-	Offline  int64 `json:"offline"`
-	Degraded int64 `json:"degraded"`
-	Healthy  int64 `json:"healthy"`
-	NoData   int64 `json:"no_data"`
+	Total          int64 `json:"total"`
+	Offline        int64 `json:"offline"`
+	Degraded       int64 `json:"degraded"`
+	Healthy        int64 `json:"healthy"`
+	NoData         int64 `json:"no_data"`
+	Attention      int64 `json:"attention"`
+	DroppedResults int64 `json:"dropped_results"`
 }
 
 var agentListSpec = listQuerySpec{
 	Filters: []listFilterSpec{{
 		Name: "health", Allowed: []string{
 			store.AgentHealthOffline, store.AgentHealthDegraded,
-			store.AgentHealthHealthy, store.AgentHealthNoData,
+			store.AgentHealthHealthy, store.AgentHealthNoData, store.AgentHealthAttention,
 		},
 	}},
 	Sorts:        []string{"hostname", "site", "network", "health", "last_seen", "version"},
@@ -135,7 +137,8 @@ func (a *api) handleAgents(w http.ResponseWriter, r *http.Request) {
 		"summary": agentSummaryJSON{
 			Total: summary.Total, Offline: summary.Offline,
 			Degraded: summary.Degraded, Healthy: summary.Healthy,
-			NoData: summary.NoData,
+			NoData: summary.NoData, Attention: summary.Attention,
+			DroppedResults: summary.DroppedResults,
 		},
 	})
 }

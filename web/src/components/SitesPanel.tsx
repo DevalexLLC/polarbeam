@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { apiDelete, apiGet, apiPost, apiPut } from '../api'
+import { updateRouteParams } from '../routeState'
+import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
 import { fmtAgo } from '../format'
+import { useNetworkFilter } from '../networkFilter'
 import type { SitesConfigResponse, SiteConfig } from '../types'
 import ConfirmButton from './ConfirmButton'
+import DataTable, { type DataTableColumn } from './DataTable'
 import SettingsPageError from './SettingsPageError'
 
 const POLL_MS = 30_000
+const SITE_PAGE = 25
 
 interface Draft {
   name: string
@@ -71,12 +76,38 @@ export default function SitesPanel({
   const [formErrors, setFormErrors] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [savedFlash, setSavedFlash] = useState(false)
+  const [query, setQuery] = useRouteSearch()
+  const [queryParam] = useRouteParam('q')
+  const [sort] = useRouteParam('sort', 'name')
+  const [order] = useRouteParam('order', 'asc')
+  const [page, setPage] = useRouteNumber('page', 1)
+  const [expandedRow, setExpandedRow] = useState<string | null>(null)
+  const [actionRow, setActionRow] = useState<string | null>(null)
+  const { network } = useNetworkFilter()
   const scrolledSite = useRef<string | null>(null)
+  const pinnedSite = useRef<string | null>(selectedSite)
+
+  if (!selectedSite) pinnedSite.current = null
+  else if (pinnedSite.current !== selectedSite) {
+    pinnedSite.current = data?.sites.some((site) => site.id === selectedSite) ? null : selectedSite
+  }
+  const pinnedSiteID = pinnedSite.current === selectedSite ? selectedSite : null
+
+  const params = new URLSearchParams({
+    limit: String(SITE_PAGE),
+    offset: String(pinnedSiteID ? 0 : (page - 1) * SITE_PAGE),
+    sort,
+    order,
+  })
+  if (pinnedSiteID) params.set('q', pinnedSiteID)
+  else if (queryParam.trim()) params.set('q', queryParam.trim())
+  if (network) params.set('network', network)
+  const requestURL = '/api/v1/config/sites?' + params.toString()
 
   useEffect(() => {
     let cancelled = false
     const load = () => {
-      apiGet<SitesConfigResponse>('/api/v1/config/sites')
+      apiGet<SitesConfigResponse>(requestURL)
         .then((res) => {
           if (!cancelled) {
             setData(res)
@@ -96,9 +127,9 @@ export default function SitesPanel({
       cancelled = true
       clearInterval(id)
     }
-  }, [onAuthError, retryKey])
+  }, [onAuthError, requestURL, retryKey])
 
-  const reload = () => apiGet<SitesConfigResponse>('/api/v1/config/sites').then(setData).catch(onAuthError)
+  const reload = () => apiGet<SitesConfigResponse>(requestURL).then(setData).catch(onAuthError)
 
   const save = async () => {
     if (!draft) return
@@ -135,7 +166,7 @@ export default function SitesPanel({
   const remove = async (s: SiteConfig) => {
     try {
       await apiDelete('/api/v1/config/sites/' + encodeURIComponent(s.name))
-      if (selectedSite === s.name) onSelectedSite('', 'replace')
+      if (selectedSite === s.id) onSelectedSite('', 'replace')
       await reload()
     } catch (err) {
       onAuthError(err)
@@ -145,7 +176,7 @@ export default function SitesPanel({
   }
 
   const startEdit = (s: SiteConfig) => {
-    onSelectedSite(s.name)
+    onSelectedSite(s.id)
     setEditing(true)
     setSavedFlash(false)
     setFormErrors([])
@@ -169,12 +200,12 @@ export default function SitesPanel({
       return
     }
     if (!data) return
-    const selected = data.sites.find((site) => site.name === selectedSite)
+    const selected = data.sites.find((site) => site.id === selectedSite)
     if (!selected) {
       onSelectedSite('', 'replace')
       return
     }
-    if (!editing || draft?.name !== selectedSite) {
+    if (!editing || draft?.name !== selected.name) {
       setEditing(true)
       setSavedFlash(false)
       setFormErrors([])
@@ -187,12 +218,19 @@ export default function SitesPanel({
       })
     }
     if (scrolledSite.current !== selectedSite) {
-      const row = document.getElementById('settings-site-' + selectedSite)
+      const surface = window.matchMedia('(max-width: 760px)').matches ? 'mobile' : 'desktop'
+      const row = document.getElementById(`settings-site-${selected.id}-${surface}`)
       if (!row) return
       row.scrollIntoView({ block: 'nearest' })
       scrolledSite.current = selectedSite
     }
   }, [data, draft?.name, editing, onSelectedSite, selectedSite])
+
+  const pageMeta = data?.page ?? { limit: SITE_PAGE, offset: 0, total: data?.sites.length ?? 0, has_more: false }
+  const pageCount = Math.max(1, Math.ceil(pageMeta.total / SITE_PAGE))
+  useEffect(() => {
+    if (page > pageCount) setPage(pageCount, 'replace')
+  }, [page, pageCount, setPage])
 
   if (error && !data) {
     return (
@@ -212,6 +250,45 @@ export default function SitesPanel({
       </div>
     )
   }
+
+  const columns: DataTableColumn<SiteConfig>[] = [
+    {
+      key: 'name',
+      label: 'Name',
+      sortKey: 'name',
+      priority: 'identity',
+      className: 'mono',
+      render: (site) => site.name,
+    },
+    {
+      key: 'display',
+      label: 'Display name',
+      sortKey: 'display_name',
+      priority: 'primary',
+      render: (site) => site.display_name || '—',
+    },
+    { key: 'location', label: 'Location', priority: 'primary', render: (site) => site.location || '—' },
+    {
+      key: 'coordinates',
+      label: 'Coordinates',
+      priority: 'secondary',
+      className: 'mono',
+      render: (site) =>
+        site.latitude !== null && site.longitude !== null
+          ? `${site.latitude.toFixed(4)}, ${site.longitude.toFixed(4)}`
+          : '—',
+    },
+    { key: 'agents', label: 'Agents', sortKey: 'agents', priority: 'secondary', render: (site) => site.agent_count },
+    { key: 'meshes', label: 'Meshes', sortKey: 'meshes', priority: 'secondary', render: (site) => site.mesh_count },
+    { key: 'probes', label: 'Probes', sortKey: 'probes', priority: 'secondary', render: (site) => site.probe_count },
+    {
+      key: 'created',
+      label: 'Created',
+      sortKey: 'created',
+      priority: 'secondary',
+      render: (site) => fmtAgo(site.created_at),
+    },
+  ]
 
   const field = (label: string, key: keyof Draft, placeholder: string, locked = false) => (
     <label className="threshold-field">
@@ -250,72 +327,82 @@ export default function SitesPanel({
           Agents enroll into a site; meshes and direct probes are assigned by site. A site referenced by agents, meshes,
           or probes cannot be deleted until those references are removed.
         </p>
-        {data.sites.length === 0 ? (
-          <div className="empty-state">
-            <strong>No sites</strong>
-            <span>Add one below, then issue a join token from the Enrollment tab to enroll its first agent.</span>
-          </div>
-        ) : (
-          <div className="scroll-x">
-            <table className="events">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Display name</th>
-                  <th>Location</th>
-                  <th>Coordinates</th>
-                  <th>Agents</th>
-                  <th>Meshes</th>
-                  <th>Probes</th>
-                  <th>Created</th>
-                  {canWrite && (
-                    <th className="actions-col">
-                      <span className="sr-only">Actions</span>
-                    </th>
-                  )}
-                </tr>
-              </thead>
-              <tbody>
-                {data.sites.map((s) => (
-                  <tr
-                    key={s.id}
-                    id={'settings-site-' + s.name}
-                    className={selectedSite === s.name ? 'selected-row' : ''}
-                  >
-                    <td data-label="Name" className="mono">
-                      {s.name}
-                    </td>
-                    <td data-label="Display name">{s.display_name || '—'}</td>
-                    <td data-label="Location">{s.location || '—'}</td>
-                    <td data-label="Coordinates" className="mono">
-                      {s.latitude !== null && s.longitude !== null
-                        ? `${s.latitude.toFixed(4)}, ${s.longitude.toFixed(4)}`
-                        : '—'}
-                    </td>
-                    <td data-label="Agents">{s.agent_count}</td>
-                    <td data-label="Meshes">{s.mesh_count}</td>
-                    <td data-label="Probes">{s.probe_count}</td>
-                    <td data-label="Created">{fmtAgo(s.created_at)}</td>
-                    {canWrite && (
-                      <td data-label="Actions" className="config-actions">
-                        <button type="button" className="secondary-button" onClick={() => startEdit(s)}>
-                          Edit
-                        </button>
-                        <ConfirmButton
-                          label="Delete"
-                          confirmLabel="Confirm delete? Unused join tokens go with it"
-                          disabled={refCount(s) > 0}
-                          title={refCount(s) > 0 ? `In use by ${refSummary(s)} — remove those first` : undefined}
-                          onConfirm={() => remove(s)}
-                        />
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        <div className="view-toolbar data-table-toolbar">
+          <label className="search-field">
+            <span className="sr-only">Search sites</span>
+            <input
+              type="search"
+              placeholder="Search name or location"
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value)
+                if (selectedSite) onSelectedSite('', 'replace')
+              }}
+            />
+          </label>
+        </div>
+        <DataTable
+          label="Sites"
+          rows={data.sites}
+          rowKey={(site) => site.id}
+          rowID={(site) => 'settings-site-' + site.id}
+          rowClassName={(site) => (selectedSite === site.id ? 'selected-row' : '')}
+          columns={columns}
+          sort={{ key: sort, order: order === 'desc' ? 'desc' : 'asc' }}
+          onSortChange={(next) =>
+            updateRouteParams({
+              sort: next.key === 'name' ? null : next.key,
+              order: next.order === 'asc' ? null : next.order,
+              page: null,
+              site: null,
+            })
+          }
+          page={pageMeta}
+          onPageChange={(next) => updateRouteParams({ page: next === 1 ? null : next, site: null })}
+          resultLabel="sites"
+          emptyTitle={query ? 'No matching sites' : 'No sites'}
+          emptyDescription={
+            query
+              ? 'Change the search text.'
+              : 'Add one below, then issue a join token from the Enrollment tab to enroll its first agent.'
+          }
+          disclosure={{
+            expandedKey: expandedRow,
+            onExpandedKeyChange: setExpandedRow,
+            label: (_site, expanded) => (expanded ? 'Hide metadata' : 'Show metadata'),
+            desktop: false,
+          }}
+          actions={
+            canWrite
+              ? {
+                  openKey: actionRow,
+                  onOpenKeyChange: setActionRow,
+                  label: (site) => `Actions for ${site.name}`,
+                  render: (site) => (
+                    <>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => {
+                          setActionRow(null)
+                          startEdit(site)
+                        }}
+                      >
+                        Edit
+                      </button>
+                      <ConfirmButton
+                        label="Delete"
+                        confirmLabel="Confirm delete? Unused join tokens go with it"
+                        disabled={refCount(site) > 0}
+                        title={refCount(site) > 0 ? `In use by ${refSummary(site)} — remove those first` : undefined}
+                        onConfirm={() => remove(site)}
+                      />
+                    </>
+                  ),
+                }
+              : undefined
+          }
+        />
         {canWrite && (
           <div className="config-form">
             <h3 className="eyebrow">{editing ? `Edit ${draft?.name}` : 'Add site'}</h3>

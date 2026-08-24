@@ -148,7 +148,8 @@ selected plane and response snapshot's time window in canonical hash-route
 state; deleted resources remain unlinked historical text.
 
 `GET /api/v1/agents` query mode returns a stable page plus filtered health
-summary (`offline`, `degraded`, `healthy`, `no_data`); requests without list
+summary (`offline`, `degraded`, `healthy`, `no_data`, and actionable
+`attention`); requests without list
 parameters retain the original complete-feed response. Its health fold matches
 that legacy feed: unusable certificate/offline, never seen, then hard probe
 failures; threshold-only degradation remains incident evidence rather than
@@ -174,6 +175,15 @@ before search or counting. An explicit Settings network still includes visible
 operator-published global targets so that plane can configure probes against
 them; the operational target inventory instead requires active assignment on
 the selected plane.
+
+The dashboard's Agents, Targets, Routes, and Settings Sites/Targets/Probes
+inventories render through the controlled, dependency-free `DataTable`.
+Each requests a 25-row server page. Desktop keeps a semantic table inside a
+bounded scroll region with sticky headers; the 760 px breakpoint replaces it
+with a flat list that shows identity, status, and primary evidence before a
+full-width disclosure reveals secondary metadata. Sort, page, disclosure, and
+row-action state use stable IDs, and a refreshed-away focused row returns
+focus to the table region.
 
 `/api/v1/*` JSON, separate from agent gRPC. **Auth: local users + PG-backed sessions** (argon2id, HttpOnly/Secure/SameSite cookie, CSRF token; four roles — global `admin`/`viewer` plus network-scoped `network_admin`/`network_viewer`, whose visibility and writes are limited to an explicit set of networks; first admin via `polarbeam-server user add --admin`, scoped accounts via `user add --role <role> --network <name>`) — air-gap-safe and revocable with no external dependency. **Optionally**, dashboard sign-in can additionally delegate to an OpenID Connect provider (authorization-code + PKCE, DB-stored config edited from Settings → Authentication, applied without restart): federated users are JIT-provisioned keyed on the immutable OIDC `sub`, a configurable claim maps to `admin` (via `admin_values`) or to a network-scoped role (via ordered `role_rules`, strongest role winning and networks unioned) with `unmatched_role` deciding whether a user matching nothing becomes a global viewer or is denied — any authorization-policy change revokes federated sessions, since only a login remaps them — and the IdP calls (discovery/token/JWKS) are the server's only outbound HTTP — lazy, bounded, and never on the local-login or startup path, so local accounts remain break-glass when the IdP is down. Builds stay fully offline; OIDC is runtime-only, admin-opted-in egress. Every successful sign-in (local or SSO) appends a `login_events` row, powering the admin-only Settings → Users view: all accounts with role, auth source, sign-in count, last sign-in, and 12 months of monthly totals.
 

@@ -75,6 +75,8 @@ export interface AgentInventorySummary {
   degraded: number
   healthy: number
   no_data: number
+  attention: number
+  dropped_results: number
 }
 
 // GET /api/v1/agents/health — 24h of per-agent probe success counts in
@@ -591,6 +593,7 @@ export interface TargetConfig {
 
 export interface TargetsConfigResponse {
   targets: TargetConfig[]
+  page?: ListPage
 }
 
 export interface MeshConfig {
@@ -621,6 +624,7 @@ export interface SiteConfig {
 
 export interface SitesConfigResponse {
   sites: SiteConfig[]
+  page?: ListPage
 }
 
 // GET /api/v1/config/networks — readable by any session (selector options
@@ -695,6 +699,7 @@ export interface ProbeConfig {
 
 export interface ProbesConfigResponse {
   probes: ProbeConfig[]
+  page?: ListPage
 }
 
 // GET /api/v1/config/probe-types — the server-side param registry. The

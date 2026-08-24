@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { apiGet } from '../api'
-import DisclosureChevron from '../components/DisclosureChevron'
+import DataTable, { type DataTableColumn } from '../components/DataTable'
 import PageError from '../components/PageError'
 import PathGraph from '../components/PathGraph'
 import { fmtAgo, fmtTime } from '../format'
-import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
+import { useNetworkFilter } from '../networkFilter'
 import { inheritRouteNetwork, updateRouteParams } from '../routeState'
 import { useTimezone } from '../timezone'
 import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
@@ -69,9 +69,7 @@ function changedHopCount(oldHops: Hop[], newHops: Hop[]): number {
   return changed
 }
 
-function EventRow({ e, expanded, onToggle }: { e: PathEvent; expanded: boolean; onToggle: () => void }) {
-  const count = changedHopCount(e.old_hops, e.new_hops)
-  const detailsID = `path-event-${e.id}`
+function DestinationCell({ e }: { e: PathEvent }) {
   // Destination links: site→site events go to the pair page, external
   // targets to their detail page. A deleted target has no id and stays
   // plain text.
@@ -88,68 +86,35 @@ function EventRow({ e, expanded, onToggle }: { e: PathEvent; expanded: boolean; 
   ) : (
     (e.target ?? '?')
   )
+  return dst
+}
+
+function EventDetails({ e }: { e: PathEvent }) {
   return (
-    <div className="path-event">
-      {/* Like the Agents rows: the header is a convenience click target
-          only, while the real disclosure semantics live on the View
-          details button — a link nested in a button role would be
-          flattened out of the accessibility tree. The a11y rules below
-          are satisfied by that button; the row click just duplicates it. */}
-      {/* oxlint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
-      <div
-        className="path-event-head"
-        onClick={(ev) => {
-          if ((ev.target as Element).closest('button, a')) return
-          onToggle()
-        }}
-      >
-        <span className="mono">
-          {e.src_site} → {dst}
+    <div className="path-event-details">
+      <div className="path-hashes">
+        <span className="hint">Path IDs</span>
+        <span className="hash-chip" title={e.old_path_hash}>
+          {e.old_path_hash}
         </span>
-        <span className="path-summary">
-          {count} {count === 1 ? 'hop' : 'hops'} changed
+        <span aria-hidden="true">→</span>
+        <span className="hash-chip" title={e.new_path_hash}>
+          {e.new_path_hash}
         </span>
-        <span className="hint" title={fmtTime(e.time)}>
-          {fmtAgo(e.time)}
-        </span>
-        <button
-          type="button"
-          className="incident-toggle path-toggle"
-          aria-expanded={expanded}
-          aria-controls={detailsID}
-          onClick={onToggle}
-        >
-          {expanded ? 'Hide details' : 'View details'}
-          <DisclosureChevron expanded={expanded} />
-        </button>
       </div>
-      {expanded && (
-        <div id={detailsID} className="path-event-details">
-          <div className="path-hashes">
-            <span className="hint">Path IDs</span>
-            <span className="hash-chip" title={e.old_path_hash}>
-              {e.old_path_hash}
-            </span>
-            <span aria-hidden="true">→</span>
-            <span className="hash-chip" title={e.new_path_hash}>
-              {e.new_path_hash}
-            </span>
-          </div>
-          <PathGraph
-            mode="diff"
-            source={e.src_site}
-            dest={e.dst_site ?? e.target ?? '?'}
-            paths={[
-              { key: 'old', hops: e.old_hops, destReached: true },
-              { key: 'new', hops: e.new_hops, destReached: true },
-            ]}
-          />
-          <details className="path-id">
-            <summary>Table view</summary>
-            <HopDiff oldHops={e.old_hops} newHops={e.new_hops} />
-          </details>
-        </div>
-      )}
+      <PathGraph
+        mode="diff"
+        source={e.src_site}
+        dest={e.dst_site ?? e.target ?? '?'}
+        paths={[
+          { key: 'old', hops: e.old_hops, destReached: true },
+          { key: 'new', hops: e.new_hops, destReached: true },
+        ]}
+      />
+      <details className="path-id">
+        <summary>Table view</summary>
+        <HopDiff oldHops={e.old_hops} newHops={e.new_hops} />
+      </details>
     </div>
   )
 }
@@ -167,11 +132,31 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
   const [error, setError] = useState<unknown>(null)
   const [retryKey, setRetryKey] = useState(0)
   const [query, setQuery] = useRouteSearch()
+  const pinnedEvent = useRef<string | null>(expandedEvent)
+
+  if (!expandedEvent) pinnedEvent.current = null
+  else if (pinnedEvent.current !== expandedEvent) {
+    pinnedEvent.current = data?.events.some((event) => event.id === expandedEvent) ? null : expandedEvent
+  }
+  const pinnedEventID = pinnedEvent.current === expandedEvent ? expandedEvent : null
 
   useEffect(() => {
     let cancelled = false
+    const params = new URLSearchParams({
+      window: win,
+      limit: String(ROUTE_PAGE),
+      offset: String(pinnedEventID ? 0 : (page - 1) * ROUTE_PAGE),
+      sort,
+      order,
+    })
+    if (network) params.set('network', network)
+    // Investigation links carry a stable event ID. Querying that ID keeps
+    // the linked row available even when it is not on the default first
+    // page; the store's route search includes exact event identities.
+    if (pinnedEventID) params.set('q', pinnedEventID)
+    else if (query.trim()) params.set('q', query.trim())
     const load = () =>
-      apiGet<PathEventsResponse>(`/api/v1/path-events?window=${win}`)
+      apiGet<PathEventsResponse>('/api/v1/path-events?' + params.toString())
         .then((res) => {
           if (!cancelled) {
             setData(res)
@@ -189,73 +174,64 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
       cancelled = true
       clearInterval(id)
     }
-  }, [win, onAuthError, retryKey])
+  }, [network, onAuthError, order, page, pinnedEventID, query, retryKey, sort, win])
 
-  // The global top-bar network filter narrows first (the header count reads
-  // this subset too), then the search narrows the listed rows.
-  const events = useMemo(
-    () => (data?.events ?? []).filter((e) => matchesNetworkFilter(network, e.network)),
-    [data, network],
-  )
-  const visible = useMemo(() => {
-    const needle = query.trim().toLowerCase()
-    let filtered = events
-    // "src -> dst" filters by direction; either side may be empty ("lon ->",
-    // "-> ny"). "→" is accepted so a copied row header works as a query.
-    const parts = needle.split(/->|→/)
-    if (needle && parts.length > 1) {
-      const src = parts[0].trim()
-      const dst = parts.slice(1).join('->').trim()
-      filtered = events.filter((event) => {
-        const srcMatch = !src || event.src_site.toLowerCase().includes(src)
-        const dstMatch =
-          !dst ||
-          [event.dst_site, event.target].filter(Boolean).some((value) => String(value).toLowerCase().includes(dst))
-        return srcMatch && dstMatch
-      })
-    } else if (needle) {
-      filtered = events.filter((event) =>
-        [event.src_site, event.dst_site, event.target, event.agent]
-          .filter(Boolean)
-          .some((value) => String(value).toLowerCase().includes(needle)),
-      )
-    }
-    // oxlint-disable-next-line unicorn/no-array-sort
-    return [...filtered].sort((a, b) => {
-      const value = (event: PathEvent): string | number => {
-        if (sort === 'source') return event.src_site
-        if (sort === 'destination') return event.dst_site ?? event.target ?? ''
-        if (sort === 'changes') return changedHopCount(event.old_hops, event.new_hops)
-        return Date.parse(event.time)
-      }
-      const x = value(a)
-      const y = value(b)
-      const comparison = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y))
-      return order === 'asc' ? comparison : -comparison
-    })
-  }, [events, order, query, sort])
-
-  const pageCount = Math.max(1, Math.ceil(visible.length / ROUTE_PAGE))
-  const positionedEvent = useRef<string | null>(null)
+  const events = data?.events ?? []
+  const pageMeta = data?.page ?? { limit: ROUTE_PAGE, offset: 0, total: events.length, has_more: false }
+  const pageCount = Math.max(1, Math.ceil(pageMeta.total / ROUTE_PAGE))
   useEffect(() => {
     if (page > pageCount) setPage(pageCount, 'replace')
   }, [page, pageCount, setPage])
-  useEffect(() => {
-    if (!expandedEvent || !data) return
-    if (events.some((event) => event.id === expandedEvent)) return
-    setExpandedEvent('', 'replace')
-  }, [data, events, expandedEvent, setExpandedEvent])
-  useEffect(() => {
-    if (!expandedEvent) {
-      positionedEvent.current = null
-      return
-    }
-    if (positionedEvent.current === expandedEvent) return
-    const index = visible.findIndex((event) => event.id === expandedEvent)
-    if (index === -1) return
-    positionedEvent.current = expandedEvent
-    setPage(Math.floor(index / ROUTE_PAGE) + 1, 'replace')
-  }, [expandedEvent, setPage, visible])
+
+  const columns: DataTableColumn<PathEvent>[] = [
+    {
+      key: 'source',
+      label: 'Source',
+      sortKey: 'source',
+      priority: 'identity',
+      className: 'mono',
+      render: (event) => event.src_site || 'deleted source',
+    },
+    {
+      key: 'destination',
+      label: 'Destination',
+      sortKey: 'destination',
+      priority: 'identity',
+      className: 'mono',
+      render: (event) => <DestinationCell e={event} />,
+    },
+    {
+      key: 'changes',
+      label: 'Changed hops',
+      sortKey: 'changes',
+      priority: 'primary',
+      render: (event) => {
+        const count = event.changed_hops ?? changedHopCount(event.old_hops, event.new_hops)
+        return `${count} ${count === 1 ? 'hop' : 'hops'}`
+      },
+    },
+    {
+      key: 'time',
+      label: 'Time',
+      sortKey: 'time',
+      priority: 'status',
+      render: (event) => <span title={fmtTime(event.time)}>{fmtAgo(event.time)}</span>,
+    },
+    {
+      key: 'agent',
+      label: 'Agent',
+      priority: 'secondary',
+      className: 'mono',
+      render: (event) => event.agent || 'deleted',
+    },
+    {
+      key: 'network',
+      label: 'Network',
+      priority: 'secondary',
+      className: 'mono',
+      render: (event) => event.network || 'unavailable',
+    },
+  ]
 
   if (error && !data)
     return (
@@ -286,7 +262,7 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
         </div>
         <div className="chips">
           <span className="chip">
-            in window <span className="mono">{events.length}</span>
+            in window <span className="mono">{pageMeta.total}</span>
           </span>
         </div>
       </div>
@@ -304,7 +280,10 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
             type="search"
             placeholder={'Search source, destination, or agent — or "lon -> ny"'}
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value)
+              if (expandedEvent) setExpandedEvent('', 'replace')
+            }}
           />
         </label>
         <label className="compact-select">
@@ -352,40 +331,39 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
             {error ? ' · refresh failed, showing last data' : ''}
           </span>
         </div>
-        {visible.length === 0 ? (
-          <div className="empty-state">
-            <strong>{query ? 'No matching route changes' : 'Routes stable'}</strong>
-            <span>
-              {query
-                ? 'Try a different site or agent, or a direction pattern like "lon ->".'
-                : 'No path changes in this window.'}
-            </span>
-          </div>
-        ) : (
-          <>
-            {visible.slice((page - 1) * ROUTE_PAGE, page * ROUTE_PAGE).map((e) => (
-              <EventRow
-                key={e.id}
-                e={e}
-                expanded={expandedEvent === e.id}
-                onToggle={() => setExpandedEvent(expandedEvent === e.id ? '' : e.id)}
-              />
-            ))}
-            {pageCount > 1 && (
-              <div className="progressive-footer">
-                <span className="hint">
-                  Page {page} of {pageCount} · {visible.length} route changes
-                </span>
-                <button className="secondary-button" disabled={page === 1} onClick={() => setPage(page - 1)}>
-                  Previous
-                </button>
-                <button className="secondary-button" disabled={page === pageCount} onClick={() => setPage(page + 1)}>
-                  Next
-                </button>
-              </div>
-            )}
-          </>
-        )}
+        <DataTable
+          label="Path changes"
+          rows={events}
+          rowKey={(event) => event.id}
+          columns={columns}
+          sort={{ key: sort, order: order === 'asc' ? 'asc' : 'desc' }}
+          onSortChange={(next) =>
+            updateRouteParams({
+              sort: next.key === 'time' ? null : next.key,
+              order: next.order === 'desc' ? null : next.order,
+              page: null,
+              event: null,
+            })
+          }
+          page={pageMeta}
+          onPageChange={(next) => {
+            setExpandedEvent('', 'replace')
+            setPage(next)
+          }}
+          resultLabel="route changes"
+          emptyTitle={query ? 'No matching route changes' : 'Routes stable'}
+          emptyDescription={
+            query
+              ? 'Try a different site or agent, or a direction pattern like "lon ->".'
+              : 'No path changes in this window.'
+          }
+          disclosure={{
+            expandedKey: expandedEvent || null,
+            onExpandedKeyChange: (key) => setExpandedEvent(key ?? '', key === null ? 'replace' : 'push'),
+            label: (_event, expanded) => (expanded ? 'Hide evidence' : 'Show evidence'),
+            render: (event) => <EventDetails e={event} />,
+          }}
+        />
       </div>
     </>
   )

@@ -1814,7 +1814,7 @@ func TestAgentsQueryMode(t *testing.T) {
 		ID: uuid.New(), Site: "lon", Network: "corp", Hostname: "edge",
 		Health: store.AgentHealthDegraded,
 	}}
-	f.agentQuerySummary = store.AgentInventorySummary{Total: 3, Degraded: 2, Healthy: 1}
+	f.agentQuerySummary = store.AgentInventorySummary{Total: 3, Degraded: 2, Healthy: 1, Attention: 2}
 	h := newTestAPI(t, f)
 	cookie, _ := loginAndCookie(t, h, f)
 
@@ -1844,7 +1844,7 @@ func TestAgentsQueryMode(t *testing.T) {
 		t.Errorf("query agents body = %+v", body)
 	}
 	if body.Page != (listPageJSON{Limit: 1, Total: 3, HasMore: true}) ||
-		body.Summary != (agentSummaryJSON{Total: 3, Degraded: 2, Healthy: 1}) {
+		body.Summary != (agentSummaryJSON{Total: 3, Degraded: 2, Healthy: 1, Attention: 2}) {
 		t.Errorf("agent metadata = page %+v summary %+v", body.Page, body.Summary)
 	}
 
@@ -1855,6 +1855,14 @@ func TestAgentsQueryMode(t *testing.T) {
 	if w.Code != http.StatusOK || f.lastAgentQuery.Sort != "health" ||
 		f.lastAgentQuery.Order != "asc" || f.lastAgentQuery.Limit != 100 {
 		t.Errorf("agent query defaults = %d %+v", w.Code, f.lastAgentQuery)
+	}
+
+	req = httptest.NewRequest("GET", "/api/v1/agents?health=attention", nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK || f.lastAgentQuery.Health != store.AgentHealthAttention {
+		t.Errorf("attention query = %d %+v", w.Code, f.lastAgentQuery)
 	}
 }
 

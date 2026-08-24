@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { apiGet } from '../api'
-import DisclosureChevron from '../components/DisclosureChevron'
+import DataTable, { type DataTableColumn } from '../components/DataTable'
 import HealthStrip, { stripStats, UptimeValue } from '../components/HealthStrip'
 import PageError from '../components/PageError'
 import { fmtAgo, fmtTime } from '../format'
-import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
+import { useNetworkFilter } from '../networkFilter'
 import { pageFailure } from '../pageState'
 import { inheritRouteNetwork, updateRouteParams } from '../routeState'
 import { useTimezone } from '../timezone'
@@ -45,22 +45,6 @@ function health(a: AgentInfo): { status: Health; label: string } {
 
 function certDaysLeft(notAfter: string): number {
   return Math.floor((new Date(notAfter).getTime() - Date.now()) / 86_400_000)
-}
-
-// Attention = not healthy OR spool drops in the last 24 h. Must stay in
-// lockstep with Overview's attentionReason so the fleet card there and the
-// Attention filter here always agree on which agents need a look. Drops
-// stay out of health() — they don't make the agent's link unhealthy, they
-// mean data was lost.
-const DROP_ATTENTION_MS = 24 * 60 * 60 * 1000
-
-function needsAttention(a: AgentInfo): boolean {
-  if (health(a).status !== 'ok') return true
-  // CertCell renders the ≤CERT_WARN_DAYS window in degraded styling; a row
-  // carrying that warning must not sort under Healthy — renewal is
-  // actionable now, not at expiry.
-  if (a.cert_not_after && certDaysLeft(a.cert_not_after) <= CERT_WARN_DAYS) return true
-  return a.last_dropped_at != null && Date.now() - Date.parse(a.last_dropped_at) < DROP_ATTENTION_MS
 }
 
 function CertCell({ a }: { a: AgentInfo }) {
@@ -236,117 +220,27 @@ function ProbeDetail({
   )
 }
 
-function Row({
+function AgentDetails({
   a,
-  multiNetwork,
-  expanded,
-  onToggle,
   detail,
   detailError,
   selectedProbe,
   onSelectProbe,
 }: {
   a: AgentInfo
-  multiNetwork: boolean
-  expanded: boolean
-  onToggle: () => void
   detail: AgentProbeHealthResponse | null
   detailError: unknown
   selectedProbe: string
   onSelectProbe: (probe: string) => void
 }) {
-  const h = health(a)
-  const detailsID = `agent-detail-${a.id}`
   return (
-    <>
-      <tr
-        id={'agent-' + a.id}
-        className="agent-row"
-        onClick={(e) => {
-          // The whole row is a convenience click target, but never steal
-          // clicks meant for real controls inside it.
-          if ((e.target as Element).closest('button, a')) return
-          onToggle()
-        }}
-      >
-        <td data-label="Status">
-          <span className={'status-text-' + h.status}>
-            <span className={'dot swatch status-' + h.status} /> {h.label}
-          </span>
-        </td>
-        <td className="mono" data-label="Agent" title={`enrolled ${fmtTime(a.enrolled_at)} · ${a.id}`}>
-          {a.site} · {a.hostname}
-        </td>
-        {multiNetwork && (
-          <td className="mono" data-label="Network">
-            {a.network}
-          </td>
-        )}
-        <td className="mono" data-label="Address">
-          {a.probe_address || '—'}
-        </td>
-        <td className="mono" data-label="Version">
-          {a.version || '—'}
-        </td>
-        <td data-label="Last seen" title={fmtTime(a.last_seen_at)}>
-          {fmtAgo(a.last_seen_at)}
-        </td>
-        <td data-label="Probes">
-          {a.probes_total === 0 ? (
-            <span className="hint">none yet</span>
-          ) : a.probes_failing > 0 ? (
-            <span className="status-text-degraded">
-              {a.probes_failing} of {a.probes_total} failing
-            </span>
-          ) : (
-            <span className="muted">{a.probes_total} ok</span>
-          )}
-        </td>
-        <td data-label="Spool drops">
-          {a.dropped_results === 0 ? (
-            <span className="muted">none</span>
-          ) : (
-            <span
-              className="status-text-degraded"
-              title={a.last_dropped_at ? `last ${fmtTime(a.last_dropped_at)}` : undefined}
-            >
-              {a.dropped_results.toLocaleString()} lost · {fmtAgo(a.last_dropped_at)}
-            </span>
-          )}
-        </td>
-        <td data-label="Certificate">
-          <CertCell a={a} />
-        </td>
-        <td className="mono" data-label="Config" title={a.config_hash || undefined}>
-          {a.config_hash ? a.config_hash.slice(0, 8) : '—'}
-        </td>
-        <td data-label="Detail">
-          <button
-            type="button"
-            className="incident-toggle agent-detail-toggle"
-            aria-expanded={expanded}
-            aria-controls={detailsID}
-            onClick={onToggle}
-          >
-            {expanded ? 'Hide details' : 'View details'}
-            <DisclosureChevron expanded={expanded} />
-          </button>
-        </td>
-      </tr>
-      {expanded && (
-        <tr id={detailsID} className="agent-detail-row">
-          <td colSpan={multiNetwork ? 11 : 10} data-label="24 h probes">
-            <ProbeDetail
-              agentId={a.id}
-              detail={detail}
-              error={detailError}
-              selectedProbe={selectedProbe}
-              onSelectProbe={onSelectProbe}
-            />
-          </td>
-        </tr>
-      )}
-    </>
+    <ProbeDetail
+      agentId={a.id}
+      detail={detail}
+      error={detailError}
+      selectedProbe={selectedProbe}
+      onSelectProbe={onSelectProbe}
+    />
   )
 }
 
@@ -369,6 +263,7 @@ export default function Agents({
   const [order] = useRouteParam('order', 'asc')
   const [page, setPage] = useRouteNumber('page', 1)
   const [selectedProbe, setSelectedProbe] = useRouteParam('probe')
+  const { network } = useNetworkFilter()
   const scrolledAgent = useRef<string | null>(null)
   const scrolledProbe = useRef<string | null>(null)
   const filter = healthParam as FleetFilter
@@ -379,13 +274,30 @@ export default function Agents({
   // Agents link resets the hash — so deep links from the Overview fleet
   // card, refreshes, and Back all restore the expansion for free.
   const expanded = agent
+  const pinnedAgent = useRef<string | null>(expanded)
   const [detail, setDetail] = useState<AgentProbeHealthResponse | null>(null)
   const [detailError, setDetailError] = useState<unknown>(null)
 
+  if (!expanded) pinnedAgent.current = null
+  else if (pinnedAgent.current !== expanded) {
+    pinnedAgent.current = data?.agents.some((row) => row.id === expanded) ? null : expanded
+  }
+  const pinnedAgentID = pinnedAgent.current === expanded ? expanded : null
+
   useEffect(() => {
     let cancelled = false
+    const params = new URLSearchParams({
+      limit: String(AGENT_PAGE),
+      offset: String(pinnedAgentID ? 0 : (page - 1) * AGENT_PAGE),
+      sort: sort === 'status' ? 'health' : sort,
+      order,
+    })
+    if (network) params.set('network', network)
+    if (pinnedAgentID) params.set('q', pinnedAgentID)
+    else if (query.trim()) params.set('q', query.trim())
+    if (filter !== 'all') params.set('health', filter)
     const load = () =>
-      apiGet<AgentsResponse>('/api/v1/agents')
+      apiGet<AgentsResponse>('/api/v1/agents?' + params.toString())
         .then((res) => {
           if (!cancelled) {
             setData(res)
@@ -403,7 +315,7 @@ export default function Agents({
       cancelled = true
       clearInterval(id)
     }
-  }, [onAuthError, retryKey])
+  }, [filter, network, onAuthError, order, page, pinnedAgentID, query, retryKey, sort])
 
   useEffect(() => {
     if (!expanded) {
@@ -441,12 +353,6 @@ export default function Agents({
   }, [expanded, expandedAgent?.hostname, onTitleChange])
 
   useEffect(() => {
-    if (!data || !expanded) return
-    if (data.agents.some((row) => row.id === expanded)) return
-    updateRouteParams({ agent: null, probe: null }, 'replace')
-  }, [data, expanded])
-
-  useEffect(() => {
     if (!selectedProbe) {
       scrolledProbe.current = null
       return
@@ -475,65 +381,28 @@ export default function Agents({
       return
     }
     if (!data || scrolledAgent.current === expanded) return
-    const row = document.getElementById('agent-' + expanded)
+    const surface = window.matchMedia('(max-width: 760px)').matches ? 'mobile' : 'desktop'
+    const row = document.getElementById(`agent-${expanded}-${surface}`)
     if (!row) return
     row.scrollIntoView({ block: 'nearest' })
     scrolledAgent.current = expanded
   }, [expanded, data, page])
 
-  // The global top-bar network filter scopes the whole view: rows, header
-  // chips, and the health-filter button counts all derive from this subset.
-  const { network } = useNetworkFilter()
-  const fleet = useMemo(
-    () => (data?.agents ?? []).filter((a) => matchesNetworkFilter(network, a.network)),
-    [data, network],
-  )
-  const visible = useMemo(() => {
-    const needle = query.trim().toLowerCase()
-    const filtered = fleet.filter((row) => {
-      // The two filters partition the fleet on needsAttention — including
-      // never-seen (stale) agents and recent spool drops — so the button
-      // counts always match the rows they reveal.
-      if (filter === 'attention' && !needsAttention(row)) return false
-      if (filter === 'healthy' && needsAttention(row)) return false
-      if (!needle) return true
-      return [row.site, row.network, row.hostname, row.probe_address, row.version].some((value) =>
-        value.toLowerCase().includes(needle),
-      )
-    })
-    // oxlint-disable-next-line unicorn/no-array-sort
-    return [...filtered].sort((a, b) => {
-      const value = (row: AgentInfo): string | number => {
-        if (sort === 'site') return row.site
-        if (sort === 'hostname') return row.hostname
-        if (sort === 'last_seen') return row.last_seen_at ? Date.parse(row.last_seen_at) : 0
-        const rank: Record<Health, number> = { down: 0, degraded: 1, stale: 2, ok: 3 }
-        return rank[health(row).status]
-      }
-      const x = value(a)
-      const y = value(b)
-      const comparison = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y))
-      return order === 'desc' ? -comparison : comparison
-    })
-  }, [fleet, filter, order, query, sort])
-  const pageCount = Math.max(1, Math.ceil(visible.length / AGENT_PAGE))
-  const pageRows = visible.slice((page - 1) * AGENT_PAGE, page * AGENT_PAGE)
-  const positionedAgent = useRef<string | null>(null)
+  const fleet = data?.agents ?? []
+  const pageMeta = data?.page ?? { limit: AGENT_PAGE, offset: 0, total: fleet.length, has_more: false }
+  const summary = data?.summary ?? {
+    total: fleet.length,
+    offline: 0,
+    degraded: 0,
+    healthy: 0,
+    no_data: 0,
+    attention: 0,
+    dropped_results: 0,
+  }
+  const pageCount = Math.max(1, Math.ceil(pageMeta.total / AGENT_PAGE))
   useEffect(() => {
     if (page > pageCount) setPage(pageCount, 'replace')
   }, [page, pageCount, setPage])
-  useEffect(() => {
-    if (!expanded) {
-      positionedAgent.current = null
-      return
-    }
-    if (positionedAgent.current === expanded) return
-    const index = visible.findIndex((row) => row.id === expanded)
-    if (index === -1) return
-    positionedAgent.current = expanded
-    const selectedPage = Math.floor(index / AGENT_PAGE) + 1
-    setPage(selectedPage, 'replace')
-  }, [expanded, setPage, visible])
 
   if (error && !data)
     return (
@@ -554,17 +423,97 @@ export default function Agents({
       </div>
     )
 
-  // Column appears only when the fleet actually spans networks — derived
-  // from the whole fleet, not the filtered subset, so the table shape stays
-  // stable as the global filter changes; single-network installs keep the
-  // exact pre-networks table.
-  const multiNetwork = new Set(data.agents.map((a) => a.network)).size > 1
+  const down = summary.offline
+  const degraded = summary.degraded
+  const dropsTotal = summary.dropped_results
+  const attention = summary.attention
+  const healthy = summary.total - attention
 
-  const down = fleet.filter((a) => health(a).status === 'down').length
-  const degraded = fleet.filter((a) => health(a).status === 'degraded').length
-  const dropsTotal = fleet.reduce((sum, a) => sum + a.dropped_results, 0)
-  const attention = fleet.filter(needsAttention).length
-  const healthy = fleet.length - attention
+  const columns: DataTableColumn<AgentInfo>[] = [
+    {
+      key: 'status',
+      label: 'Status',
+      sortKey: 'status',
+      priority: 'status',
+      render: (row) => {
+        const current = health(row)
+        return (
+          <span className={'status-text-' + current.status}>
+            <span className={'dot swatch status-' + current.status} /> {current.label}
+          </span>
+        )
+      },
+    },
+    {
+      key: 'agent',
+      label: 'Agent',
+      sortKey: 'hostname',
+      priority: 'identity',
+      className: 'mono',
+      render: (row) => (
+        <span title={`enrolled ${fmtTime(row.enrolled_at)} · ${row.id}`}>
+          {row.site} · {row.hostname}
+        </span>
+      ),
+    },
+    { key: 'network', label: 'Network', priority: 'secondary', className: 'mono', render: (row) => row.network },
+    {
+      key: 'address',
+      label: 'Address',
+      priority: 'primary',
+      className: 'mono',
+      render: (row) => row.probe_address || '—',
+    },
+    { key: 'version', label: 'Version', priority: 'secondary', className: 'mono', render: (row) => row.version || '—' },
+    {
+      key: 'last_seen',
+      label: 'Last seen',
+      sortKey: 'last_seen',
+      priority: 'primary',
+      render: (row) => <span title={fmtTime(row.last_seen_at)}>{fmtAgo(row.last_seen_at)}</span>,
+    },
+    {
+      key: 'probes',
+      label: 'Probes',
+      priority: 'primary',
+      render: (row) =>
+        row.probes_total === 0 ? (
+          <span className="hint">none yet</span>
+        ) : row.probes_failing > 0 ? (
+          <span className="status-text-degraded">
+            {row.probes_failing} of {row.probes_total} failing
+          </span>
+        ) : (
+          <span className="muted">{row.probes_total} ok</span>
+        ),
+    },
+    {
+      key: 'spool',
+      label: 'Spool drops',
+      priority: 'secondary',
+      render: (row) =>
+        row.dropped_results === 0 ? (
+          <span className="muted">none</span>
+        ) : (
+          <span
+            className="status-text-degraded"
+            title={row.last_dropped_at ? `last ${fmtTime(row.last_dropped_at)}` : undefined}
+          >
+            {row.dropped_results.toLocaleString()} lost · {fmtAgo(row.last_dropped_at)}
+          </span>
+        ),
+    },
+    { key: 'certificate', label: 'Certificate', priority: 'secondary', render: (row) => <CertCell a={row} /> },
+    {
+      key: 'config',
+      label: 'Config',
+      priority: 'secondary',
+      className: 'mono',
+      render: (row) => (
+        <span title={row.config_hash || undefined}>{row.config_hash ? row.config_hash.slice(0, 8) : '—'}</span>
+      ),
+    },
+  ]
 
   return (
     <>
@@ -576,7 +525,7 @@ export default function Agents({
         </div>
         <div className="chips">
           <span className="chip">
-            enrolled <span className="mono">{fleet.length}</span>
+            enrolled <span className="mono">{summary.total}</span>
           </span>
           <span className="chip">
             {down > 0 && <span className="dot swatch status-down" />}
@@ -605,21 +554,21 @@ export default function Agents({
             aria-pressed={filter === 'all'}
             onClick={() => updateRouteParams({ health: null, page: null, agent: null, probe: null })}
           >
-            All {fleet.length}
+            All
           </button>
           <button
             className={filter === 'attention' ? 'active' : ''}
             aria-pressed={filter === 'attention'}
             onClick={() => updateRouteParams({ health: 'attention', page: null, agent: null, probe: null })}
           >
-            Attention {attention}
+            Attention {filter === 'all' ? attention : ''}
           </button>
           <button
             className={filter === 'healthy' ? 'active' : ''}
             aria-pressed={filter === 'healthy'}
             onClick={() => updateRouteParams({ health: 'healthy', page: null, agent: null, probe: null })}
           >
-            Healthy {healthy}
+            Healthy {filter === 'all' ? healthy : ''}
           </button>
         </div>
         <label className="search-field">
@@ -628,7 +577,10 @@ export default function Agents({
             type="search"
             placeholder="Search site, host, or address"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value)
+              if (expanded) updateRouteParams({ agent: null, probe: null }, 'replace')
+            }}
           />
         </label>
         <label className="compact-select">
@@ -661,69 +613,50 @@ export default function Agents({
             Spool drops are lifetime totals{error ? ' · refresh failed, showing last data' : ''}
           </span>
         </div>
-        {visible.length === 0 ? (
-          <div className="empty-state">
-            <strong>{data.agents.length === 0 ? 'No agents enrolled' : 'No matching agents'}</strong>
-            <span>
-              {data.agents.length === 0
-                ? 'Enroll an agent to begin monitoring a site.'
-                : 'Change the health filter, search query, or top-bar network filter.'}
-            </span>
-          </div>
-        ) : (
-          <div className="scroll-x">
-            <table className="events">
-              <thead>
-                <tr>
-                  <th className="eyebrow">status</th>
-                  <th className="eyebrow">agent</th>
-                  {multiNetwork && <th className="eyebrow">network</th>}
-                  <th className="eyebrow">address</th>
-                  <th className="eyebrow">version</th>
-                  <th className="eyebrow">last seen</th>
-                  <th className="eyebrow">probes</th>
-                  <th className="eyebrow">spool drops</th>
-                  <th className="eyebrow">certificate</th>
-                  <th className="eyebrow">config</th>
-                  <th className="actions-col">
-                    <span className="sr-only">Detail</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {pageRows.map((a) => (
-                  <Row
-                    key={a.id}
-                    a={a}
-                    multiNetwork={multiNetwork}
-                    expanded={expanded === a.id}
-                    onToggle={() => {
-                      updateRouteParams({ agent: expanded === a.id ? null : a.id, probe: null })
-                    }}
-                    detail={detail}
-                    detailError={detailError}
-                    selectedProbe={selectedProbe}
-                    onSelectProbe={setSelectedProbe}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        <DataTable
+          label="Enrolled agents"
+          rows={fleet}
+          rowKey={(row) => row.id}
+          rowID={(row) => 'agent-' + row.id}
+          columns={columns}
+          sort={{ key: sort, order: order === 'desc' ? 'desc' : 'asc' }}
+          onSortChange={(next) =>
+            updateRouteParams({
+              sort: next.key === 'status' ? null : next.key,
+              order: next.order === 'asc' ? null : next.order,
+              page: null,
+              agent: null,
+              probe: null,
+            })
+          }
+          page={pageMeta}
+          onPageChange={(next) => {
+            updateRouteParams({ page: next === 1 ? null : next, agent: null, probe: null })
+          }}
+          resultLabel="agents"
+          emptyTitle={summary.total === 0 && !query && filter === 'all' ? 'No agents enrolled' : 'No matching agents'}
+          emptyDescription={
+            summary.total === 0 && !query && filter === 'all'
+              ? 'Enroll an agent to begin monitoring a site.'
+              : 'Change the health filter, search query, or top-bar network filter.'
+          }
+          disclosure={{
+            expandedKey: expanded,
+            onExpandedKeyChange: (key) =>
+              updateRouteParams({ agent: key, probe: null }, key === null ? 'replace' : 'push'),
+            label: (_row, open) => (open ? 'Hide probe evidence' : 'Show probe evidence'),
+            render: (row) => (
+              <AgentDetails
+                a={row}
+                detail={detail}
+                detailError={detailError}
+                selectedProbe={selectedProbe}
+                onSelectProbe={setSelectedProbe}
+              />
+            ),
+          }}
+        />
       </div>
-      {pageCount > 1 && (
-        <div className="progressive-footer">
-          <span className="hint">
-            Page {page} of {pageCount} · {visible.length} agents
-          </span>
-          <button className="secondary-button" disabled={page === 1} onClick={() => setPage(page - 1)}>
-            Previous
-          </button>
-          <button className="secondary-button" disabled={page === pageCount} onClick={() => setPage(page + 1)}>
-            Next
-          </button>
-        </div>
-      )}
     </>
   )
 }

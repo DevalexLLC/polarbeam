@@ -1,6 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { apiDelete, apiGet, apiPost, apiPut } from '../api'
 import { fmtAgo } from '../format'
+import { useNetworkFilter } from '../networkFilter'
+import { updateRouteParams } from '../routeState'
+import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
 import type {
   MeshesConfigResponse,
   ParamSpec,
@@ -13,6 +16,7 @@ import type {
 import type { PlaneChoice } from '../plane'
 import { initialPlane, networkField, planeReady } from '../plane'
 import ConfirmButton from './ConfirmButton'
+import DataTable, { type DataTableColumn } from './DataTable'
 import PlaneField from './PlaneField'
 import SettingsPageError from './SettingsPageError'
 
@@ -26,9 +30,6 @@ const DEFAULT_TRAIN_SPACING_MS = 200
 // for the client-side mtu.min < mtu.max cross-check.
 const DEFAULT_MTU_MIN = 1280
 const DEFAULT_MTU_MAX = 1500
-// Stable identity for the not-yet-loaded case: a fresh `[]` per render would
-// change the memo key every render and defeat the pagination memo below.
-const NO_PROBES: ProbeConfig[] = []
 
 interface ProbeDraft {
   mode: 'mesh' | 'direct'
@@ -211,8 +212,18 @@ export default function ProbesPanel({
   const [error, setError] = useState<unknown>(null)
   const [retryKey, setRetryKey] = useState(0)
   const [rowError, setRowError] = useState('')
-  const [visible, setVisible] = useState(PROBE_PAGE)
   const [busy, setBusy] = useState(false)
+  const [query, setQuery] = useRouteSearch()
+  const [queryParam] = useRouteParam('q')
+  const [mode] = useRouteParam('mode', 'all')
+  const [enabled] = useRouteParam('enabled', 'all')
+  const [typeFilter] = useRouteParam('type', 'all')
+  const [sort] = useRouteParam('sort', 'site')
+  const [order] = useRouteParam('order', 'asc')
+  const [page, setPage] = useRouteNumber('page', 1)
+  const [expandedRow, setExpandedRow] = useState<string | null>(null)
+  const [actionRow, setActionRow] = useState<string | null>(null)
+  const { network } = useNetworkFilter()
 
   // Create form
   const [draft, setDraft] = useState<ProbeDraft | null>(null)
@@ -225,6 +236,27 @@ export default function ProbesPanel({
   const [editDraft, setEditDraft] = useState<ProbeDraft | null>(null)
   const [editErrors, setEditErrors] = useState<string[]>([])
   const scrolledProbe = useRef<string | null>(null)
+  const pinnedProbe = useRef<string | null>(selectedProbe)
+
+  if (!selectedProbe) pinnedProbe.current = null
+  else if (pinnedProbe.current !== selectedProbe) {
+    pinnedProbe.current = data?.probes.some((probe) => probe.id === selectedProbe) ? null : selectedProbe
+  }
+  const pinnedProbeID = pinnedProbe.current === selectedProbe ? selectedProbe : null
+
+  const probeParams = new URLSearchParams({
+    limit: String(PROBE_PAGE),
+    offset: String(pinnedProbeID ? 0 : (page - 1) * PROBE_PAGE),
+    sort,
+    order,
+  })
+  if (pinnedProbeID) probeParams.set('q', pinnedProbeID)
+  else if (queryParam.trim()) probeParams.set('q', queryParam.trim())
+  if (mode !== 'all') probeParams.set('mode', mode)
+  if (enabled !== 'all') probeParams.set('enabled', enabled)
+  if (typeFilter !== 'all') probeParams.set('type', typeFilter)
+  if (network) probeParams.set('network', network)
+  const requestURL = '/api/v1/config/probes?' + probeParams.toString()
 
   // Static per server version: fetch once on entry (and on an explicit
   // retry), independently from the 30-second configuration poll.
@@ -251,21 +283,10 @@ export default function ProbesPanel({
   useEffect(() => {
     let cancelled = false
     const load = () => {
-      Promise.all([
-        apiGet<ProbesConfigResponse>('/api/v1/config/probes'),
-        apiGet<MeshesConfigResponse>('/api/v1/config/meshes'),
-        apiGet<SitesResponse>('/api/v1/sites'),
-        apiGet<TargetsConfigResponse>('/api/v1/config/targets'),
-      ])
-        .then(([probes, meshRes, sitesRes, targetsRes]) => {
+      apiGet<ProbesConfigResponse>(requestURL)
+        .then((probes) => {
           if (cancelled) return
           setData(probes)
-          setMeshes(meshRes.meshes.map((m) => m.name))
-          setSites(sitesRes.sites.map((s) => s.name))
-          // Agent-kind targets are excluded: they carry no address/port/URL
-          // (mesh expansion resolves peers), so the server rejects direct
-          // probes against them.
-          setTargets(targetsRes.targets.filter((t) => t.kind === 'external').map((t) => t.name))
           setError(null)
         })
         .catch((err) => {
@@ -281,9 +302,41 @@ export default function ProbesPanel({
       cancelled = true
       clearInterval(id)
     }
+  }, [onAuthError, requestURL, retryKey])
+
+  useEffect(() => {
+    let cancelled = false
+    const loadOptions = () => {
+      Promise.all([
+        apiGet<MeshesConfigResponse>('/api/v1/config/meshes'),
+        apiGet<SitesResponse>('/api/v1/sites'),
+        apiGet<TargetsConfigResponse>('/api/v1/config/targets'),
+      ])
+        .then(([meshRes, sitesRes, targetsRes]) => {
+          if (cancelled) return
+          setMeshes(meshRes.meshes.map((m) => m.name))
+          setSites(sitesRes.sites.map((s) => s.name))
+          // Agent-kind targets are excluded: they carry no address/port/URL
+          // (mesh expansion resolves peers), so the server rejects direct
+          // probes against them.
+          setTargets(targetsRes.targets.filter((t) => t.kind === 'external').map((t) => t.name))
+        })
+        .catch((err) => {
+          if (cancelled) return
+          onAuthError(err)
+          console.error('probe form options request failed', err)
+          setError(err)
+        })
+    }
+    loadOptions()
+    const id = setInterval(loadOptions, POLL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
   }, [onAuthError, retryKey])
 
-  const reload = () => apiGet<ProbesConfigResponse>('/api/v1/config/probes').then(setData).catch(onAuthError)
+  const reload = () => apiGet<ProbesConfigResponse>(requestURL).then(setData).catch(onAuthError)
 
   const create = async () => {
     if (!draft) return
@@ -352,7 +405,7 @@ export default function ProbesPanel({
     }
   }
 
-  const setEnabled = async (p: ProbeConfig, enabled: boolean) => {
+  const setEnabled = async (p: ProbeConfig, nextEnabled: boolean) => {
     setBusy(true)
     setRowError('')
     try {
@@ -362,7 +415,7 @@ export default function ProbesPanel({
         train_count: p.train_count,
         train_spacing_ms: p.train_spacing_ms,
         params: p.params,
-        enabled,
+        enabled: nextEnabled,
       })
       // Re-enabling a probe configured before the advisory existed is the
       // one moment an upgraded installation hears about it, so this write
@@ -392,8 +445,7 @@ export default function ProbesPanel({
     }
   }
 
-  const probes = data?.probes ?? NO_PROBES
-  const shown = useMemo(() => probes.slice(0, visible), [probes, visible])
+  const probes = data?.probes ?? []
   // Single-network installs never see the network picker or labels.
   const multiNetwork = plane.kind !== 'implicit'
 
@@ -407,14 +459,9 @@ export default function ProbesPanel({
       return
     }
     if (!data) return
-    const selectedIndex = data.probes.findIndex((probe) => probe.id === selectedProbe)
-    const selected = data.probes[selectedIndex]
+    const selected = data.probes.find((probe) => probe.id === selectedProbe)
     if (!selected) {
       onSelectedProbe('', 'replace')
-      return
-    }
-    if (selectedIndex >= visible) {
-      setVisible(Math.ceil((selectedIndex + 1) / PROBE_PAGE) * PROBE_PAGE)
       return
     }
     if (editID !== selectedProbe) {
@@ -423,12 +470,19 @@ export default function ProbesPanel({
       setEditErrors([])
     }
     if (scrolledProbe.current !== selectedProbe) {
-      const row = document.getElementById('settings-probe-' + selectedProbe)
+      const surface = window.matchMedia('(max-width: 760px)').matches ? 'mobile' : 'desktop'
+      const row = document.getElementById(`settings-probe-${selectedProbe}-${surface}`)
       if (!row) return
       row.scrollIntoView({ block: 'nearest' })
       scrolledProbe.current = selectedProbe
     }
-  }, [data, editID, onSelectedProbe, selectedProbe, visible])
+  }, [data, editID, onSelectedProbe, selectedProbe])
+
+  const pageMeta = data?.page ?? { limit: PROBE_PAGE, offset: 0, total: probes.length, has_more: false }
+  const pageCount = Math.max(1, Math.ceil(pageMeta.total / PROBE_PAGE))
+  useEffect(() => {
+    if (page > pageCount) setPage(pageCount, 'replace')
+  }, [page, pageCount, setPage])
 
   const initialError = !registry ? registryError : !data ? error : null
   if (initialError !== null && (!data || !registry)) {
@@ -578,6 +632,91 @@ export default function ProbesPanel({
 
   const createDraft = draft ?? newDraft(initialPlane(plane))
 
+  const columns: DataTableColumn<ProbeConfig>[] = [
+    {
+      key: 'type',
+      label: 'Type',
+      sortKey: 'type',
+      priority: 'status',
+      className: 'mono',
+      render: (probe) => probe.type,
+    },
+    {
+      key: 'assignment',
+      label: 'Assignment',
+      sortKey: 'site',
+      priority: 'identity',
+      className: 'mono',
+      render: (probe) => (
+        <>
+          {assignmentLabel(probe)}
+          {multiNetwork && <span className="chip">{probe.network}</span>}
+        </>
+      ),
+    },
+    {
+      key: 'state',
+      label: 'State',
+      sortKey: 'enabled',
+      priority: 'primary',
+      render: (probe) => (
+        <span className={'chip' + (probe.enabled ? '' : ' chip-alert')}>{probe.enabled ? 'enabled' : 'disabled'}</span>
+      ),
+    },
+    { key: 'interval', label: 'Interval', priority: 'primary', render: (probe) => `${probe.interval_ms / 1000}s` },
+    { key: 'timeout', label: 'Timeout', priority: 'secondary', render: (probe) => `${probe.timeout_ms / 1000}s` },
+    {
+      key: 'params',
+      label: 'Params',
+      priority: 'secondary',
+      className: 'mono config-params-cell',
+      render: paramsSummary,
+    },
+    {
+      key: 'updated',
+      label: 'Updated',
+      sortKey: 'updated',
+      priority: 'secondary',
+      render: (probe) => (
+        <>
+          {fmtAgo(probe.updated_at)}
+          {probe.updated_by ? ` by ${probe.updated_by}` : ''}
+        </>
+      ),
+    },
+  ]
+
+  const editPanel = (probe: ProbeConfig) => {
+    if (editID !== probe.id || !editDraft) return null
+    return (
+      <div className="config-form">
+        <h3 className="eyebrow">
+          Edit {probe.type} · {assignmentLabel(probe)}
+          <span className="hint"> — type, assignment, and network are fixed; delete and re-create to re-target</span>
+        </h3>
+        {cadenceFields(editDraft, setEditDraftFn)}
+        {paramFields(editDraft, setEditDraftFn)}
+        {editErrors.length > 0 && (
+          <ul className="error threshold-errors">
+            {editErrors.map((message) => (
+              <li key={message}>{message}</li>
+            ))}
+          </ul>
+        )}
+        <div className="threshold-foot">
+          <span className="hint">Edits keep the probe's series history and incident state.</span>
+          <button className="primary" disabled={busy} onClick={() => saveEdit(probe)}>
+            {busy ? 'Saving…' : 'Save changes'}
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  const selectProbe = (key: string | null) => {
+    onSelectedProbe(key ?? '', key === null ? 'replace' : 'push')
+  }
+
   return (
     <>
       {(error !== null || registryError !== null) && (
@@ -616,141 +755,141 @@ export default function ProbesPanel({
             </button>
           </div>
         )}
-        {probes.length === 0 ? (
-          <div className="empty-state">
-            <strong>No probes configured</strong>
-            <span>Add one below; agents pick it up within ~30 seconds.</span>
-          </div>
-        ) : (
-          <div className="scroll-x">
-            <table className="events">
-              <thead>
-                <tr>
-                  <th>Type</th>
-                  <th>Assignment</th>
-                  <th>Interval</th>
-                  <th>Timeout</th>
-                  <th>Params</th>
-                  <th>State</th>
-                  <th>Updated</th>
-                  {canWrite && (
-                    <th className="actions-col">
-                      <span className="sr-only">Actions</span>
-                    </th>
-                  )}
-                </tr>
-              </thead>
-              <tbody>
-                {shown.map((p) => (
-                  <>
-                    <tr
-                      key={p.id}
-                      id={'settings-probe-' + p.id}
-                      className={(p.enabled ? '' : 'probe-disabled') + (selectedProbe === p.id ? ' selected-row' : '')}
-                    >
-                      <td data-label="Type" className="mono">
-                        {p.type}
-                      </td>
-                      <td data-label="Assignment" className="mono">
-                        {assignmentLabel(p)}
-                        {multiNetwork && <span className="chip">{p.network}</span>}
-                      </td>
-                      <td data-label="Interval">{p.interval_ms / 1000}s</td>
-                      <td data-label="Timeout">{p.timeout_ms / 1000}s</td>
-                      <td data-label="Params" className="mono config-params-cell">
-                        {paramsSummary(p)}
-                      </td>
-                      <td data-label="State">
-                        <span className={'chip' + (p.enabled ? '' : ' chip-alert')}>
-                          {p.enabled ? 'enabled' : 'disabled'}
-                        </span>
-                      </td>
-                      <td data-label="Updated">
-                        {fmtAgo(p.updated_at)}
-                        {p.updated_by ? ` by ${p.updated_by}` : ''}
-                      </td>
-                      {canWrite && (
-                        <td data-label="Actions" className="config-actions">
-                          <button
-                            type="button"
-                            className="secondary-button"
-                            disabled={busy}
-                            aria-expanded={editID === p.id}
-                            onClick={() => {
-                              if (editID === p.id) {
-                                setEditID(null)
-                                setEditDraft(null)
-                                onSelectedProbe('')
-                              } else {
-                                setEditID(p.id)
-                                setEditDraft(draftFrom(p))
-                                setEditErrors([])
-                                onSelectedProbe(p.id)
-                              }
-                            }}
-                          >
-                            {editID === p.id ? 'Close' : 'Edit'}
-                          </button>
-                          <button
-                            type="button"
-                            className="secondary-button"
-                            disabled={busy}
-                            onClick={() => setEnabled(p, !p.enabled)}
-                          >
-                            {p.enabled ? 'Disable' : 'Enable'}
-                          </button>
-                          <ConfirmButton
-                            label="Delete"
-                            confirmLabel={p.mesh ? 'Confirm? Removes every expanded pair series' : 'Confirm delete?'}
-                            disabled={busy}
-                            onConfirm={() => remove(p)}
-                          />
-                        </td>
-                      )}
-                    </tr>
-                    {editID === p.id && editDraft && (
-                      <tr key={p.id + '-edit'} className="config-edit-row">
-                        <td colSpan={canWrite ? 8 : 7}>
-                          <div className="config-form">
-                            <h3 className="eyebrow">
-                              Edit {p.type} · {assignmentLabel(p)}
-                              <span className="hint">
-                                {' '}
-                                — type, assignment, and network are fixed; delete and re-create to re-target
-                              </span>
-                            </h3>
-                            {cadenceFields(editDraft, setEditDraftFn)}
-                            {paramFields(editDraft, setEditDraftFn)}
-                            {editErrors.length > 0 && (
-                              <ul className="error threshold-errors">
-                                {editErrors.map((e) => (
-                                  <li key={e}>{e}</li>
-                                ))}
-                              </ul>
-                            )}
-                            <div className="threshold-foot">
-                              <span className="hint">Edits keep the probe's series history and incident state.</span>
-                              <button className="primary" disabled={busy} onClick={() => saveEdit(p)}>
-                                {busy ? 'Saving…' : 'Save changes'}
-                              </button>
-                            </div>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        {probes.length > visible && (
-          <div className="progressive-footer">
-            <button type="button" className="secondary-button" onClick={() => setVisible((v) => v + PROBE_PAGE)}>
-              Show {Math.min(PROBE_PAGE, probes.length - visible)} more
-            </button>
-          </div>
-        )}
+        <div className="view-toolbar data-table-toolbar">
+          <label className="search-field">
+            <span className="sr-only">Search probes</span>
+            <input
+              type="search"
+              placeholder="Search assignment or type"
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value)
+                if (selectedProbe) onSelectedProbe('', 'replace')
+              }}
+            />
+          </label>
+          <label className="compact-select">
+            <span>Mode</span>
+            <select
+              value={mode}
+              onChange={(event) => updateRouteParams({ mode: event.target.value, page: null, probe: null })}
+            >
+              <option value="all">All modes</option>
+              <option value="direct">Direct</option>
+              <option value="mesh">Mesh</option>
+            </select>
+          </label>
+          <label className="compact-select">
+            <span>State</span>
+            <select
+              value={enabled}
+              onChange={(event) => updateRouteParams({ enabled: event.target.value, page: null, probe: null })}
+            >
+              <option value="all">All states</option>
+              <option value="true">Enabled</option>
+              <option value="false">Disabled</option>
+            </select>
+          </label>
+          <label className="compact-select">
+            <span>Type</span>
+            <select
+              value={typeFilter}
+              onChange={(event) => updateRouteParams({ type: event.target.value, page: null, probe: null })}
+            >
+              <option value="all">All types</option>
+              {registry.types.map((item) => (
+                <option key={item.type} value={item.type}>
+                  {item.type}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <DataTable
+          label="Probe settings"
+          rows={probes}
+          rowKey={(probe) => probe.id}
+          rowID={(probe) => 'settings-probe-' + probe.id}
+          rowClassName={(probe) =>
+            `${probe.enabled ? '' : 'probe-disabled'}${selectedProbe === probe.id ? ' selected-row' : ''}`
+          }
+          columns={columns}
+          sort={{ key: sort, order: order === 'desc' ? 'desc' : 'asc' }}
+          onSortChange={(next) =>
+            updateRouteParams({
+              sort: next.key === 'site' ? null : next.key,
+              order: next.order === 'asc' ? null : next.order,
+              page: null,
+              probe: null,
+            })
+          }
+          page={pageMeta}
+          onPageChange={(next) => updateRouteParams({ page: next === 1 ? null : next, probe: null })}
+          resultLabel="probes"
+          emptyTitle={
+            query || mode !== 'all' || enabled !== 'all' || typeFilter !== 'all'
+              ? 'No matching probes'
+              : 'No probes configured'
+          }
+          emptyDescription={
+            query || mode !== 'all' || enabled !== 'all' || typeFilter !== 'all'
+              ? 'Change the search text or filters.'
+              : 'Add one below; agents pick it up within ~30 seconds.'
+          }
+          disclosure={
+            canWrite
+              ? {
+                  expandedKey: selectedProbe || null,
+                  onExpandedKeyChange: selectProbe,
+                  label: (_probe, expanded) => (expanded ? 'Close editor' : 'Edit probe'),
+                  render: editPanel,
+                }
+              : {
+                  expandedKey: expandedRow,
+                  onExpandedKeyChange: setExpandedRow,
+                  label: (_probe, expanded) => (expanded ? 'Hide metadata' : 'Show metadata'),
+                  desktop: false,
+                }
+          }
+          actions={
+            canWrite
+              ? {
+                  openKey: actionRow,
+                  onOpenKeyChange: setActionRow,
+                  label: (probe) => `Actions for ${assignmentLabel(probe)}`,
+                  render: (probe) => (
+                    <>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        disabled={busy}
+                        onClick={() => {
+                          setActionRow(null)
+                          selectProbe(probe.id)
+                        }}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        disabled={busy}
+                        onClick={() => setEnabled(probe, !probe.enabled)}
+                      >
+                        {probe.enabled ? 'Disable' : 'Enable'}
+                      </button>
+                      <ConfirmButton
+                        label="Delete"
+                        confirmLabel={probe.mesh ? 'Confirm? Removes every expanded pair series' : 'Confirm delete?'}
+                        disabled={busy}
+                        onConfirm={() => remove(probe)}
+                      />
+                    </>
+                  ),
+                }
+              : undefined
+          }
+        />
         {canWrite && (
           <div className="config-form">
             <h3 className="eyebrow">Add probe</h3>

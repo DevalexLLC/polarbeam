@@ -1,17 +1,21 @@
 import { useEffect, useState } from 'react'
 import { apiDelete, apiGet, apiPost } from '../api'
 import { fmtAgo } from '../format'
+import { useNetworkFilter } from '../networkFilter'
 import type { Caps } from '../caps'
 import { canWriteRow } from '../caps'
 import type { PlaneChoice } from '../plane'
 import { initialPlane, networkField, planeReady } from '../plane'
-import { inheritRouteNetwork } from '../routeState'
+import { inheritRouteNetwork, updateRouteParams } from '../routeState'
+import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
 import type { TargetsConfigResponse, TargetConfig } from '../types'
 import ConfirmButton from './ConfirmButton'
+import DataTable, { type DataTableColumn } from './DataTable'
 import PlaneField from './PlaneField'
 import SettingsPageError from './SettingsPageError'
 
 const POLL_MS = 30_000
+const TARGET_PAGE = 25
 
 interface Draft {
   name: string
@@ -61,11 +65,31 @@ export default function TargetsPanel({
   const [formErrors, setFormErrors] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [savedFlash, setSavedFlash] = useState(false)
+  const [query, setQuery] = useRouteSearch()
+  const [queryParam] = useRouteParam('q')
+  const [kind] = useRouteParam('kind', 'all')
+  const [sort] = useRouteParam('sort', 'name')
+  const [order] = useRouteParam('order', 'asc')
+  const [page, setPage] = useRouteNumber('page', 1)
+  const [expandedRow, setExpandedRow] = useState<string | null>(null)
+  const [actionRow, setActionRow] = useState<string | null>(null)
+  const { network } = useNetworkFilter()
+
+  const params = new URLSearchParams({
+    limit: String(TARGET_PAGE),
+    offset: String((page - 1) * TARGET_PAGE),
+    sort,
+    order,
+  })
+  if (queryParam.trim()) params.set('q', queryParam.trim())
+  if (kind !== 'all') params.set('kind', kind)
+  if (network) params.set('network', network)
+  const requestURL = '/api/v1/config/targets?' + params.toString()
 
   useEffect(() => {
     let cancelled = false
     const load = () => {
-      apiGet<TargetsConfigResponse>('/api/v1/config/targets')
+      apiGet<TargetsConfigResponse>(requestURL)
         .then((res) => {
           if (!cancelled) {
             setData(res)
@@ -85,9 +109,9 @@ export default function TargetsPanel({
       cancelled = true
       clearInterval(id)
     }
-  }, [onAuthError, retryKey])
+  }, [onAuthError, requestURL, retryKey])
 
-  const reload = () => apiGet<TargetsConfigResponse>('/api/v1/config/targets').then(setData).catch(onAuthError)
+  const reload = () => apiGet<TargetsConfigResponse>(requestURL).then(setData).catch(onAuthError)
 
   const save = async () => {
     if (!draft) return
@@ -139,6 +163,12 @@ export default function TargetsPanel({
     })
   }
 
+  const pageMeta = data?.page ?? { limit: TARGET_PAGE, offset: 0, total: data?.targets.length ?? 0, has_more: false }
+  const pageCount = Math.max(1, Math.ceil(pageMeta.total / TARGET_PAGE))
+  useEffect(() => {
+    if (page > pageCount) setPage(pageCount, 'replace')
+  }, [page, pageCount, setPage])
+
   if (error && !data) {
     return (
       <SettingsPageError
@@ -158,11 +188,54 @@ export default function TargetsPanel({
     )
   }
 
-  const externals = data.targets.filter((t) => t.kind === 'external')
-  const agents = data.targets.filter((t) => t.kind === 'agent')
-  // Show the owner once there is anything to distinguish: a real choice of
-  // plane, a tenant pinned to one, or any tenant-owned row in the list.
-  const showNetworkColumn = plane.kind !== 'implicit' || externals.some((t) => t.network !== '')
+  const columns: DataTableColumn<TargetConfig>[] = [
+    {
+      key: 'name',
+      label: 'Target',
+      sortKey: 'name',
+      priority: 'identity',
+      className: 'mono',
+      render: (target) => <a href={inheritRouteNetwork('#/target/' + encodeURIComponent(target.id))}>{target.name}</a>,
+    },
+    {
+      key: 'kind',
+      label: 'Kind',
+      sortKey: 'kind',
+      priority: 'status',
+      render: (target) => (target.kind === 'agent' ? 'agent' : 'external'),
+    },
+    {
+      key: 'endpoint',
+      label: 'Endpoint',
+      priority: 'primary',
+      className: 'mono',
+      render: (target) =>
+        target.kind === 'agent' ? (
+          <span className="hint">enrollment managed</span>
+        ) : target.url ? (
+          target.url
+        ) : target.port ? (
+          `${target.address}:${target.port}`
+        ) : (
+          target.address
+        ),
+    },
+    {
+      key: 'network',
+      label: 'Network',
+      sortKey: 'network',
+      priority: 'secondary',
+      render: (target) => (target.network === '' ? <span className="hint">all networks</span> : target.network),
+    },
+    { key: 'probes', label: 'Probes', sortKey: 'probes', priority: 'primary', render: (target) => target.probe_count },
+    {
+      key: 'created',
+      label: 'Created',
+      sortKey: 'created',
+      priority: 'secondary',
+      render: (target) => fmtAgo(target.created_at),
+    },
+  ]
 
   const blankDraft = (): Draft => ({ ...emptyDraft, network: initialPlane(plane) })
 
@@ -195,84 +268,105 @@ export default function TargetsPanel({
         <div className="card-head">
           <div>
             <span className="eyebrow">Probe destinations</span>
-            <h2>External targets</h2>
+            <h2>Targets</h2>
           </div>
           <span className="hint">Refreshes every 30s</span>
         </div>
         <p className="section-intro">
-          Hosts and URLs that site agents probe in addition to their mesh peers. A target in use by probes cannot be
-          deleted until those probes are removed.
+          External hosts and URLs share this inventory with enrollment-managed agent destinations. A target in use by
+          probes cannot be deleted until those probes are removed.
         </p>
-        {externals.length === 0 ? (
-          <div className="empty-state">
-            <strong>No external targets</strong>
-            <span>Add one below to probe infrastructure beyond the agent mesh.</span>
-          </div>
-        ) : (
-          <div className="scroll-x">
-            <table className="events">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Address</th>
-                  {showNetworkColumn && <th>Network</th>}
-                  <th>Probes</th>
-                  <th>Created</th>
-                  {canWrite && (
-                    <th className="actions-col">
-                      <span className="sr-only">Actions</span>
-                    </th>
-                  )}
-                </tr>
-              </thead>
-              <tbody>
-                {externals.map((t) => (
-                  <tr key={t.id}>
-                    <td data-label="Name" className="mono">
-                      <a href={inheritRouteNetwork('#/target/' + encodeURIComponent(t.id))}>{t.name}</a>
-                    </td>
-                    <td data-label="Address" className="mono">
-                      {t.url ? t.url : t.port ? `${t.address}:${t.port}` : t.address}
-                    </td>
-                    {showNetworkColumn && (
-                      <td data-label="Network">
-                        {t.network === '' ? <span className="hint">all networks</span> : t.network}
-                      </td>
-                    )}
-                    <td data-label="Probes">{t.probe_count}</td>
-                    <td data-label="Created">{fmtAgo(t.created_at)}</td>
-                    {canWrite && (
-                      <td data-label="Actions" className="config-actions">
-                        {canWriteRow(caps, t.network) ? (
-                          <>
-                            <button type="button" className="secondary-button" onClick={() => startEdit(t)}>
-                              Edit
-                            </button>
-                            <ConfirmButton
-                              label="Delete"
-                              confirmLabel="Confirm delete?"
-                              disabled={t.probe_count > 0}
-                              title={
-                                t.probe_count > 0
-                                  ? `In use by ${t.probe_count} probe(s) — remove those first`
-                                  : undefined
-                              }
-                              onConfirm={() => remove(t)}
-                            />
-                          </>
-                        ) : (
-                          // Published by the operator for every plane: yours
-                          // to probe, not to change.
-                          <span className="hint">operator-owned</span>
-                        )}
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        <div className="view-toolbar data-table-toolbar">
+          <label className="search-field">
+            <span className="sr-only">Search target settings</span>
+            <input
+              type="search"
+              placeholder="Search name or endpoint"
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value)
+                setExpandedRow(null)
+              }}
+            />
+          </label>
+          <label className="compact-select">
+            <span>Kind</span>
+            <select value={kind} onChange={(event) => updateRouteParams({ kind: event.target.value, page: null })}>
+              <option value="all">All kinds</option>
+              <option value="external">External</option>
+              <option value="agent">Agent</option>
+            </select>
+          </label>
+        </div>
+        <DataTable
+          label="Target settings"
+          rows={data.targets}
+          rowKey={(target) => target.id}
+          columns={columns}
+          sort={{ key: sort, order: order === 'desc' ? 'desc' : 'asc' }}
+          onSortChange={(next) =>
+            updateRouteParams({
+              sort: next.key === 'name' ? null : next.key,
+              order: next.order === 'asc' ? null : next.order,
+              page: null,
+            })
+          }
+          page={pageMeta}
+          onPageChange={(next) => {
+            setExpandedRow(null)
+            setPage(next)
+          }}
+          resultLabel="targets"
+          emptyTitle={query || kind !== 'all' ? 'No matching targets' : 'No targets'}
+          emptyDescription={
+            query || kind !== 'all'
+              ? 'Change the search text or kind filter.'
+              : 'Add an external target below, or enroll an agent.'
+          }
+          disclosure={{
+            expandedKey: expandedRow,
+            onExpandedKeyChange: setExpandedRow,
+            label: (_target, expanded) => (expanded ? 'Hide metadata' : 'Show metadata'),
+            desktop: false,
+          }}
+          actions={
+            canWrite
+              ? {
+                  openKey: actionRow,
+                  onOpenKeyChange: setActionRow,
+                  label: (target) => `Actions for ${target.name}`,
+                  render: (target) =>
+                    target.kind === 'external' && canWriteRow(caps, target.network) ? (
+                      <>
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => {
+                            setActionRow(null)
+                            startEdit(target)
+                          }}
+                        >
+                          Edit
+                        </button>
+                        <ConfirmButton
+                          label="Delete"
+                          confirmLabel="Confirm delete?"
+                          disabled={target.probe_count > 0}
+                          title={
+                            target.probe_count > 0
+                              ? `In use by ${target.probe_count} probe(s) — remove those first`
+                              : undefined
+                          }
+                          onConfirm={() => remove(target)}
+                        />
+                      </>
+                    ) : (
+                      <span className="hint">{target.kind === 'agent' ? 'enrollment-managed' : 'operator-owned'}</span>
+                    ),
+                }
+              : undefined
+          }
+        />
         {canWrite && (
           <div className="config-form">
             <h3 className="eyebrow">{editing ? `Edit ${draft?.name}` : 'Add target'}</h3>
@@ -329,47 +423,6 @@ export default function TargetsPanel({
                 </button>
               </span>
             </div>
-          </div>
-        )}
-      </section>
-      <section className="card settings-card config-card">
-        <div className="card-head">
-          <div>
-            <span className="eyebrow">Enrollment-managed</span>
-            <h2>Agent targets</h2>
-          </div>
-        </div>
-        <p className="section-intro">
-          Created automatically when an agent enrolls and removed with it; mesh probes resolve peers through these.
-          Read-only here.
-        </p>
-        {agents.length === 0 ? (
-          <div className="empty-state">
-            <strong>No agent targets</strong>
-            <span>Enroll an agent and its peer target appears here.</span>
-          </div>
-        ) : (
-          <div className="scroll-x">
-            <table className="events">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Probes</th>
-                  <th>Created</th>
-                </tr>
-              </thead>
-              <tbody>
-                {agents.map((t) => (
-                  <tr key={t.id}>
-                    <td data-label="Name" className="mono">
-                      <a href={inheritRouteNetwork('#/target/' + encodeURIComponent(t.id))}>{t.name}</a>
-                    </td>
-                    <td data-label="Probes">{t.probe_count}</td>
-                    <td data-label="Created">{fmtAgo(t.created_at)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
           </div>
         )}
       </section>
