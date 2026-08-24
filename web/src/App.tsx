@@ -477,7 +477,12 @@ export default function App() {
           ) : route.view === 'incidents' ? (
             <Outages onAuthError={onAuthError} />
           ) : route.view === 'agents' ? (
-            <Agents agent={route.agent} onAuthError={onAuthError} onTitleChange={reportEntityTitle} />
+            <Agents
+              agent={route.agent}
+              networks={networks ?? []}
+              onAuthError={onAuthError}
+              onTitleChange={reportEntityTitle}
+            />
           ) : route.view === 'settings' ? (
             // The link is hidden for roles that may open no tab, but the
             // hash is still typeable; say so rather than rendering an empty

@@ -105,7 +105,9 @@ network, and sorting reset page one. Desktop uses the component's semantic
 table and sticky scrolling header. Mobile uses its separate flat list:
 identity, status, and primary evidence remain visible, while secondary
 metadata stays behind the full-width disclosure target. Do not restore the
-generic CSS that turns every table cell into a nested mobile card.
+generic CSS that turns every table cell into a nested mobile card. Row-action
+menus are portalled outside the desktop scroller, and disclosure renderers
+receive their desktop/mobile surface so nested DOM IDs remain unique.
 
 ## Coding Style & Naming Conventions
 

@@ -149,7 +149,8 @@ state; deleted resources remain unlinked historical text.
 
 `GET /api/v1/agents` query mode returns a stable page plus filtered health
 summary (`offline`, `degraded`, `healthy`, `no_data`, and actionable
-`attention`); requests without list
+`attention`). The existing `health=healthy` filter retains its raw health-fold
+meaning; `health=clear` is the actionable complement of `attention`. Requests without list
 parameters retain the original complete-feed response. Its health fold matches
 that legacy feed: unusable certificate/offline, never seen, then hard probe
 failures; threshold-only degradation remains incident evidence rather than

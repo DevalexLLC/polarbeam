@@ -15,6 +15,7 @@ const (
 	AgentHealthHealthy   = "healthy"
 	AgentHealthNoData    = "no_data"
 	AgentHealthAttention = "attention"
+	AgentHealthClear     = "clear"
 )
 
 // AgentInventoryFilter is the query-mode contract for the operational
@@ -129,8 +130,8 @@ const agentInventoryCTE = `
 		        OR version ILIKE '%' || $3 || '%')
 		   AND ($4 = ''
 		        OR ($4 = 'attention' AND needs_attention)
-		        OR ($4 = 'healthy' AND NOT needs_attention)
-		        OR ($4 NOT IN ('attention', 'healthy') AND health = $4))
+		        OR ($4 = 'clear' AND NOT needs_attention)
+		        OR ($4 NOT IN ('attention', 'clear') AND health = $4))
 	)`
 
 // QueryAgents returns a filtered, stably ordered page plus summary counts
@@ -141,7 +142,8 @@ func (s *Store) QueryAgents(ctx context.Context, f AgentInventoryFilter) ([]Agen
 		return nil, AgentInventorySummary{}, invalidf("invalid agent inventory page")
 	}
 	if f.Health != "" && f.Health != AgentHealthOffline && f.Health != AgentHealthDegraded &&
-		f.Health != AgentHealthHealthy && f.Health != AgentHealthNoData && f.Health != AgentHealthAttention {
+		f.Health != AgentHealthHealthy && f.Health != AgentHealthNoData && f.Health != AgentHealthAttention &&
+		f.Health != AgentHealthClear {
 		return nil, AgentInventorySummary{}, invalidf("unknown agent health %q", f.Health)
 	}
 	orderBy, err := agentInventoryOrder(f.Sort, f.Order)

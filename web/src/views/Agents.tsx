@@ -12,6 +12,7 @@ import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
 import type {
   AgentBucketFailuresResponse,
   AgentInfo,
+  AgentInventorySummary,
   AgentProbeHealth,
   AgentProbeHealthResponse,
   AgentsResponse,
@@ -129,12 +130,14 @@ function ProbeDetail({
   error,
   selectedProbe,
   onSelectProbe,
+  surface,
 }: {
   agentId: string
   detail: AgentProbeHealthResponse | null
   error: unknown
   selectedProbe: string
   onSelectProbe: (probe: string) => void
+  surface: 'desktop' | 'mobile'
 }) {
   if (!detail && error !== null)
     return (
@@ -173,7 +176,7 @@ function ProbeDetail({
         return (
           <div
             key={p.probe_id}
-            id={'agent-probe-' + p.probe_id}
+            id={`agent-probe-${p.probe_id}-${surface}`}
             className={'probe-strip-row' + (selectedProbe === p.probe_id ? ' selected-row' : '')}
           >
             <div className="probe-select-cell">
@@ -226,12 +229,14 @@ function AgentDetails({
   detailError,
   selectedProbe,
   onSelectProbe,
+  surface,
 }: {
   a: AgentInfo
   detail: AgentProbeHealthResponse | null
   detailError: unknown
   selectedProbe: string
   onSelectProbe: (probe: string) => void
+  surface: 'desktop' | 'mobile'
 }) {
   return (
     <ProbeDetail
@@ -240,25 +245,30 @@ function AgentDetails({
       error={detailError}
       selectedProbe={selectedProbe}
       onSelectProbe={onSelectProbe}
+      surface={surface}
     />
   )
 }
 
 export default function Agents({
   agent,
+  networks,
   onAuthError,
   onTitleChange,
 }: {
   agent: string | null
+  networks: string[]
   onAuthError: (err: unknown) => void
   onTitleChange: (title: string) => void
 }) {
   useTimezone() // re-render fmtTime tooltips on UTC/local toggle
   const [data, setData] = useState<AgentsResponse | null>(null)
+  const [scopeSummary, setScopeSummary] = useState<AgentInventorySummary | null>(null)
   const [error, setError] = useState<unknown>(null)
   const [retryKey, setRetryKey] = useState(0)
   const [healthParam] = useRouteParam('health', 'all')
   const [query, setQuery] = useRouteSearch()
+  const [queryParam] = useRouteParam('q')
   const [sort] = useRouteParam('sort', 'status')
   const [order] = useRouteParam('order', 'asc')
   const [page, setPage] = useRouteNumber('page', 1)
@@ -294,13 +304,22 @@ export default function Agents({
     })
     if (network) params.set('network', network)
     if (pinnedAgentID) params.set('q', pinnedAgentID)
-    else if (query.trim()) params.set('q', query.trim())
-    if (filter !== 'all') params.set('health', filter)
-    const load = () =>
-      apiGet<AgentsResponse>('/api/v1/agents?' + params.toString())
-        .then((res) => {
+    else if (queryParam.trim()) params.set('q', queryParam.trim())
+    if (filter !== 'all') params.set('health', filter === 'healthy' ? 'clear' : filter)
+    const requestURL = '/api/v1/agents?' + params.toString()
+    const scopeParams = new URLSearchParams({ limit: '1', offset: '0', sort: 'health', order: 'asc' })
+    if (network) scopeParams.set('network', network)
+    const needsScopeRequest = Boolean(pinnedAgentID || queryParam.trim() || filter !== 'all')
+    const load = () => {
+      const inventoryRequest = apiGet<AgentsResponse>(requestURL)
+      const scopeRequest = needsScopeRequest
+        ? apiGet<AgentsResponse>('/api/v1/agents?' + scopeParams.toString())
+        : inventoryRequest
+      Promise.all([inventoryRequest, scopeRequest])
+        .then(([res, scope]) => {
           if (!cancelled) {
             setData(res)
+            setScopeSummary(scope.summary ?? null)
             setError(null)
           }
         })
@@ -309,13 +328,14 @@ export default function Agents({
           console.error('agents request failed', err)
           if (!cancelled) setError(err)
         })
+    }
     load()
     const id = setInterval(load, POLL_MS)
     return () => {
       cancelled = true
       clearInterval(id)
     }
-  }, [filter, network, onAuthError, order, page, pinnedAgentID, query, retryKey, sort])
+  }, [filter, network, onAuthError, order, page, pinnedAgentID, queryParam, retryKey, sort])
 
   useEffect(() => {
     if (!expanded) {
@@ -361,7 +381,8 @@ export default function Agents({
     if (detail.probes.some((probe) => probe.probe_id === selectedProbe)) {
       const key = `${expanded ?? ''}\u0000${selectedProbe}`
       if (scrolledProbe.current !== key) {
-        const row = document.getElementById('agent-probe-' + selectedProbe)
+        const surface = window.matchMedia('(max-width: 760px)').matches ? 'mobile' : 'desktop'
+        const row = document.getElementById(`agent-probe-${selectedProbe}-${surface}`)
         if (!row) return
         row.scrollIntoView({ block: 'nearest' })
         scrolledProbe.current = key
@@ -423,11 +444,13 @@ export default function Agents({
       </div>
     )
 
-  const down = summary.offline
-  const degraded = summary.degraded
-  const dropsTotal = summary.dropped_results
-  const attention = summary.attention
-  const healthy = summary.total - attention
+  const fleetSummary = scopeSummary ?? summary
+  const down = fleetSummary.offline
+  const degraded = fleetSummary.degraded
+  const dropsTotal = fleetSummary.dropped_results
+  const attention = fleetSummary.attention
+  const healthy = fleetSummary.total - attention
+  const multiNetwork = networks.length > 1
 
   const columns: DataTableColumn<AgentInfo>[] = [
     {
@@ -456,7 +479,17 @@ export default function Agents({
         </span>
       ),
     },
-    { key: 'network', label: 'Network', priority: 'secondary', className: 'mono', render: (row) => row.network },
+    ...(multiNetwork
+      ? [
+          {
+            key: 'network',
+            label: 'Network',
+            priority: 'secondary' as const,
+            className: 'mono',
+            render: (row: AgentInfo) => row.network,
+          },
+        ]
+      : []),
     {
       key: 'address',
       label: 'Address',
@@ -525,7 +558,7 @@ export default function Agents({
         </div>
         <div className="chips">
           <span className="chip">
-            enrolled <span className="mono">{summary.total}</span>
+            enrolled <span className="mono">{fleetSummary.total}</span>
           </span>
           <span className="chip">
             {down > 0 && <span className="dot swatch status-down" />}
@@ -547,6 +580,19 @@ export default function Agents({
         </div>
       )}
 
+      {pinnedAgentID && (
+        <div className="data-table-context" role="status">
+          <span>Showing the linked agent and its probe evidence.</span>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => updateRouteParams({ agent: null, probe: null })}
+          >
+            Show fleet
+          </button>
+        </div>
+      )}
+
       <div className="view-toolbar">
         <div className="control-group" role="group" aria-label="Agent health">
           <button
@@ -554,21 +600,21 @@ export default function Agents({
             aria-pressed={filter === 'all'}
             onClick={() => updateRouteParams({ health: null, page: null, agent: null, probe: null })}
           >
-            All
+            All {fleetSummary.total}
           </button>
           <button
             className={filter === 'attention' ? 'active' : ''}
             aria-pressed={filter === 'attention'}
             onClick={() => updateRouteParams({ health: 'attention', page: null, agent: null, probe: null })}
           >
-            Attention {filter === 'all' ? attention : ''}
+            Attention {attention}
           </button>
           <button
             className={filter === 'healthy' ? 'active' : ''}
             aria-pressed={filter === 'healthy'}
             onClick={() => updateRouteParams({ health: 'healthy', page: null, agent: null, probe: null })}
           >
-            Healthy {filter === 'all' ? healthy : ''}
+            Healthy {healthy}
           </button>
         </div>
         <label className="search-field">
@@ -585,7 +631,10 @@ export default function Agents({
         </label>
         <label className="compact-select">
           <span>Sort</span>
-          <select value={sort} onChange={(event) => updateRouteParams({ sort: event.target.value, page: null })}>
+          <select
+            value={sort}
+            onChange={(event) => updateRouteParams({ sort: event.target.value, page: null, agent: null, probe: null })}
+          >
             <option value="status">Status</option>
             <option value="site">Site</option>
             <option value="hostname">Hostname</option>
@@ -596,7 +645,9 @@ export default function Agents({
           type="button"
           className="secondary-button"
           aria-label={`Change to ${order === 'asc' ? 'descending' : 'ascending'} order; currently ${order === 'asc' ? 'ascending' : 'descending'}`}
-          onClick={() => updateRouteParams({ order: order === 'asc' ? 'desc' : null, page: null })}
+          onClick={() =>
+            updateRouteParams({ order: order === 'asc' ? 'desc' : null, page: null, agent: null, probe: null })
+          }
         >
           {order === 'asc' ? 'Ascending' : 'Descending'}
         </button>
@@ -645,13 +696,14 @@ export default function Agents({
             onExpandedKeyChange: (key) =>
               updateRouteParams({ agent: key, probe: null }, key === null ? 'replace' : 'push'),
             label: (_row, open) => (open ? 'Hide probe evidence' : 'Show probe evidence'),
-            render: (row) => (
+            render: (row, surface) => (
               <AgentDetails
                 a={row}
                 detail={detail}
                 detailError={detailError}
                 selectedProbe={selectedProbe}
                 onSelectProbe={setSelectedProbe}
+                surface={surface}
               />
             ),
           }}

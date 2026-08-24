@@ -129,9 +129,11 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
   const [expandedEvent, setExpandedEvent] = useRouteParam('event')
   const win = windowParam as Window
   const [data, setData] = useState<PathEventsResponse | null>(null)
+  const [scopeTotal, setScopeTotal] = useState(0)
   const [error, setError] = useState<unknown>(null)
   const [retryKey, setRetryKey] = useState(0)
   const [query, setQuery] = useRouteSearch()
+  const [queryParam] = useRouteParam('q')
   const pinnedEvent = useRef<string | null>(expandedEvent)
 
   if (!expandedEvent) pinnedEvent.current = null
@@ -154,12 +156,21 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
     // the linked row available even when it is not on the default first
     // page; the store's route search includes exact event identities.
     if (pinnedEventID) params.set('q', pinnedEventID)
-    else if (query.trim()) params.set('q', query.trim())
-    const load = () =>
-      apiGet<PathEventsResponse>('/api/v1/path-events?' + params.toString())
-        .then((res) => {
+    else if (queryParam.trim()) params.set('q', queryParam.trim())
+    const requestURL = '/api/v1/path-events?' + params.toString()
+    const scopeParams = new URLSearchParams({ window: win, limit: '1', offset: '0', sort: 'time', order: 'desc' })
+    if (network) scopeParams.set('network', network)
+    const needsScopeRequest = Boolean(pinnedEventID || queryParam.trim())
+    const load = () => {
+      const inventoryRequest = apiGet<PathEventsResponse>(requestURL)
+      const scopeRequest = needsScopeRequest
+        ? apiGet<PathEventsResponse>('/api/v1/path-events?' + scopeParams.toString())
+        : inventoryRequest
+      Promise.all([inventoryRequest, scopeRequest])
+        .then(([res, scope]) => {
           if (!cancelled) {
             setData(res)
+            setScopeTotal(scope.page?.total ?? scope.events.length)
             setError(null)
           }
         })
@@ -168,13 +179,14 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
           console.error('routes request failed', err)
           if (!cancelled) setError(err)
         })
+    }
     load()
     const id = setInterval(load, POLL_MS)
     return () => {
       cancelled = true
       clearInterval(id)
     }
-  }, [network, onAuthError, order, page, pinnedEventID, query, retryKey, sort, win])
+  }, [network, onAuthError, order, page, pinnedEventID, queryParam, retryKey, sort, win])
 
   const events = data?.events ?? []
   const pageMeta = data?.page ?? { limit: ROUTE_PAGE, offset: 0, total: events.length, has_more: false }
@@ -262,7 +274,7 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
         </div>
         <div className="chips">
           <span className="chip">
-            in window <span className="mono">{pageMeta.total}</span>
+            in window <span className="mono">{scopeTotal}</span>
           </span>
         </div>
       </div>
@@ -270,6 +282,15 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
       {error !== null && (
         <div className="inline-alert" role="status">
           Refresh failed. Showing the last successful snapshot.
+        </div>
+      )}
+
+      {pinnedEventID && (
+        <div className="data-table-context" role="status">
+          <span>Showing the linked route change and its evidence.</span>
+          <button type="button" className="secondary-button" onClick={() => setExpandedEvent('', 'replace')}>
+            Show route inventory
+          </button>
         </div>
       )}
 
@@ -302,7 +323,7 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
           type="button"
           className="secondary-button"
           aria-label={`Change to ${order === 'asc' ? 'descending' : 'ascending'} order; currently ${order === 'asc' ? 'ascending' : 'descending'}`}
-          onClick={() => updateRouteParams({ order: order === 'asc' ? null : 'asc', page: null })}
+          onClick={() => updateRouteParams({ order: order === 'asc' ? null : 'asc', page: null, event: null })}
         >
           {order === 'asc' ? 'Ascending' : 'Descending'}
         </button>

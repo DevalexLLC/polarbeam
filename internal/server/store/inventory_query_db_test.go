@@ -187,8 +187,14 @@ func TestQueryAgentsFilteringSortingPagingAndScope(t *testing.T) {
 	}
 	filter.Health = store.AgentHealthHealthy
 	rows, summary = query(filter)
+	if !slices.Equal(agentInventoryIDs(rows), []uuid.UUID{f.aMgmt}) ||
+		summary != (store.AgentInventorySummary{Total: 1, Healthy: 1, Attention: 1, DroppedResults: 1}) {
+		t.Errorf("raw healthy filter = ids %v summary %+v", agentInventoryIDs(rows), summary)
+	}
+	filter.Health = store.AgentHealthClear
+	rows, summary = query(filter)
 	if len(rows) != 0 || summary.Total != 0 {
-		t.Errorf("actionably healthy filter = ids %v summary %+v", agentInventoryIDs(rows), summary)
+		t.Errorf("actionably clear filter = ids %v summary %+v", agentInventoryIDs(rows), summary)
 	}
 
 	filter = baseFilter

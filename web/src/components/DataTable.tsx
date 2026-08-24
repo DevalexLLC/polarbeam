@@ -1,4 +1,5 @@
-import { Fragment, useEffect, useMemo, useRef, type ReactNode } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import DisclosureChevron from './DisclosureChevron'
 import {
   dataTableMissingKeys,
@@ -25,8 +26,73 @@ export interface DataTableDisclosure<Row> {
   expandedKey: string | null
   onExpandedKeyChange: (key: string | null) => void
   label: (row: Row, expanded: boolean) => string
-  render?: (row: Row) => ReactNode
+  render?: (row: Row, surface: 'desktop' | 'mobile') => ReactNode
   desktop?: boolean
+}
+
+function FloatingActionMenu({
+  id,
+  label,
+  trigger,
+  onClose,
+  children,
+}: {
+  id: string
+  label: string
+  trigger: HTMLButtonElement
+  onClose: () => void
+  children: ReactNode
+}) {
+  const menu = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    const place = () => {
+      const element = menu.current
+      if (!element) return
+      const anchor = trigger.getBoundingClientRect()
+      const gap = 4
+      const top =
+        anchor.bottom + gap + element.offsetHeight <= window.innerHeight
+          ? anchor.bottom + gap
+          : Math.max(gap, anchor.top - gap - element.offsetHeight)
+      const left = Math.min(
+        Math.max(gap, anchor.right - element.offsetWidth),
+        Math.max(gap, window.innerWidth - element.offsetWidth - gap),
+      )
+      element.style.top = `${top}px`
+      element.style.left = `${left}px`
+      element.style.visibility = 'visible'
+    }
+    place()
+    menu.current?.querySelector<HTMLElement>('button, a, input, select, [tabindex]:not([tabindex="-1"])')?.focus()
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
+    return () => {
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', place, true)
+    }
+  }, [trigger])
+
+  return createPortal(
+    <div
+      ref={menu}
+      id={id}
+      className="data-table-actions-menu"
+      role="toolbar"
+      tabIndex={-1}
+      data-action-key={id}
+      aria-label={label}
+      style={{ top: 0, left: 0, visibility: 'hidden' }}
+      onKeyDown={(event) => {
+        if (event.key !== 'Escape') return
+        onClose()
+        trigger.focus()
+      }}
+    >
+      {children}
+    </div>,
+    document.body,
+  )
 }
 
 export interface DataTableActions<Row> {
@@ -85,6 +151,7 @@ export default function DataTable<Row>({
 }: DataTableProps<Row>) {
   const root = useRef<HTMLDivElement>(null)
   const focusedRow = useRef<string | null>(null)
+  const actionTrigger = useRef<HTMLButtonElement | null>(null)
   const keys = useMemo(() => rows.map(rowKey), [rowKey, rows])
   const { expandedMissing, actionMissing } = dataTableMissingKeys(
     keys,
@@ -144,38 +211,25 @@ export default function DataTable<Row>({
     )
   }
 
-  const renderActions = (row: Row, key: string, surface: 'desktop' | 'mobile') => {
+  const renderActions = (row: Row, key: string) => {
     if (!actions) return null
     const open = actions.openKey === key
-    const menuID = `data-table-actions-${surface}-${key}`
+    const menuID = `data-table-actions-${key}`
     return (
       <div className="data-table-actions">
         <button
           type="button"
           className="secondary-button data-table-actions-toggle"
+          aria-label={actions.label(row)}
           aria-expanded={open}
           aria-controls={menuID}
-          onClick={() => actions.onOpenKeyChange(open ? null : key)}
+          onClick={(event) => {
+            actionTrigger.current = open ? null : event.currentTarget
+            actions.onOpenKeyChange(open ? null : key)
+          }}
         >
           Actions
         </button>
-        {open && (
-          <div
-            id={menuID}
-            className="data-table-actions-menu"
-            role="toolbar"
-            tabIndex={-1}
-            data-action-key={key}
-            aria-label={actions.label(row)}
-            onKeyDown={(event) => {
-              if (event.key !== 'Escape') return
-              actions.onOpenKeyChange(null)
-              ;(event.currentTarget.previousElementSibling as HTMLElement | null)?.focus()
-            }}
-          >
-            {actions.render(row)}
-          </div>
-        )}
       </div>
     )
   }
@@ -201,6 +255,7 @@ export default function DataTable<Row>({
   const pageNumber = page ? dataTablePageNumber(page) : 1
   const pageCount = page ? dataTablePageCount(page) : 1
   const sortColumn = columns.find((column) => column.sortKey === sort?.key)
+  const openActionRow = actions?.openKey ? rows.find((row) => rowKey(row) === actions.openKey) : undefined
 
   return (
     // Focus capture records the stable row identity so a refresh that
@@ -272,7 +327,7 @@ export default function DataTable<Row>({
                             </button>
                           </td>
                         )}
-                        {actions && <td className="data-table-actions-cell">{renderActions(row, key, 'desktop')}</td>}
+                        {actions && <td className="data-table-actions-cell">{renderActions(row, key)}</td>}
                       </tr>
                       {expanded && desktopDisclosure && disclosure?.render && (
                         <tr className="data-table-detail-row">
@@ -280,7 +335,7 @@ export default function DataTable<Row>({
                             id={`data-table-detail-desktop-${key}`}
                             colSpan={columns.length + (desktopDisclosure ? 1 : 0) + (actions ? 1 : 0)}
                           >
-                            {disclosure.render(row)}
+                            {disclosure.render(row, 'desktop')}
                           </td>
                         </tr>
                       )}
@@ -330,10 +385,10 @@ export default function DataTable<Row>({
                       id={secondary.length === 0 ? `data-table-detail-mobile-${key}` : undefined}
                       className="data-table-detail"
                     >
-                      {disclosure.render(row)}
+                      {disclosure.render(row, 'mobile')}
                     </div>
                   )}
-                  {actions && renderActions(row, key, 'mobile')}
+                  {actions && renderActions(row, key)}
                 </article>
               )
             })}
@@ -362,6 +417,19 @@ export default function DataTable<Row>({
                 </button>
               </span>
             </div>
+          )}
+          {actions && openActionRow && actionTrigger.current && (
+            <FloatingActionMenu
+              id={`data-table-actions-${actions.openKey}`}
+              label={actions.label(openActionRow)}
+              trigger={actionTrigger.current}
+              onClose={() => {
+                actions.onOpenKeyChange(null)
+                actionTrigger.current = null
+              }}
+            >
+              {actions.render(openActionRow)}
+            </FloatingActionMenu>
           )}
         </>
       )}

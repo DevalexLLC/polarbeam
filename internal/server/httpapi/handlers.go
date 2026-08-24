@@ -78,7 +78,8 @@ var agentListSpec = listQuerySpec{
 	Filters: []listFilterSpec{{
 		Name: "health", Allowed: []string{
 			store.AgentHealthOffline, store.AgentHealthDegraded,
-			store.AgentHealthHealthy, store.AgentHealthNoData, store.AgentHealthAttention,
+			store.AgentHealthHealthy, store.AgentHealthNoData,
+			store.AgentHealthAttention, store.AgentHealthClear,
 		},
 	}},
 	Sorts:        []string{"hostname", "site", "network", "health", "last_seen", "version"},

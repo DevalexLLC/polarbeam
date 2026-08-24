@@ -45,10 +45,22 @@ test('component exposes sortable announcements, paging, disclosures, menus, and 
   assert.match(component, />\s*Next\s*</)
   assert.match(component, /className="data-table-disclosure"/)
   assert.match(component, /className="data-table-actions-menu"/)
+  assert.match(component, /createPortal/)
   assert.match(component, /event\.key !== 'Escape'/)
   assert.match(component, /loading && rows\.length === 0/)
   assert.match(component, /error && rows\.length === 0/)
   assert.match(component, /data-table-state empty-state/)
+})
+
+test('floating actions escape the scroll region and disclosure identities are surface-qualified', () => {
+  assert.match(styles, /\.data-table-actions-menu\s*\{[^}]*position:\s*fixed/)
+  assert.doesNotMatch(styles, /\.data-table-actions-menu\s*\{[^}]*position:\s*absolute/)
+  assert.match(component, /render\(row, 'desktop'\)/)
+  assert.match(component, /render\(row, 'mobile'\)/)
+
+  const agents = readFileSync(new URL('../src/views/Agents.tsx', import.meta.url), 'utf8')
+  assert.match(agents, /agent-probe-\$\{selectedProbe\}-\$\{surface\}/)
+  assert.match(agents, /render: \(row, surface\)/)
 })
 
 test('mobile list hides secondary metadata behind a full-width touch target', () => {
@@ -78,5 +90,16 @@ test('all adopted inventories request server pages and render the shared compone
     assert.match(source, /limit:\s*String\([^)]*PAGE\)/)
     assert.match(source, /\(page - 1\) \* [A-Z_]*PAGE/)
     assert.doesNotMatch(source, /\.slice\(\(page - 1\)/)
+  }
+})
+
+test('debounced route values drive inventory requests and linked rows keep scope context', () => {
+  for (const file of ['../src/views/Agents.tsx', '../src/views/Paths.tsx']) {
+    const source = readFileSync(new URL(file, import.meta.url), 'utf8')
+    assert.match(source, /const \[queryParam\] = useRouteParam\('q'\)/)
+    assert.match(source, /queryParam\.trim\(\)/)
+    assert.doesNotMatch(source, /else if \(query\.trim\(\)\) params\.set\('q'/)
+    assert.match(source, /needsScopeRequest/)
+    assert.match(source, /data-table-context/)
   }
 })

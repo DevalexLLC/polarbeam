@@ -1864,6 +1864,14 @@ func TestAgentsQueryMode(t *testing.T) {
 	if w.Code != http.StatusOK || f.lastAgentQuery.Health != store.AgentHealthAttention {
 		t.Errorf("attention query = %d %+v", w.Code, f.lastAgentQuery)
 	}
+
+	req = httptest.NewRequest("GET", "/api/v1/agents?health=clear", nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK || f.lastAgentQuery.Health != store.AgentHealthClear {
+		t.Errorf("clear query = %d %+v", w.Code, f.lastAgentQuery)
+	}
 }
 
 func TestAgentAndTargetQueriesRejectInvalidListParams(t *testing.T) {
