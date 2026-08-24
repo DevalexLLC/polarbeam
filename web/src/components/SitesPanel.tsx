@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { apiDelete, apiGet, apiPost, apiPut } from '../api'
 import { fmtAgo } from '../format'
 import type { SitesConfigResponse, SiteConfig } from '../types'
@@ -53,9 +53,13 @@ function refSummary(s: SiteConfig): string {
 
 export default function SitesPanel({
   canWrite,
+  selectedSite,
+  onSelectedSite,
   onAuthError,
 }: {
   canWrite: boolean
+  selectedSite: string
+  onSelectedSite: (site: string, mode?: 'push' | 'replace') => void
   onAuthError: (err: unknown) => void
 }) {
   const [data, setData] = useState<SitesConfigResponse | null>(null)
@@ -65,6 +69,7 @@ export default function SitesPanel({
   const [formErrors, setFormErrors] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [savedFlash, setSavedFlash] = useState(false)
+  const scrolledSite = useRef<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -113,6 +118,7 @@ export default function SitesPanel({
       }
       setDraft(null)
       setEditing(false)
+      onSelectedSite('', 'replace')
       setSavedFlash(true)
       await reload()
     } catch (err) {
@@ -126,6 +132,7 @@ export default function SitesPanel({
   const remove = async (s: SiteConfig) => {
     try {
       await apiDelete('/api/v1/config/sites/' + encodeURIComponent(s.name))
+      if (selectedSite === s.name) onSelectedSite('', 'replace')
       await reload()
     } catch (err) {
       onAuthError(err)
@@ -134,6 +141,7 @@ export default function SitesPanel({
   }
 
   const startEdit = (s: SiteConfig) => {
+    onSelectedSite(s.name)
     setEditing(true)
     setSavedFlash(false)
     setFormErrors([])
@@ -146,6 +154,41 @@ export default function SitesPanel({
       longitude: s.longitude !== null ? String(s.longitude) : '',
     })
   }
+
+  useEffect(() => {
+    if (!selectedSite) {
+      scrolledSite.current = null
+      if (editing) {
+        setEditing(false)
+        setDraft(null)
+      }
+      return
+    }
+    if (!data) return
+    const selected = data.sites.find((site) => site.name === selectedSite)
+    if (!selected) {
+      onSelectedSite('', 'replace')
+      return
+    }
+    if (!editing || draft?.name !== selectedSite) {
+      setEditing(true)
+      setSavedFlash(false)
+      setFormErrors([])
+      setDraft({
+        name: selected.name,
+        display_name: selected.display_name,
+        location: selected.location,
+        latitude: selected.latitude !== null ? String(selected.latitude) : '',
+        longitude: selected.longitude !== null ? String(selected.longitude) : '',
+      })
+    }
+    if (scrolledSite.current !== selectedSite) {
+      const row = document.getElementById('settings-site-' + selectedSite)
+      if (!row) return
+      row.scrollIntoView({ block: 'nearest' })
+      scrolledSite.current = selectedSite
+    }
+  }, [data, draft?.name, editing, onSelectedSite, selectedSite])
 
   if (error && !data) {
     return (
@@ -228,7 +271,11 @@ export default function SitesPanel({
               </thead>
               <tbody>
                 {data.sites.map((s) => (
-                  <tr key={s.id}>
+                  <tr
+                    key={s.id}
+                    id={'settings-site-' + s.name}
+                    className={selectedSite === s.name ? 'selected-row' : ''}
+                  >
                     <td data-label="Name" className="mono">
                       {s.name}
                     </td>
@@ -294,6 +341,7 @@ export default function SitesPanel({
                     onClick={() => {
                       setDraft(null)
                       setEditing(false)
+                      onSelectedSite('')
                       setFormErrors([])
                     }}
                   >

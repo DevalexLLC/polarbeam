@@ -10,7 +10,9 @@ import IncidentTimeline, {
 import DisclosureChevron from '../components/DisclosureChevron'
 import { fmtAgo, fmtTime } from '../format'
 import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
+import { updateRouteParams } from '../routeState'
 import { useTimezone } from '../timezone'
+import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
 import type { OutageEvent, OutagesResponse, Window } from '../types'
 import { WINDOWS } from '../types'
 
@@ -49,12 +51,24 @@ function target(o: OutageEvent): string {
 }
 
 interface IncidentGroup {
+  id: string
   key: string
   open: boolean
   kind: OutageEvent['kind']
   probe: string
   error: string | null
   events: OutageEvent[]
+}
+
+function incidentSelectionID(key: string): string {
+  let left = 2_166_136_261
+  let right = 3_332_046_959
+  for (let index = 0; index < key.length; index++) {
+    const code = key.charCodeAt(index)
+    left = Math.imul(left ^ code, 16_777_619)
+    right = Math.imul(right ^ code, 2_246_822_519)
+  }
+  return `i${(left >>> 0).toString(36)}${(right >>> 0).toString(36)}`
 }
 
 function groupIncidents(events: OutageEvent[]): IncidentGroup[] {
@@ -65,6 +79,7 @@ function groupIncidents(events: OutageEvent[]): IncidentGroup[] {
       '\u0000',
     )
     const group = groups.get(key) ?? {
+      id: incidentSelectionID(key),
       key,
       open,
       kind: event.kind,
@@ -84,8 +99,15 @@ function groupIncidents(events: OutageEvent[]): IncidentGroup[] {
   })
 }
 
-function IncidentGroupRow({ group }: { group: IncidentGroup }) {
-  const [expanded, setExpanded] = useState(false)
+function IncidentGroupRow({
+  group,
+  expanded,
+  onToggle,
+}: {
+  group: IncidentGroup
+  expanded: boolean
+  onToggle: () => void
+}) {
   const [detailLimit, setDetailLimit] = useState(INCIDENT_DETAIL_PAGE)
   const firstOpened = group.events.reduce(
     (earliest, event) => (Date.parse(event.opened_at) < Date.parse(earliest) ? event.opened_at : earliest),
@@ -98,16 +120,14 @@ function IncidentGroupRow({ group }: { group: IncidentGroup }) {
         ? 'Probes degraded'
         : 'Probe failures'
   const affectedCount = new Set(group.events.map(target)).size
-  let idHash = 0
-  for (let i = 0; i < group.key.length; i++) idHash = (idHash * 31 + group.key.charCodeAt(i)) >>> 0
-  const detailsID = `incident-${idHash}`
+  const detailsID = `incident-${group.id}`
 
   return (
     <article className={'incident-group' + (group.open ? ' incident-active' : '')}>
       <button
         className="incident-summary"
         onClick={() => {
-          setExpanded(!expanded)
+          onToggle()
           if (expanded) setDetailLimit(INCIDENT_DETAIL_PAGE)
         }}
         aria-expanded={expanded}
@@ -168,15 +188,19 @@ function IncidentGroupRow({ group }: { group: IncidentGroup }) {
 
 export default function Outages({ onAuthError }: { onAuthError: (err: unknown) => void }) {
   const { mode } = useTimezone() // re-render fmtTime tooltips on UTC/local toggle
-  const [win, setWin] = useState<Window>('24h')
-  const [filter, setFilter] = useState<IncidentFilter>('active')
-  const [query, setQuery] = useState('')
+  const [windowParam] = useRouteParam('window', '24h')
+  const [statusParam] = useRouteParam('status', 'active')
+  const [query, setQuery] = useRouteSearch()
+  const [selectedSlice, setSelectedSlice] = useRouteNumber('slice', 0)
+  const [expandedIncident, setExpandedIncident] = useRouteParam('incident')
+  const win = windowParam as Window
+  const filter = statusParam as IncidentFilter
   const [data, setData] = useState<OutagesResponse | null>(null)
   const [error, setError] = useState('')
   // The timeline's "now" is fetch time, so its bucket grid only shifts on
   // the 30s poll, never on a re-render (hover, expand, timezone toggle).
   const [fetchedAt, setFetchedAt] = useState(0)
-  const [selectedBucket, setSelectedBucket] = useState<number | null>(null)
+  const selectedBucket = selectedSlice || null
 
   useEffect(() => {
     let cancelled = false
@@ -249,6 +273,16 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
     })
     return groupIncidents(filtered)
   }, [events, filter, query, timeline, fetchedAt])
+
+  useEffect(() => {
+    if (selectedBucket != null && timeline && timeline.bucket == null) setSelectedSlice(0, 'replace')
+  }, [selectedBucket, setSelectedSlice, timeline])
+
+  useEffect(() => {
+    if (!expandedIncident || !data) return
+    if (groupIncidents(events).some((group) => group.id === expandedIncident)) return
+    setExpandedIncident('', 'replace')
+  }, [data, events, expandedIncident, setExpandedIncident])
   const sliceHasHiddenIncidents =
     groups.length === 0 &&
     bucket != null &&
@@ -300,21 +334,21 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
           <button
             className={filter === 'active' ? 'active' : ''}
             aria-pressed={filter === 'active'}
-            onClick={() => setFilter('active')}
+            onClick={() => updateRouteParams({ status: null, page: null, incident: null })}
           >
             Active {activeCount}
           </button>
           <button
             className={filter === 'all' ? 'active' : ''}
             aria-pressed={filter === 'all'}
-            onClick={() => setFilter('all')}
+            onClick={() => updateRouteParams({ status: 'all', page: null, incident: null })}
           >
             All {events.length}
           </button>
           <button
             className={filter === 'resolved' ? 'active' : ''}
             aria-pressed={filter === 'resolved'}
-            onClick={() => setFilter('resolved')}
+            onClick={() => updateRouteParams({ status: 'resolved', page: null, incident: null })}
           >
             Resolved {resolvedCount}
           </button>
@@ -335,8 +369,7 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
               className={win === w ? 'active' : ''}
               aria-pressed={win === w}
               onClick={() => {
-                setWin(w)
-                setSelectedBucket(null)
+                updateRouteParams({ window: w === '24h' ? null : w, slice: null, incident: null })
               }}
             >
               {w}
@@ -366,7 +399,7 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
             win={timeline.win}
             nowMs={fetchedAt}
             selected={bucket}
-            onSelect={setSelectedBucket}
+            onSelect={(value) => setSelectedSlice(value ?? 0)}
           />
         </section>
       )}
@@ -384,7 +417,7 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
             </h2>
           </div>
           {bucket != null && timeline ? (
-            <button className="chip bucket-filter-chip" onClick={() => setSelectedBucket(null)}>
+            <button className="chip bucket-filter-chip" onClick={() => setSelectedSlice(0)}>
               {bucketRangeLabel(
                 bucket,
                 timeline.grid.bucketMs,
@@ -431,7 +464,14 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
             </span>
           </div>
         ) : (
-          groups.map((group) => <IncidentGroupRow key={group.key} group={group} />)
+          groups.map((group) => (
+            <IncidentGroupRow
+              key={group.key}
+              group={group}
+              expanded={expandedIncident === group.id}
+              onToggle={() => setExpandedIncident(expandedIncident === group.id ? '' : group.id)}
+            />
+          ))
         )}
       </section>
     </>

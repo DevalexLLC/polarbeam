@@ -5,6 +5,7 @@ import type { Caps } from '../caps'
 import { canWriteRow } from '../caps'
 import type { PlaneChoice } from '../plane'
 import { initialPlane, networkField, planeReady } from '../plane'
+import { inheritRouteNetwork } from '../routeState'
 import type { TargetsConfigResponse, TargetConfig } from '../types'
 import ConfirmButton from './ConfirmButton'
 import PlaneField from './PlaneField'
@@ -222,7 +223,7 @@ export default function TargetsPanel({
                 {externals.map((t) => (
                   <tr key={t.id}>
                     <td data-label="Name" className="mono">
-                      <a href={'#/target/' + encodeURIComponent(t.id)}>{t.name}</a>
+                      <a href={inheritRouteNetwork('#/target/' + encodeURIComponent(t.id))}>{t.name}</a>
                     </td>
                     <td data-label="Address" className="mono">
                       {t.url ? t.url : t.port ? `${t.address}:${t.port}` : t.address}
@@ -355,7 +356,7 @@ export default function TargetsPanel({
                 {agents.map((t) => (
                   <tr key={t.id}>
                     <td data-label="Name" className="mono">
-                      <a href={'#/target/' + encodeURIComponent(t.id)}>{t.name}</a>
+                      <a href={inheritRouteNetwork('#/target/' + encodeURIComponent(t.id))}>{t.name}</a>
                     </td>
                     <td data-label="Probes">{t.probe_count}</td>
                     <td data-label="Created">{fmtAgo(t.created_at)}</td>

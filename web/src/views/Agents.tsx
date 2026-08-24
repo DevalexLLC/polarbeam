@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { apiGet } from '../api'
 import DisclosureChevron from '../components/DisclosureChevron'
 import HealthStrip, { stripStats, UptimeValue } from '../components/HealthStrip'
 import { fmtAgo, fmtTime } from '../format'
 import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
+import { inheritRouteNetwork, updateRouteParams } from '../routeState'
 import { useTimezone } from '../timezone'
+import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
 import type {
   AgentBucketFailuresResponse,
   AgentInfo,
@@ -19,6 +21,7 @@ const POLL_MS = 30_000
 // healthy agent is flagged from issuance. 7 days = renewal has been
 // failing for 3+ days. Mirror of CERT_WARN_DAYS in Overview.tsx.
 const CERT_WARN_DAYS = 7
+const AGENT_PAGE = 25
 
 type Health = 'ok' | 'degraded' | 'down' | 'stale'
 type FleetFilter = 'all' | 'attention' | 'healthy'
@@ -97,7 +100,17 @@ function ProbeLabel({ p }: { p: AgentProbeHealth }) {
   // id and stays plain text. The row's click guard already ignores clicks
   // that land on links, so linking here doesn't fight the row toggle.
   const link = (label: string) =>
-    p.target_id ? <a href={'#/target/' + encodeURIComponent(p.target_id)}>{label}</a> : <span>{label}</span>
+    p.target_id ? (
+      <a
+        href={inheritRouteNetwork(
+          '#/target/' + encodeURIComponent(p.target_id) + '?probe=' + encodeURIComponent(p.probe_id),
+        )}
+      >
+        {label}
+      </a>
+    ) : (
+      <span>{label}</span>
+    )
   return (
     <div className="probe-strip-label">
       <span className="mono">{p.type}</span>
@@ -128,10 +141,14 @@ function ProbeDetail({
   agentId,
   detail,
   error,
+  selectedProbe,
+  onSelectProbe,
 }: {
   agentId: string
   detail: AgentProbeHealthResponse | null
   error: string
+  selectedProbe: string
+  onSelectProbe: (probe: string) => void
 }) {
   if (!detail && error)
     return (
@@ -168,8 +185,22 @@ function ProbeDetail({
       {probes.map((p) => {
         const s = stripStats(p.buckets, bucketS, nowS)
         return (
-          <div key={p.probe_id} className="probe-strip-row">
-            <ProbeLabel p={p} />
+          <div
+            key={p.probe_id}
+            id={'agent-probe-' + p.probe_id}
+            className={'probe-strip-row' + (selectedProbe === p.probe_id ? ' selected-row' : '')}
+          >
+            <div className="probe-select-cell">
+              <ProbeLabel p={p} />
+              <button
+                type="button"
+                className="probe-select-button linklike"
+                aria-pressed={selectedProbe === p.probe_id}
+                onClick={() => onSelectProbe(selectedProbe === p.probe_id ? '' : p.probe_id)}
+              >
+                {selectedProbe === p.probe_id ? 'Clear selection' : 'Select probe'}
+              </button>
+            </div>
             {/* probe_id scopes the breakdown to this series (and keeps
                 traceroute in, matching this strip's own counts). */}
             <HealthStrip
@@ -210,6 +241,8 @@ function Row({
   onToggle,
   detail,
   detailError,
+  selectedProbe,
+  onSelectProbe,
 }: {
   a: AgentInfo
   multiNetwork: boolean
@@ -217,6 +250,8 @@ function Row({
   onToggle: () => void
   detail: AgentProbeHealthResponse | null
   detailError: string
+  selectedProbe: string
+  onSelectProbe: (probe: string) => void
 }) {
   const h = health(a)
   const detailsID = `agent-detail-${a.id}`
@@ -299,7 +334,13 @@ function Row({
       {expanded && (
         <tr id={detailsID} className="agent-detail-row">
           <td colSpan={multiNetwork ? 11 : 10} data-label="24 h probes">
-            <ProbeDetail agentId={a.id} detail={detail} error={detailError} />
+            <ProbeDetail
+              agentId={a.id}
+              detail={detail}
+              error={detailError}
+              selectedProbe={selectedProbe}
+              onSelectProbe={onSelectProbe}
+            />
           </td>
         </tr>
       )}
@@ -311,11 +352,18 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
   useTimezone() // re-render fmtTime tooltips on UTC/local toggle
   const [data, setData] = useState<AgentsResponse | null>(null)
   const [error, setError] = useState('')
-  const [filter, setFilter] = useState<FleetFilter>('all')
-  const [query, setQuery] = useState('')
+  const [healthParam] = useRouteParam('health', 'all')
+  const [query, setQuery] = useRouteSearch()
+  const [sort] = useRouteParam('sort', 'status')
+  const [order] = useRouteParam('order', 'asc')
+  const [page, setPage] = useRouteNumber('page', 1)
+  const [selectedProbe, setSelectedProbe] = useRouteParam('probe')
+  const scrolledAgent = useRef<string | null>(null)
+  const scrolledProbe = useRef<string | null>(null)
+  const filter = healthParam as FleetFilter
   // One agent's row may be expanded to its per-probe detail, fetched
   // lazily on expand and refreshed on the same cadence as the table.
-  // The hash (#/agents/<id>) is the single source of truth for which row
+  // The hash query's agent value is the single source of truth for which row
   // is open — not local state, which would go stale when the top-nav
   // Agents link resets the hash — so deep links from the Overview fleet
   // card, refreshes, and Back all restore the expansion for free.
@@ -374,14 +422,46 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
     }
   }, [expanded, onAuthError])
 
+  useEffect(() => {
+    if (!data || !expanded) return
+    if (data.agents.some((row) => row.id === expanded)) return
+    updateRouteParams({ agent: null, probe: null }, 'replace')
+  }, [data, expanded])
+
+  useEffect(() => {
+    if (!selectedProbe) {
+      scrolledProbe.current = null
+      return
+    }
+    if (!detail) return
+    if (detail.probes.some((probe) => probe.probe_id === selectedProbe)) {
+      const key = `${expanded ?? ''}\u0000${selectedProbe}`
+      if (scrolledProbe.current !== key) {
+        const row = document.getElementById('agent-probe-' + selectedProbe)
+        if (!row) return
+        row.scrollIntoView({ block: 'nearest' })
+        scrolledProbe.current = key
+      }
+      return
+    }
+    setSelectedProbe('', 'replace')
+  }, [detail, expanded, page, selectedProbe, setSelectedProbe])
+
   // Bring a deep-linked row into view once the table exists. block:
   // 'nearest' is a no-op for a row already on screen, so expanding by
   // click never jumps — only arrivals from the Overview fleet card (or a
   // bookmark) scroll. An unknown id simply has no row to scroll to.
   useEffect(() => {
-    if (!expanded || !data) return
-    document.getElementById('agent-' + expanded)?.scrollIntoView({ block: 'nearest' })
-  }, [expanded, data])
+    if (!expanded) {
+      scrolledAgent.current = null
+      return
+    }
+    if (!data || scrolledAgent.current === expanded) return
+    const row = document.getElementById('agent-' + expanded)
+    if (!row) return
+    row.scrollIntoView({ block: 'nearest' })
+    scrolledAgent.current = expanded
+  }, [expanded, data, page])
 
   // The global top-bar network filter scopes the whole view: rows, header
   // chips, and the health-filter button counts all derive from this subset.
@@ -392,7 +472,7 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
   )
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase()
-    return fleet.filter((row) => {
+    const filtered = fleet.filter((row) => {
       // The two filters partition the fleet on needsAttention — including
       // never-seen (stale) agents and recent spool drops — so the button
       // counts always match the rows they reveal.
@@ -403,7 +483,39 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
         value.toLowerCase().includes(needle),
       )
     })
-  }, [fleet, filter, query])
+    // oxlint-disable-next-line unicorn/no-array-sort
+    return [...filtered].sort((a, b) => {
+      const value = (row: AgentInfo): string | number => {
+        if (sort === 'site') return row.site
+        if (sort === 'hostname') return row.hostname
+        if (sort === 'last_seen') return row.last_seen_at ? Date.parse(row.last_seen_at) : 0
+        const rank: Record<Health, number> = { down: 0, degraded: 1, stale: 2, ok: 3 }
+        return rank[health(row).status]
+      }
+      const x = value(a)
+      const y = value(b)
+      const comparison = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y))
+      return order === 'desc' ? -comparison : comparison
+    })
+  }, [fleet, filter, order, query, sort])
+  const pageCount = Math.max(1, Math.ceil(visible.length / AGENT_PAGE))
+  const pageRows = visible.slice((page - 1) * AGENT_PAGE, page * AGENT_PAGE)
+  const positionedAgent = useRef<string | null>(null)
+  useEffect(() => {
+    if (page > pageCount) setPage(pageCount, 'replace')
+  }, [page, pageCount, setPage])
+  useEffect(() => {
+    if (!expanded) {
+      positionedAgent.current = null
+      return
+    }
+    if (positionedAgent.current === expanded) return
+    const index = visible.findIndex((row) => row.id === expanded)
+    if (index === -1) return
+    positionedAgent.current = expanded
+    const selectedPage = Math.floor(index / AGENT_PAGE) + 1
+    setPage(selectedPage, 'replace')
+  }, [expanded, setPage, visible])
 
   if (error && !data)
     return (
@@ -469,21 +581,21 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
           <button
             className={filter === 'all' ? 'active' : ''}
             aria-pressed={filter === 'all'}
-            onClick={() => setFilter('all')}
+            onClick={() => updateRouteParams({ health: null, page: null, agent: null, probe: null })}
           >
             All {fleet.length}
           </button>
           <button
             className={filter === 'attention' ? 'active' : ''}
             aria-pressed={filter === 'attention'}
-            onClick={() => setFilter('attention')}
+            onClick={() => updateRouteParams({ health: 'attention', page: null, agent: null, probe: null })}
           >
             Attention {attention}
           </button>
           <button
             className={filter === 'healthy' ? 'active' : ''}
             aria-pressed={filter === 'healthy'}
-            onClick={() => setFilter('healthy')}
+            onClick={() => updateRouteParams({ health: 'healthy', page: null, agent: null, probe: null })}
           >
             Healthy {healthy}
           </button>
@@ -497,6 +609,23 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
             onChange={(e) => setQuery(e.target.value)}
           />
         </label>
+        <label className="compact-select">
+          <span>Sort</span>
+          <select value={sort} onChange={(event) => updateRouteParams({ sort: event.target.value, page: null })}>
+            <option value="status">Status</option>
+            <option value="site">Site</option>
+            <option value="hostname">Hostname</option>
+            <option value="last_seen">Last seen</option>
+          </select>
+        </label>
+        <button
+          type="button"
+          className="secondary-button"
+          aria-label={`Change to ${order === 'asc' ? 'descending' : 'ascending'} order; currently ${order === 'asc' ? 'ascending' : 'descending'}`}
+          onClick={() => updateRouteParams({ order: order === 'asc' ? 'desc' : null, page: null })}
+        >
+          {order === 'asc' ? 'Ascending' : 'Descending'}
+        </button>
         <span className="freshness">Refreshes every {POLL_MS / 1000}s</span>
       </div>
 
@@ -540,17 +669,19 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
                 </tr>
               </thead>
               <tbody>
-                {visible.map((a) => (
+                {pageRows.map((a) => (
                   <Row
                     key={a.id}
                     a={a}
                     multiNetwork={multiNetwork}
                     expanded={expanded === a.id}
                     onToggle={() => {
-                      location.hash = expanded === a.id ? '#/agents' : '#/agents/' + a.id
+                      updateRouteParams({ agent: expanded === a.id ? null : a.id, probe: null })
                     }}
                     detail={detail}
                     detailError={detailError}
+                    selectedProbe={selectedProbe}
+                    onSelectProbe={setSelectedProbe}
                   />
                 ))}
               </tbody>
@@ -558,6 +689,19 @@ export default function Agents({ agent, onAuthError }: { agent: string | null; o
           </div>
         )}
       </div>
+      {pageCount > 1 && (
+        <div className="progressive-footer">
+          <span className="hint">
+            Page {page} of {pageCount} · {visible.length} agents
+          </span>
+          <button className="secondary-button" disabled={page === 1} onClick={() => setPage(page - 1)}>
+            Previous
+          </button>
+          <button className="secondary-button" disabled={page === pageCount} onClick={() => setPage(page + 1)}>
+            Next
+          </button>
+        </div>
+      )}
     </>
   )
 }

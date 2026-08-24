@@ -983,7 +983,8 @@ scopes every view to that plane alone — the Overview tiles, map/matrix, and
 fleet card, plus the Incidents, Routes, Targets, and Agents pages and the
 pair and target detail pages — with pairs the plane does not probe marked
 "not probed" and off-plane sites dropped from the map and matrix. The choice
-persists per browser, and a dot on the funnel marks an active filter. The
+is encoded in the URL, follows dashboard navigation, and can be shared or
+bookmarked; a dot on the funnel marks an active filter. The
 map breaks a site's health out per network in its detail card, and the
 Overview fleet card and **Agents** page show each agent's network. The
 dashboard equivalent of everything above lives on

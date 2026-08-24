@@ -1,5 +1,6 @@
 import { apiGet } from '../api'
 import { fmtAgo } from '../format'
+import { inheritRouteNetwork } from '../routeState'
 import type { AgentBucketFailuresResponse, AgentHealthResponse, AgentInfo } from '../types'
 import HealthStrip, { stripStats, UptimeValue } from './HealthStrip'
 
@@ -28,7 +29,7 @@ export default function FleetAgentsCard({
           <span className="eyebrow">Fleet</span>
           <h2>Agents</h2>
         </div>
-        <a className="text-link" href="#/agents">
+        <a className="text-link" href={inheritRouteNetwork('#/agents')}>
           View agents
         </a>
       </div>
@@ -63,7 +64,7 @@ export default function FleetAgentsCard({
                       // controls — including strip slots, whose click pins
                       // the drill-down card rather than navigating.
                       if ((e.target as Element).closest('button, a, .fleet-strip, .strip-tip')) return
-                      location.hash = '#/agents/' + a.id
+                      location.hash = inheritRouteNetwork('#/agents?agent=' + encodeURIComponent(a.id))
                     }}
                   >
                     <td>
@@ -71,7 +72,7 @@ export default function FleetAgentsCard({
                           interpolated text as the control's label. */}
                       <a
                         className="fleet-agent-link"
-                        href={'#/agents/' + a.id}
+                        href={inheritRouteNetwork('#/agents?agent=' + encodeURIComponent(a.id))}
                         aria-label={
                           multiNetwork ? `${a.site} · ${a.hostname} · ${a.network}` : `${a.site} · ${a.hostname}`
                         }

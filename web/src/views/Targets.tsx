@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { apiGet } from '../api'
 import { fmtAgo, fmtTime } from '../format'
 import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
+import { inheritRouteNetwork, updateRouteParams } from '../routeState'
 import { useTimezone } from '../timezone'
+import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
 import type {
   AgentInfo,
   AgentsResponse,
@@ -15,6 +17,7 @@ import type {
 } from '../types'
 
 const POLL_MS = 30_000
+const TARGET_PAGE = 25
 
 // The browseable, read-only counterpart to Settings → Targets: every
 // authenticated user can reach the per-target drill-down (#/target/<id>)
@@ -60,7 +63,12 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
   useTimezone() // re-render fmtTime tooltips on UTC/local toggle
   const [feeds, setFeeds] = useState<Feeds | null>(null)
   const [error, setError] = useState('')
-  const [query, setQuery] = useState('')
+  const [query, setQuery] = useRouteSearch()
+  const [kind] = useRouteParam('kind', 'all')
+  const [status] = useRouteParam('status', 'all')
+  const [sort] = useRouteParam('sort', 'name')
+  const [order] = useRouteParam('order', 'asc')
+  const [page, setPage] = useRouteNumber('page', 1)
 
   useEffect(() => {
     let cancelled = false
@@ -132,21 +140,51 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
     })
     return { probeSites, probeCounts, troubled, externals, sites }
   }, [feeds, network])
-  const visible = useMemo(() => {
-    if (!feeds || !scoped) return { externals: [], sites: [] }
+  const visibleAll = useMemo(() => {
+    if (!feeds || !scoped) return []
     const needle = query.trim().toLowerCase()
+    const targetStatus = (target: TargetConfig) => {
+      if (scoped.troubled.has(target.name)) return 'incident'
+      if (target.kind === 'external' && !scoped.probeSites.has(target.name)) return 'unprobed'
+      return 'healthy'
+    }
     const matches = (t: TargetConfig) => {
+      if (kind !== 'all' && t.kind !== kind) return false
+      if (status !== 'all' && targetStatus(t) !== status) return false
       if (!needle) return true
       const agent = agentIDOf(t) ? feeds.agentByID.get(agentIDOf(t) as string) : undefined
       return [t.name, t.address, t.url, agent?.site, agent?.hostname, ...(scoped.probeSites.get(t.name) ?? [])]
         .filter(Boolean)
         .some((v) => String(v).toLowerCase().includes(needle))
     }
-    return {
-      externals: scoped.externals.filter(matches),
-      sites: scoped.sites.filter(matches),
-    }
-  }, [feeds, scoped, query])
+    // oxlint-disable-next-line unicorn/no-array-sort
+    return [...scoped.externals, ...scoped.sites].filter(matches).sort((a, b) => {
+      const value = (target: TargetConfig): string | number => {
+        if (sort === 'status') {
+          const rank = { incident: 0, unprobed: 1, healthy: 2 }
+          return rank[targetStatus(target)]
+        }
+        if (sort === 'probes') return scoped.probeCounts.get(target.name) ?? 0
+        if (sort === 'created') return Date.parse(target.created_at)
+        return target.name
+      }
+      const x = value(a)
+      const y = value(b)
+      const comparison = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y))
+      return order === 'desc' ? -comparison : comparison
+    })
+  }, [feeds, kind, order, query, scoped, sort, status])
+  const externalRows = visibleAll.filter((target) => target.kind === 'external')
+  const siteRows = visibleAll.filter((target) => target.kind === 'agent')
+  const pageCount = Math.max(1, Math.ceil(visibleAll.length / TARGET_PAGE))
+  const pageRows = visibleAll.slice((page - 1) * TARGET_PAGE, page * TARGET_PAGE)
+  const visible = {
+    externals: pageRows.filter((target) => target.kind === 'external'),
+    sites: pageRows.filter((target) => target.kind === 'agent'),
+  }
+  useEffect(() => {
+    if (page > pageCount) setPage(pageCount, 'replace')
+  }, [page, pageCount, setPage])
 
   if (error && !feeds)
     return (
@@ -205,116 +243,188 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
             onChange={(e) => setQuery(e.target.value)}
           />
         </label>
+        <label className="compact-select">
+          <span>Kind</span>
+          <select value={kind} onChange={(event) => updateRouteParams({ kind: event.target.value, page: null })}>
+            <option value="all">All kinds</option>
+            <option value="external">External</option>
+            <option value="agent">Site destinations</option>
+          </select>
+        </label>
+        <label className="compact-select">
+          <span>Status</span>
+          <select value={status} onChange={(event) => updateRouteParams({ status: event.target.value, page: null })}>
+            <option value="all">All statuses</option>
+            <option value="incident">Incident</option>
+            <option value="healthy">No incidents</option>
+            <option value="unprobed">Unprobed</option>
+          </select>
+        </label>
+        <label className="compact-select">
+          <span>Sort</span>
+          <select value={sort} onChange={(event) => updateRouteParams({ sort: event.target.value, page: null })}>
+            <option value="name">Name</option>
+            <option value="status">Status</option>
+            <option value="probes">Probes</option>
+            <option value="created">Created</option>
+          </select>
+        </label>
+        <button
+          type="button"
+          className="secondary-button"
+          aria-label={`Change to ${order === 'asc' ? 'descending' : 'ascending'} order; currently ${order === 'asc' ? 'ascending' : 'descending'}`}
+          onClick={() => updateRouteParams({ order: order === 'asc' ? 'desc' : null, page: null })}
+        >
+          {order === 'asc' ? 'Ascending' : 'Descending'}
+        </button>
       </div>
 
-      <div className="card">
-        <div className="card-head">
-          <div>
-            <span className="eyebrow">Probe destinations</span>
-            <h2>External targets</h2>
+      {kind !== 'agent' && (
+        <div className="card">
+          <div className="card-head">
+            <div>
+              <span className="eyebrow">Probe destinations</span>
+              <h2>External targets</h2>
+            </div>
+            <span className="hint">status reflects open incidents · admins manage these in Settings → Targets</span>
           </div>
-          <span className="hint">status reflects open incidents · admins manage these in Settings → Targets</span>
-        </div>
-        {visible.externals.length === 0 ? (
-          <div className="empty-state">
-            <strong>{query ? 'No matching external targets' : 'No external targets'}</strong>
-            <span>
-              {query
-                ? 'Try a different name, endpoint, or probing site.'
-                : 'An admin can add hosts and URLs to probe in Settings → Targets.'}
-            </span>
-          </div>
-        ) : (
-          <div className="scroll-x">
-            <table className="events">
-              <thead>
-                <tr>
-                  <th>Status</th>
-                  <th>Name</th>
-                  <th>Endpoint</th>
-                  <th>Probes</th>
-                  <th>Probed from</th>
-                  <th>Created</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visible.externals.map((t) => (
-                  <tr key={t.id}>
-                    <td data-label="Status">
-                      <StatusCell t={t} troubled={scoped.troubled} active={scoped.probeSites.has(t.name)} />
-                    </td>
-                    <td data-label="Name" className="mono">
-                      <a href={'#/target/' + encodeURIComponent(t.id)}>{t.name}</a>
-                    </td>
-                    <td data-label="Endpoint" className="mono">
-                      {t.url ? t.url : t.port ? `${t.address}:${t.port}` : t.address}
-                    </td>
-                    <td data-label="Probes">{scoped.probeCounts.get(t.name) ?? 0}</td>
-                    <td data-label="Probed from" className="mono">
-                      {(scoped.probeSites.get(t.name) ?? []).join(', ') || '—'}
-                    </td>
-                    <td data-label="Created" title={fmtTime(t.created_at)}>
-                      {fmtAgo(t.created_at)}
-                    </td>
+          {visible.externals.length === 0 ? (
+            <div className="empty-state">
+              <strong>
+                {externalRows.length === 0
+                  ? scoped.externals.length === 0
+                    ? 'No external targets'
+                    : 'No external targets match current filters'
+                  : 'No external targets on this page'}
+              </strong>
+              <span>
+                {scoped.externals.length === 0
+                  ? 'An admin can add hosts and URLs to probe in Settings → Targets.'
+                  : externalRows.length === 0
+                    ? 'Change the status filter or search query.'
+                    : 'This page contains site destinations; use the pagination controls to move through all targets.'}
+              </span>
+            </div>
+          ) : (
+            <div className="scroll-x">
+              <table className="events">
+                <thead>
+                  <tr>
+                    <th>Status</th>
+                    <th>Name</th>
+                    <th>Endpoint</th>
+                    <th>Probes</th>
+                    <th>Probed from</th>
+                    <th>Created</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      <div className="card">
-        <div className="card-head">
-          <div>
-            <span className="eyebrow">Agent mesh</span>
-            <h2>Site destinations</h2>
-          </div>
-          <span className="hint">each site's agent as a probe destination — inbound metrics per source site</span>
-        </div>
-        {visible.sites.length === 0 ? (
-          <div className="empty-state">
-            <strong>{query ? 'No matching site destinations' : 'No agents enrolled yet'}</strong>
-            <span>
-              {query ? 'Try a different site or hostname.' : 'Enroll an agent and its destination appears here.'}
-            </span>
-          </div>
-        ) : (
-          <div className="scroll-x">
-            <table className="events">
-              <thead>
-                <tr>
-                  <th>Status</th>
-                  <th>Site</th>
-                  <th>Agent</th>
-                  <th>Created</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visible.sites.map((t) => {
-                  const agent = agentIDOf(t) ? feeds.agentByID.get(agentIDOf(t) as string) : undefined
-                  return (
+                </thead>
+                <tbody>
+                  {visible.externals.map((t) => (
                     <tr key={t.id}>
                       <td data-label="Status">
-                        <StatusCell t={t} troubled={scoped.troubled} active />
+                        <StatusCell t={t} troubled={scoped.troubled} active={scoped.probeSites.has(t.name)} />
                       </td>
-                      <td data-label="Site" className="mono">
-                        <a href={'#/target/' + encodeURIComponent(t.id)}>{agent ? agent.site : t.name}</a>
+                      <td data-label="Name" className="mono">
+                        <a href={inheritRouteNetwork('#/target/' + encodeURIComponent(t.id))}>{t.name}</a>
                       </td>
-                      <td data-label="Agent" className="mono">
-                        {agent ? agent.hostname : <span className="hint">deleted agent</span>}
+                      <td data-label="Endpoint" className="mono">
+                        {t.url ? t.url : t.port ? `${t.address}:${t.port}` : t.address}
+                      </td>
+                      <td data-label="Probes">{scoped.probeCounts.get(t.name) ?? 0}</td>
+                      <td data-label="Probed from" className="mono">
+                        {(scoped.probeSites.get(t.name) ?? []).join(', ') || '—'}
                       </td>
                       <td data-label="Created" title={fmtTime(t.created_at)}>
                         {fmtAgo(t.created_at)}
                       </td>
                     </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {kind !== 'external' && (
+        <div className="card">
+          <div className="card-head">
+            <div>
+              <span className="eyebrow">Agent mesh</span>
+              <h2>Site destinations</h2>
+            </div>
+            <span className="hint">each site's agent as a probe destination — inbound metrics per source site</span>
           </div>
-        )}
-      </div>
+          {visible.sites.length === 0 ? (
+            <div className="empty-state">
+              <strong>
+                {siteRows.length === 0
+                  ? scoped.sites.length === 0
+                    ? 'No agents enrolled yet'
+                    : 'No site destinations match current filters'
+                  : 'No site destinations on this page'}
+              </strong>
+              <span>
+                {scoped.sites.length === 0
+                  ? 'Enroll an agent and its destination appears here.'
+                  : siteRows.length === 0
+                    ? 'Change the status filter or search query.'
+                    : 'This page contains external targets; use the pagination controls to move through all targets.'}
+              </span>
+            </div>
+          ) : (
+            <div className="scroll-x">
+              <table className="events">
+                <thead>
+                  <tr>
+                    <th>Status</th>
+                    <th>Site</th>
+                    <th>Agent</th>
+                    <th>Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visible.sites.map((t) => {
+                    const agent = agentIDOf(t) ? feeds.agentByID.get(agentIDOf(t) as string) : undefined
+                    return (
+                      <tr key={t.id}>
+                        <td data-label="Status">
+                          <StatusCell t={t} troubled={scoped.troubled} active />
+                        </td>
+                        <td data-label="Site" className="mono">
+                          <a href={inheritRouteNetwork('#/target/' + encodeURIComponent(t.id))}>
+                            {agent ? agent.site : t.name}
+                          </a>
+                        </td>
+                        <td data-label="Agent" className="mono">
+                          {agent ? agent.hostname : <span className="hint">deleted agent</span>}
+                        </td>
+                        <td data-label="Created" title={fmtTime(t.created_at)}>
+                          {fmtAgo(t.created_at)}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {pageCount > 1 && (
+        <div className="progressive-footer">
+          <span className="hint">
+            Page {page} of {pageCount} · {visibleAll.length} targets
+          </span>
+          <button className="secondary-button" disabled={page === 1} onClick={() => setPage(page - 1)}>
+            Previous
+          </button>
+          <button className="secondary-button" disabled={page === pageCount} onClick={() => setPage(page + 1)}>
+            Next
+          </button>
+        </div>
+      )}
     </>
   )
 }

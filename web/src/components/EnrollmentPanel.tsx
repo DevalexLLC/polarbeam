@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { Caps } from '../caps'
 import type { PlaneChoice } from '../plane'
 import { initialPlane, networkField, planeReady } from '../plane'
+import { inheritRouteNetwork } from '../routeState'
 import PlaneField from './PlaneField'
 import RoleWall from './RoleWall'
 import { apiDelete, apiGet, apiPost } from '../api'
@@ -187,8 +188,8 @@ export default function EnrollmentPanel({
               <div className="empty-state">
                 <strong>No sites yet</strong>
                 <span>
-                  Create a site on the <a href="#/settings/sites">Sites tab</a> first — tokens are always issued for an
-                  existing site.
+                  Create a site on the <a href={inheritRouteNetwork('#/settings?section=sites')}>Sites tab</a> first —
+                  tokens are always issued for an existing site.
                 </span>
               </div>
             ) : (

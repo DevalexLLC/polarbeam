@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { apiGet } from '../api'
 import type { Caps } from '../caps'
 import { planeChoice } from '../plane'
+import { inheritRouteNetwork } from '../routeState'
+import { useRouteParam } from '../useRouteState'
 import { SETTINGS_TABS, visibleTabs } from '../settingsTabs'
 import type { SettingsTab } from '../settingsTabs'
 import BannerSettingsPanel from '../components/BannerSettingsPanel'
@@ -39,6 +41,8 @@ export default function Settings({
 }) {
   const [settings, setSettings] = useState<SettingsResponse | null>(null)
   const [error, setError] = useState('')
+  const [selectedSite, setSelectedSite] = useRouteParam('site')
+  const [selectedProbe, setSelectedProbe] = useRouteParam('probe')
 
   const tabs = useMemo(() => visibleTabs(caps), [caps])
 
@@ -92,7 +96,7 @@ export default function Settings({
         {tabs.map((t) => (
           <a
             key={t.tab}
-            href={t.href}
+            href={inheritRouteNetwork(t.href)}
             className={t.tab === tab ? 'active' : ''}
             aria-current={t.tab === tab ? 'page' : undefined}
           >
@@ -119,7 +123,12 @@ export default function Settings({
       ) : tab === 'networks' ? (
         <NetworksPanel canWrite={caps.adminWrite} onAuthError={onAuthError} />
       ) : tab === 'sites' ? (
-        <SitesPanel canWrite={caps.adminWrite} onAuthError={onAuthError} />
+        <SitesPanel
+          canWrite={caps.adminWrite}
+          selectedSite={selectedSite}
+          onSelectedSite={setSelectedSite}
+          onAuthError={onAuthError}
+        />
       ) : tab === 'enrollment' ? (
         <EnrollmentPanel caps={caps} canWrite={caps.networkWrite} plane={workloadPlane} onAuthError={onAuthError} />
       ) : tab === 'targets' ? (
@@ -127,7 +136,13 @@ export default function Settings({
       ) : tab === 'meshes' ? (
         <MeshesPanel canWrite={caps.networkWrite} plane={workloadPlane} onAuthError={onAuthError} />
       ) : tab === 'probes' ? (
-        <ProbesPanel canWrite={caps.networkWrite} plane={workloadPlane} onAuthError={onAuthError} />
+        <ProbesPanel
+          canWrite={caps.networkWrite}
+          plane={workloadPlane}
+          selectedProbe={selectedProbe}
+          onSelectedProbe={setSelectedProbe}
+          onAuthError={onAuthError}
+        />
       ) : error && !settings ? (
         <div className="state-panel state-error">
           <h2>Settings unavailable</h2>

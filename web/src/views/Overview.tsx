@@ -4,7 +4,9 @@ import ConnectivityCard, { type ConnectivityMode } from '../components/Connectiv
 import FleetAgentsCard from '../components/FleetAgentsCard'
 import { fmtAgo } from '../format'
 import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
+import { inheritRouteNetwork } from '../routeState'
 import { buildThresholdResolver, cellSeverity } from '../severity'
+import { useRouteParam } from '../useRouteState'
 import type {
   AgentHealthResponse,
   AgentInfo,
@@ -80,7 +82,8 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
   const [outages, setOutages] = useState<OutagesResponse | null>(null)
   const [settings, setSettings] = useState<SettingsResponse | null>(null)
   const [health, setHealth] = useState<AgentHealthResponse | null>(null)
-  const [connMode, setConnMode] = useState<ConnectivityMode>('map')
+  const [topology, setTopology] = useRouteParam('topology', 'map')
+  const connMode = topology as ConnectivityMode
   // The global top-bar filter; '' = all planes folded together — the
   // pre-networks view. Every stat tile and card on this page honors it.
   const { network: netFilter } = useNetworkFilter()
@@ -221,7 +224,10 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
       )}
 
       <section className="stat-grid" aria-label="Network health summary">
-        <a className={'stat-card' + ratioStatus(availableSites, shownSites.length)} href="#/agents">
+        <a
+          className={'stat-card' + ratioStatus(availableSites, shownSites.length)}
+          href={inheritRouteNetwork('#/agents')}
+        >
           <span className="stat-label">Sites available</span>
           <strong>
             {availableSites}
@@ -242,7 +248,7 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
           type="button"
           className={'stat-card' + ratioStatus(healthyDirections, totalDirections)}
           onClick={() => {
-            setConnMode('matrix')
+            setTopology('matrix')
             document.getElementById('connectivity')?.scrollIntoView({ block: 'nearest' })
           }}
         >
@@ -262,7 +268,10 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
             Latest probe horizon
           </span>
         </button>
-        <a className={'stat-card ' + (activeGroups.length > 0 ? 'stat-critical' : 'stat-good')} href="#/incidents">
+        <a
+          className={'stat-card ' + (activeGroups.length > 0 ? 'stat-critical' : 'stat-good')}
+          href={inheritRouteNetwork('#/incidents')}
+        >
           <span className="stat-label">Active incident groups</span>
           <strong>{activeGroups.length}</strong>
           <span className="stat-context">
@@ -272,7 +281,10 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
               : `${activeTargetCount} affected ${activeTargetCount === 1 ? 'target' : 'targets'}`}
           </span>
         </a>
-        <a className={'stat-card ' + (attention.length > 0 ? 'stat-warning' : 'stat-good')} href="#/agents">
+        <a
+          className={'stat-card ' + (attention.length > 0 ? 'stat-warning' : 'stat-good')}
+          href={inheritRouteNetwork('#/agents')}
+        >
           <span className="stat-label">Agents needing attention</span>
           <strong>{attention.length}</strong>
           <span className="stat-context">
@@ -289,7 +301,7 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
           cells={shownCells}
           thresholds={resolveThresholds}
           mode={connMode}
-          onModeChange={setConnMode}
+          onModeChange={setTopology}
         />
         <FleetAgentsCard
           agents={shownAgents}
