@@ -991,6 +991,13 @@ dashboard equivalent of everything above lives on
 **user menu -> Settings -> Networks** plus network pickers on the
 Enrollment, Meshes, and Probes tabs.
 
+On pair and target detail charts, drag horizontally to investigate an
+absolute time range. The chart changes from **Live** to **Zoomed** and keeps
+that range fixed while 30-second refreshes continue; choose **Return live**
+to show the latest full window. Changing the resource, network, window,
+metric, or selected target probe starts a fresh live range, as does a zoom
+whose entire range has aged out of retained data.
+
 Everything above is the operator's view, which sees every plane. If the
 second network belongs to someone else — a tenant, or a team you would
 rather not hand the whole deployment to — give them an account scoped to it:

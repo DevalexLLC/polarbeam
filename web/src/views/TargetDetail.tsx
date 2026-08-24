@@ -46,7 +46,7 @@ import type {
 } from '../types'
 import { WINDOWS } from '../types'
 
-const POLL_MS = 60_000
+const POLL_MS = 30_000
 
 // Stage lines get one categorical color each. tcp reuses the outbound
 // blue and tls the return magenta (slots 1 and 5); dns takes the accent
@@ -500,8 +500,8 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
       plugins: [latestLegendPlugin()],
       ...(mode === 'utc' ? { tzDate: (ts: number) => uPlot.tzDate(new Date(ts * 1e3), 'Etc/UTC') } : {}),
     }
-    // Window flips only swap the data (setData resets scales); the id is
-    // covered by the route-keyed remount. Theme/timezone need new options.
+    // Theme/timezone flips rebuild the options. Window and other explicit
+    // investigation-context changes recreate through Chart's contextKey.
   }, [resolved, mode])
 
   if (error && !summary)
@@ -699,6 +699,22 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
           {shownSeriesSources.map((src) => {
             const points = densify(src.points, series.resolution_s)
             const axisLabel = metric === 'loss' ? 'Loss (%)' : latencyAxisLabel(src.latency_source)
+            const empty =
+              points.length === 0 ? (
+                <div className="chart-empty">
+                  <p>No probe results in this window yet. New results arrive on each probe interval.</p>
+                </div>
+              ) : metric === 'latency' && !hasAnyValue(points, metric) ? (
+                <div className="chart-empty">
+                  <p>
+                    Every probe in this window failed, so there are no latencies to plot.{' '}
+                    <button className="linklike" onClick={() => setMetric('loss')}>
+                      Switch to the loss view
+                    </button>{' '}
+                    to see the failures over time.
+                  </p>
+                </div>
+              ) : undefined
             return (
               <div key={srcKey(src.site, src.network)} className="card chart-card">
                 <h3>
@@ -707,26 +723,12 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
                     <span className="metric-source">{latencySourceName(src.latency_source)}</span>
                   )}
                 </h3>
-                {points.length === 0 ? (
-                  <div className="chart-empty">
-                    <p>No probe results in this window yet. New results arrive on each probe interval.</p>
-                  </div>
-                ) : metric === 'latency' && !hasAnyValue(points, metric) ? (
-                  <div className="chart-empty">
-                    <p>
-                      Every probe in this window failed, so there are no latencies to plot.{' '}
-                      <button className="linklike" onClick={() => setMetric('loss')}>
-                        Switch to the loss view
-                      </button>{' '}
-                      to see the failures over time.
-                    </p>
-                  </div>
-                ) : (
-                  <Chart
-                    options={mkOptions(srcKey(src.site, src.network), axisLabel, withPctl, lossCeiling)}
-                    data={toChartData(points, metric, withPctl)}
-                  />
-                )}
+                <Chart
+                  options={mkOptions(srcKey(src.site, src.network), axisLabel, withPctl, lossCeiling)}
+                  data={toChartData(points, metric, withPctl)}
+                  contextKey={[id, network, win, metric, selectedProbe, srcKey(src.site, src.network)].join('\u0000')}
+                  empty={empty}
+                />
               </div>
             )
           })}
@@ -741,16 +743,21 @@ export default function TargetDetail({ id, onAuthError }: { id: string; onAuthEr
                 {network !== '' && multiNetwork ? 'all probing sites · all networks' : 'all probing sites'}
               </span>
             </h3>
-            {stageData ? (
-              <Chart options={stageOptions} data={toStageChartData(stagePoints)} />
-            ) : (
-              <div className="chart-empty">
-                <p>
-                  No stage timings in this window. DNS, TCP connect, TLS handshake, and TTFB come from probe types that
-                  measure them (http, tls, tcp, dns); long windows fill in as the stage history accrues.
-                </p>
-              </div>
-            )}
+            <Chart
+              options={stageOptions}
+              data={toStageChartData(stagePoints)}
+              contextKey={[id, network, win, metric, selectedProbe, 'stages'].join('\u0000')}
+              empty={
+                stageData ? undefined : (
+                  <div className="chart-empty">
+                    <p>
+                      No stage timings in this window. DNS, TCP connect, TLS handshake, and TTFB come from probe types
+                      that measure them (http, tls, tcp, dns); long windows fill in as the stage history accrues.
+                    </p>
+                  </div>
+                )
+              }
+            />
           </div>
         </>
       )}

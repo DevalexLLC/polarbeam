@@ -1137,6 +1137,31 @@ a.check-chip:hover {
   width: 100%;
 }
 
+.chart-host-empty {
+  display: none;
+}
+
+.chart-investigation-controls {
+  display: flex;
+  min-height: var(--control-target);
+  align-items: center;
+  gap: 0.55rem;
+  margin: -0.25rem 0 0.35rem;
+}
+
+.chart-investigation-mode {
+  font-weight: 650;
+}
+
+.chart-investigation-mode.active {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.chart-investigation-controls .secondary-button {
+  min-height: var(--control-target);
+}
+
 .chart-empty {
   display: grid;
   place-items: center;

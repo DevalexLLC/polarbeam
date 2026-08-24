@@ -42,7 +42,7 @@ import type {
 } from '../types'
 import { WINDOWS } from '../types'
 
-const POLL_MS = 60_000
+const POLL_MS = 30_000
 
 function DirectionCard({ title, s, dir }: { title: string; s: DirectionSummary; dir: 'a' | 'b' }) {
   const checks = s.checks ?? []
@@ -515,29 +515,34 @@ export default function PairDetail({
         const chartData = toChartData(points, metric, withPctl)
         const directionSource = series[key].latency_source || series.latency_source
         const axisLabel = metric === 'loss' ? 'Loss (%)' : latencyAxisLabel(directionSource)
+        const empty =
+          points.length === 0 ? (
+            <div className="chart-empty">
+              <p>No probe results in this window yet. New results arrive on each probe interval.</p>
+            </div>
+          ) : metric === 'latency' && !hasAnyValue(points, metric) ? (
+            <div className="chart-empty">
+              <p>
+                Every probe in this window failed, so there are no latencies to plot.{' '}
+                <button className="linklike" onClick={() => setMetric('loss')}>
+                  Switch to the loss view
+                </button>{' '}
+                to see the failures over time.
+              </p>
+            </div>
+          ) : undefined
         return (
           <div key={key} className="card chart-card">
             <h3>
               <span className={'swatch series-' + dir} /> {title}
               {metric === 'latency' && <span className="metric-source">{latencySourceName(directionSource)}</span>}
             </h3>
-            {points.length === 0 ? (
-              <div className="chart-empty">
-                <p>No probe results in this window yet. New results arrive on each probe interval.</p>
-              </div>
-            ) : metric === 'latency' && !hasAnyValue(points, metric) ? (
-              <div className="chart-empty">
-                <p>
-                  Every probe in this window failed, so there are no latencies to plot.{' '}
-                  <button className="linklike" onClick={() => setMetric('loss')}>
-                    Switch to the loss view
-                  </button>{' '}
-                  to see the failures over time.
-                </p>
-              </div>
-            ) : (
-              <Chart options={mkOptions(chart, axisLabel, withPctl, lossCeiling)} data={chartData} />
-            )}
+            <Chart
+              options={mkOptions(chart, axisLabel, withPctl, lossCeiling)}
+              data={chartData}
+              contextKey={[a, b, net, win, metric, chart].join('\u0000')}
+              empty={empty}
+            />
           </div>
         )
       })}

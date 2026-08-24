@@ -144,19 +144,27 @@ export function lossScaleCeiling(pointArrays: SeriesPoint[][]): number {
   return [5, 10, 25, 50, 100].find((ceiling) => ceiling >= target) ?? 100
 }
 
-export function latestValueIndex(data: uPlot.AlignedData): number {
+export function latestValueIndex(data: uPlot.AlignedData, range?: { min: number; max: number }): number | null {
   for (let i = data[0].length - 1; i >= 0; i--) {
+    const x = data[0][i]
+    if (range && (x < range.min || x > range.max)) continue
     if (data.slice(1).some((column) => column[i] != null)) return i
   }
-  return 0
+  return null
 }
 
-// Pins the live legend to the newest measured point whenever the cursor is
-// away. The index is read from the plot's own data at call time, never
-// captured: baking it into the plugin would make the options identity change
-// on every poll, and Chart recreates uPlot whenever options change.
+// Pins the live legend to the newest visible measured point whenever the
+// cursor is away. A persisted investigation must not show a newer value from
+// outside its x range. The index is read from the plot at call time, never
+// captured: baking it into the plugin would make options change every poll.
 export function latestLegendPlugin(): uPlot.Plugin {
-  const restore = (u: uPlot) => u.setLegend({ idx: latestValueIndex(u.data) })
+  const restore = (u: uPlot) => {
+    const min = u.scales.x.min
+    const max = u.scales.x.max
+    const range = min == null || max == null ? undefined : { min, max }
+    const idx = latestValueIndex(u.data, range)
+    u.setLegend({ idxs: u.series.map(() => idx) })
+  }
   // Never while the operator is hovering: their cursor owns the readout.
   const restoreIfAway = (u: uPlot) => {
     if ((u.cursor.left ?? -1) < 0) restore(u)
@@ -165,6 +173,7 @@ export function latestLegendPlugin(): uPlot.Plugin {
     hooks: {
       ready: [restore],
       setData: [restoreIfAway],
+      setScale: [(u, key) => key === 'x' && restoreIfAway(u)],
       setCursor: [restoreIfAway],
     },
   }

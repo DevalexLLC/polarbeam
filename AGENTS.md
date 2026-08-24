@@ -40,6 +40,11 @@ sorts, or row selections must use that module rather than component state or
 local storage: discrete actions push history, debounced text input replaces
 the current entry, and default or invalid values are omitted.
 
+Pair and target uPlot charts share investigation-range behavior through
+`web/src/components/Chart.tsx` and pure reconciliation in
+`web/src/chartRange.ts`. Every caller must pass a context key containing all
+resource, network, window, metric, and probe inputs that reset zoom.
+
 ## Coding Style & Naming Conventions
 
 Format Go with `gofmt`; use tabs, lowercase packages, and conventional
