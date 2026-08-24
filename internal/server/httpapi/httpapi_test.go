@@ -41,6 +41,7 @@ type fakeDB struct {
 	operationalTargets  []store.OperationalTargetInfo
 	lastTargetQuery     store.TargetInventoryFilter
 	targetQuerySummary  store.TargetInventorySummary
+	targetScopeSummary  store.TargetInventorySummary
 	networks            []store.NetworkAdminInfo
 	agentHealth         []store.AgentHealthBucket
 	// probe type the last AgentHealthSeries call was told to exclude
@@ -398,12 +399,12 @@ func (f *fakeDB) QueryAgents(_ context.Context, filter store.AgentInventoryFilte
 	end := min(start+filter.Limit, len(f.agents))
 	return f.agents[start:end], f.agentQuerySummary, nil
 }
-func (f *fakeDB) QueryOperationalTargets(_ context.Context, filter store.TargetInventoryFilter) ([]store.OperationalTargetInfo, store.TargetInventorySummary, error) {
+func (f *fakeDB) QueryOperationalTargets(_ context.Context, filter store.TargetInventoryFilter) ([]store.OperationalTargetInfo, store.TargetInventorySummary, store.TargetInventorySummary, error) {
 	f.recordScope("QueryOperationalTargets", filter.Networks)
 	f.lastTargetQuery = filter
 	start := min(filter.Offset, len(f.operationalTargets))
 	end := min(start+filter.Limit, len(f.operationalTargets))
-	return f.operationalTargets[start:end], f.targetQuerySummary, nil
+	return f.operationalTargets[start:end], f.targetQuerySummary, f.targetScopeSummary, nil
 }
 func (f *fakeDB) AgentHealthSeries(_ context.Context, _, _ time.Duration, excludeProbeType int16, networks []uuid.UUID) ([]store.AgentHealthBucket, error) {
 	f.recordScope("AgentHealthSeries", networks)
@@ -1848,6 +1849,10 @@ func TestOperationalTargetsQuery(t *testing.T) {
 		Total: 4, External: 2, Agent: 2, Incident: 1,
 		Unprobed: 1, NoIncidents: 2,
 	}
+	f.targetScopeSummary = store.TargetInventorySummary{
+		Total: 8, External: 3, Agent: 5, Incident: 3,
+		Unprobed: 2, NoIncidents: 3,
+	}
 	h := newTestAPI(t, f)
 	cookie, _ := loginAndCookie(t, h, f)
 
@@ -1860,9 +1865,10 @@ func TestOperationalTargetsQuery(t *testing.T) {
 		t.Fatalf("default operational targets = %d filter %+v body %s", w.Code, f.lastTargetQuery, w.Body)
 	}
 	var body struct {
-		Targets []operationalTargetJSON `json:"targets"`
-		Page    listPageJSON            `json:"page"`
-		Summary targetSummaryJSON       `json:"summary"`
+		Targets      []operationalTargetJSON `json:"targets"`
+		Page         listPageJSON            `json:"page"`
+		Summary      targetSummaryJSON       `json:"summary"`
+		ScopeSummary targetSummaryJSON       `json:"scope_summary"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
@@ -1877,8 +1883,12 @@ func TestOperationalTargetsQuery(t *testing.T) {
 		body.Summary != (targetSummaryJSON{
 			Total: 4, External: 2, Agent: 2, Incident: 1,
 			Unprobed: 1, NoIncidents: 2,
-		}) {
-		t.Errorf("target metadata = page %+v summary %+v", body.Page, body.Summary)
+		}) || body.ScopeSummary != (targetSummaryJSON{
+		Total: 8, External: 3, Agent: 5, Incident: 3,
+		Unprobed: 2, NoIncidents: 3,
+	}) {
+		t.Errorf("target metadata = page %+v summary %+v scope summary %+v",
+			body.Page, body.Summary, body.ScopeSummary)
 	}
 
 	req = httptest.NewRequest("GET",
@@ -1889,7 +1899,7 @@ func TestOperationalTargetsQuery(t *testing.T) {
 	filter := f.lastTargetQuery
 	if w.Code != http.StatusOK || filter.Query != "lon" || filter.Kind != "agent" ||
 		filter.Status != store.TargetStatusIncident || filter.Sort != "probes" ||
-		filter.Order != "desc" || filter.Limit != 1 ||
+		filter.Order != "desc" || filter.Limit != 1 || !filter.RequireScopedActivity ||
 		!slices.Equal(filter.Networks, []uuid.UUID{netID}) {
 		t.Errorf("explicit target query = %d %+v %s", w.Code, filter, w.Body)
 	}

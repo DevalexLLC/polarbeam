@@ -84,7 +84,7 @@ type DB interface {
 	DeleteNetworkThreshold(ctx context.Context, network string, scope []uuid.UUID) error
 
 	ListTargets(ctx context.Context, networks []uuid.UUID) ([]store.TargetInfo, error)
-	QueryOperationalTargets(ctx context.Context, f store.TargetInventoryFilter) ([]store.OperationalTargetInfo, store.TargetInventorySummary, error)
+	QueryOperationalTargets(ctx context.Context, f store.TargetInventoryFilter) ([]store.OperationalTargetInfo, store.TargetInventorySummary, store.TargetInventorySummary, error)
 	UpsertExternalTarget(ctx context.Context, name, address string, port int32, url string, networkID *uuid.UUID, scope []uuid.UUID) (uuid.UUID, error)
 	DeleteTarget(ctx context.Context, name string, scope []uuid.UUID) error
 	ListMeshGroups(ctx context.Context, networks []uuid.UUID) ([]store.MeshGroupInfo, error)

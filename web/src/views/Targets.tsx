@@ -103,9 +103,9 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
       </div>
     )
 
-  const externalCount = data.summary.external
-  const siteCount = data.summary.agent
-  const troubledCount = data.summary.incident
+  const externalCount = data.scope_summary.external
+  const siteCount = data.scope_summary.agent
+  const troubledCount = data.scope_summary.incident
 
   return (
     <>
@@ -193,12 +193,18 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
           {visible.externals.length === 0 ? (
             <div className="empty-state">
               <strong>
-                {externalCount === 0 ? 'No external targets match current filters' : 'No external targets on this page'}
+                {externalCount === 0
+                  ? 'No external targets'
+                  : data.summary.external === 0
+                    ? 'No external targets match current filters'
+                    : 'No external targets on this page'}
               </strong>
               <span>
                 {externalCount === 0
-                  ? 'Change the kind, status, network, or search query.'
-                  : 'This page contains site destinations; use the pagination controls to move through all targets.'}
+                  ? 'An admin can add hosts and URLs to probe in Settings → Targets.'
+                  : data.summary.external === 0
+                    ? 'Change the status filter or search query.'
+                    : 'This page contains site destinations; use the pagination controls to move through all targets.'}
               </span>
             </div>
           ) : (
@@ -258,12 +264,18 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
           {visible.sites.length === 0 ? (
             <div className="empty-state">
               <strong>
-                {siteCount === 0 ? 'No site destinations match current filters' : 'No site destinations on this page'}
+                {siteCount === 0
+                  ? 'No agents enrolled yet'
+                  : data.summary.agent === 0
+                    ? 'No site destinations match current filters'
+                    : 'No site destinations on this page'}
               </strong>
               <span>
                 {siteCount === 0
-                  ? 'Change the kind, status, network, or search query.'
-                  : 'This page contains external targets; use the pagination controls to move through all targets.'}
+                  ? 'Enroll an agent and its destination appears here.'
+                  : data.summary.agent === 0
+                    ? 'Change the status filter or search query.'
+                    : 'This page contains external targets; use the pagination controls to move through all targets.'}
               </span>
             </div>
           ) : (

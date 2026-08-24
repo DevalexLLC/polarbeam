@@ -48,6 +48,14 @@ var operationalTargetListSpec = listQuerySpec{
 	DefaultOrder: "asc",
 }
 
+func toTargetSummaryJSON(summary store.TargetInventorySummary) targetSummaryJSON {
+	return targetSummaryJSON{
+		Total: summary.Total, External: summary.External, Agent: summary.Agent,
+		Incident: summary.Incident, Unprobed: summary.Unprobed,
+		NoIncidents: summary.NoIncidents,
+	}
+}
+
 func (a *api) handleOperationalTargets(w http.ResponseWriter, r *http.Request) {
 	query, ok := readListQuery(w, r, operationalTargetListSpec)
 	if !ok {
@@ -66,10 +74,11 @@ func (a *api) handleOperationalTargets(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	targets, summary, err := a.db.QueryOperationalTargets(r.Context(), store.TargetInventoryFilter{
+	targets, summary, scopeSummary, err := a.db.QueryOperationalTargets(r.Context(), store.TargetInventoryFilter{
 		Query: query.Query, Kind: query.Filters["kind"], Status: query.Filters["status"],
 		Sort: query.Sort, Order: query.Order, Limit: query.Limit,
 		Offset: query.Offset, Networks: scope,
+		RequireScopedActivity: query.networkSet && query.Network != "",
 	})
 	if err != nil {
 		internalError(w, "query operational targets", err)
@@ -93,12 +102,9 @@ func (a *api) handleOperationalTargets(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"targets": out,
-		"page":    query.page(summary.Total),
-		"summary": targetSummaryJSON{
-			Total: summary.Total, External: summary.External, Agent: summary.Agent,
-			Incident: summary.Incident, Unprobed: summary.Unprobed,
-			NoIncidents: summary.NoIncidents,
-		},
+		"targets":       out,
+		"page":          query.page(summary.Total),
+		"summary":       toTargetSummaryJSON(summary),
+		"scope_summary": toTargetSummaryJSON(scopeSummary),
 	})
 }

@@ -12,4 +12,7 @@ test('operational targets use one stable-ID server inventory', () => {
   assert.match(source, /targetDetailHref\(t\.id\)/)
   assert.match(source, /t\.agent_site/)
   assert.match(source, /t\.probing_sites/)
+  assert.match(source, /data\.scope_summary\.incident/)
+  assert.match(source, /An admin can add hosts and URLs to probe/)
+  assert.match(source, /Enroll an agent and its destination appears here/)
 })

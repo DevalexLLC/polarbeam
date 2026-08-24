@@ -234,12 +234,14 @@ func seedInventoryTargets(t *testing.T, ctx context.Context, s *store.Store) (ne
 func TestQueryOperationalTargetsAggregatesSortingPagingAndScope(t *testing.T) {
 	ctx, s := newStore(t)
 	f, mgmtTarget, foreignTarget := seedInventoryTargets(t, ctx, s)
+	var scopeSummary store.TargetInventorySummary
 	query := func(filter store.TargetInventoryFilter) ([]store.OperationalTargetInfo, store.TargetInventorySummary) {
 		t.Helper()
-		rows, summary, err := s.QueryOperationalTargets(ctx, filter)
+		rows, summary, scope, err := s.QueryOperationalTargets(ctx, filter)
 		if err != nil {
 			t.Fatalf("QueryOperationalTargets(%+v): %v", filter, err)
 		}
+		scopeSummary = scope
 		return rows, summary
 	}
 	baseFilter := store.TargetInventoryFilter{Sort: "name", Order: "asc", Limit: 100}
@@ -248,6 +250,9 @@ func TestQueryOperationalTargetsAggregatesSortingPagingAndScope(t *testing.T) {
 		Total: 7, External: 3, Agent: 4, Incident: 1, Unprobed: 4, NoIncidents: 2,
 	}) {
 		t.Fatalf("target summary = %+v", summary)
+	}
+	if scopeSummary != summary {
+		t.Fatalf("unfiltered scope summary = %+v, want %+v", scopeSummary, summary)
 	}
 	var svc *store.OperationalTargetInfo
 	for i := range rows {
@@ -329,6 +334,9 @@ func TestQueryOperationalTargetsAggregatesSortingPagingAndScope(t *testing.T) {
 	if summary.Total != 2 || summary.External != 2 || summary.Unprobed != 2 {
 		t.Errorf("target filters = ids %v summary %+v", targetInventoryIDs(rows), summary)
 	}
+	if scopeSummary.Total != 7 || scopeSummary.External != 3 || scopeSummary.Incident != 1 {
+		t.Errorf("filtered query changed scope summary: %+v", scopeSummary)
+	}
 
 	filter = baseFilter
 	filter.Networks = []uuid.UUID{f.mgmt}
@@ -351,6 +359,18 @@ func TestQueryOperationalTargetsAggregatesSortingPagingAndScope(t *testing.T) {
 		if target.Kind == "agent" && target.Network != "mgmt" {
 			t.Errorf("foreign agent target leaked: %+v", target)
 		}
+	}
+
+	filter.RequireScopedActivity = true
+	rows, summary = query(filter)
+	if summary != (store.TargetInventorySummary{
+		Total: 3, External: 1, Agent: 2, Incident: 1, Unprobed: 2,
+	}) || scopeSummary != summary {
+		t.Errorf("explicit network activity scope = ids %v summary %+v scope %+v",
+			targetInventoryIDs(rows), summary, scopeSummary)
+	}
+	if slices.Contains(targetInventoryIDs(rows), mgmtTarget) {
+		t.Errorf("unprobed external target leaked into explicit network: %v", targetInventoryIDs(rows))
 	}
 
 	filter = baseFilter
@@ -381,8 +401,9 @@ func TestQueryOperationalTargetsAggregatesSortingPagingAndScope(t *testing.T) {
 		{Sort: "name", Order: "asc", Limit: 0},
 		{Sort: "name", Order: "asc", Limit: 101},
 		{Sort: "name", Order: "asc", Limit: 1, Offset: -1},
+		{Sort: "name", Order: "asc", Limit: 1, RequireScopedActivity: true},
 	} {
-		if _, _, err := s.QueryOperationalTargets(ctx, bad); !errors.Is(err, store.ErrInvalid) {
+		if _, _, _, err := s.QueryOperationalTargets(ctx, bad); !errors.Is(err, store.ErrInvalid) {
 			t.Errorf("bad target filter %+v: err = %v, want ErrInvalid", bad, err)
 		}
 	}

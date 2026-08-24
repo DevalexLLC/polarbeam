@@ -360,6 +360,7 @@ export interface OperationalTargetsResponse {
   targets: OperationalTarget[]
   page: ListPage
   summary: TargetInventorySummary
+  scope_summary: TargetInventorySummary
 }
 
 export interface TargetSourceSummary extends DirectionSummary {

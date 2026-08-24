@@ -220,14 +220,15 @@ type OperationalTargetInfo struct {
 }
 
 type TargetInventoryFilter struct {
-	Query    string
-	Kind     string
-	Status   string
-	Sort     string
-	Order    string
-	Limit    int
-	Offset   int
-	Networks []uuid.UUID
+	Query                 string
+	Kind                  string
+	Status                string
+	Sort                  string
+	Order                 string
+	Limit                 int
+	Offset                int
+	Networks              []uuid.UUID
+	RequireScopedActivity bool
 }
 
 type TargetInventorySummary struct {
@@ -275,10 +276,17 @@ const targetInventoryCTE = `
 		  LEFT JOIN agents a ON a.id = t.agent_id
 		  LEFT JOIN networks an ON an.id = a.network_id
 		  LEFT JOIN sites s ON s.id = a.site_id
-		 WHERE $1::uuid[] IS NULL
+		 WHERE ($1::uuid[] IS NULL
 		    OR (t.kind = 'external'
 		        AND (t.network_id IS NULL OR t.network_id = ANY($1)))
-		    OR (t.kind = 'agent' AND a.network_id = ANY($1))
+		    OR (t.kind = 'agent' AND a.network_id = ANY($1)))
+		   AND (NOT $5::boolean OR t.kind = 'agent' OR EXISTS (
+		       SELECT 1 FROM probe_configs visible_probe
+		        WHERE visible_probe.target_id = t.id
+		          AND visible_probe.enabled
+		          AND visible_probe.mesh_id IS NULL
+		          AND visible_probe.network_id = ANY($1)
+		   ))
 	), probe_rows AS MATERIALIZED (
 		SELECT vt.id AS target_id, pc.id AS config_id, pc.enabled,
 		       source_site.name AS probing_site
@@ -328,6 +336,14 @@ const targetInventoryCTE = `
 		  FROM visible_targets vt
 		  LEFT JOIN probe_aggregates pa ON pa.target_id = vt.id
 		  LEFT JOIN incident_aggregates ia ON ia.target_id = vt.id
+	), scope_summary AS MATERIALIZED (
+		SELECT count(*) AS total,
+		       count(*) FILTER (WHERE kind = 'external') AS external,
+		       count(*) FILTER (WHERE kind = 'agent') AS agent,
+		       count(*) FILTER (WHERE status = 'incident') AS incident,
+		       count(*) FILTER (WHERE status = 'unprobed') AS unprobed,
+		       count(*) FILTER (WHERE status = 'no_incidents') AS no_incidents
+		  FROM target_rows
 	), filtered AS MATERIALIZED (
 		SELECT * FROM target_rows
 		 WHERE ($2 = ''
@@ -348,23 +364,26 @@ const targetInventoryCTE = `
 // QueryOperationalTargets returns the read-only target inventory with
 // counts and evidence joined by stable IDs. Every aggregate is scoped before
 // filtering so a query or summary cannot reveal another tenant's activity.
-func (s *Store) QueryOperationalTargets(ctx context.Context, f TargetInventoryFilter) ([]OperationalTargetInfo, TargetInventorySummary, error) {
+func (s *Store) QueryOperationalTargets(ctx context.Context, f TargetInventoryFilter) ([]OperationalTargetInfo, TargetInventorySummary, TargetInventorySummary, error) {
 	if f.Limit < 1 || f.Limit > 100 || f.Offset < 0 {
-		return nil, TargetInventorySummary{}, invalidf("invalid target inventory page")
+		return nil, TargetInventorySummary{}, TargetInventorySummary{}, invalidf("invalid target inventory page")
+	}
+	if f.RequireScopedActivity && f.Networks == nil {
+		return nil, TargetInventorySummary{}, TargetInventorySummary{}, invalidf("scoped target activity requires networks")
 	}
 	if f.Kind != "" && f.Kind != "agent" && f.Kind != "external" {
-		return nil, TargetInventorySummary{}, invalidf("unknown target kind %q", f.Kind)
+		return nil, TargetInventorySummary{}, TargetInventorySummary{}, invalidf("unknown target kind %q", f.Kind)
 	}
 	if f.Status != "" && f.Status != TargetStatusIncident && f.Status != TargetStatusUnprobed &&
 		f.Status != TargetStatusNoIncidents {
-		return nil, TargetInventorySummary{}, invalidf("unknown target status %q", f.Status)
+		return nil, TargetInventorySummary{}, TargetInventorySummary{}, invalidf("unknown target status %q", f.Status)
 	}
 	orderBy, err := targetInventoryOrder(f.Sort, f.Order)
 	if err != nil {
-		return nil, TargetInventorySummary{}, err
+		return nil, TargetInventorySummary{}, TargetInventorySummary{}, err
 	}
-	args := []any{f.Networks, escapeLike(strings.TrimSpace(f.Query)), f.Kind, f.Status}
-	var summary TargetInventorySummary
+	args := []any{f.Networks, escapeLike(strings.TrimSpace(f.Query)), f.Kind, f.Status, f.RequireScopedActivity}
+	var summary, scopeSummary TargetInventorySummary
 	rows, err := s.pool.Query(ctx, targetInventoryCTE+`
 		SELECT id, kind, name, address, port, url, network, created_at,
 		       probe_count, enabled_probe_count, probing_sites, open_incidents,
@@ -374,12 +393,14 @@ func (s *Store) QueryOperationalTargets(ctx context.Context, f TargetInventoryFi
 		       count(*) FILTER (WHERE kind = 'agent') OVER (),
 		       count(*) FILTER (WHERE status = 'incident') OVER (),
 		       count(*) FILTER (WHERE status = 'unprobed') OVER (),
-		       count(*) FILTER (WHERE status = 'no_incidents') OVER ()
-		  FROM filtered
+		       count(*) FILTER (WHERE status = 'no_incidents') OVER (),
+		       scope.total, scope.external, scope.agent,
+		       scope.incident, scope.unprobed, scope.no_incidents
+		  FROM filtered CROSS JOIN scope_summary scope
 		 ORDER BY `+orderBy+`
-		 LIMIT $5 OFFSET $6`, append(args, f.Limit, f.Offset)...)
+		 LIMIT $6 OFFSET $7`, append(args, f.Limit, f.Offset)...)
 	if err != nil {
-		return nil, TargetInventorySummary{}, fmt.Errorf("query operational targets: %w", err)
+		return nil, TargetInventorySummary{}, TargetInventorySummary{}, fmt.Errorf("query operational targets: %w", err)
 	}
 	defer rows.Close()
 	list := make([]OperationalTargetInfo, 0, f.Limit)
@@ -391,28 +412,39 @@ func (s *Store) QueryOperationalTargets(ctx context.Context, f TargetInventoryFi
 			&target.OpenIncidents, &target.Status, &target.AgentID,
 			&target.AgentSite, &target.AgentHostname, &summary.Total,
 			&summary.External, &summary.Agent, &summary.Incident,
-			&summary.Unprobed, &summary.NoIncidents); err != nil {
-			return nil, TargetInventorySummary{}, fmt.Errorf("scan operational target: %w", err)
+			&summary.Unprobed, &summary.NoIncidents, &scopeSummary.Total,
+			&scopeSummary.External, &scopeSummary.Agent, &scopeSummary.Incident,
+			&scopeSummary.Unprobed, &scopeSummary.NoIncidents); err != nil {
+			return nil, TargetInventorySummary{}, TargetInventorySummary{}, fmt.Errorf("scan operational target: %w", err)
 		}
 		list = append(list, target)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, TargetInventorySummary{}, err
+		return nil, TargetInventorySummary{}, TargetInventorySummary{}, err
 	}
-	if len(list) == 0 && f.Offset > 0 {
+	if len(list) == 0 {
 		err := s.pool.QueryRow(ctx, targetInventoryCTE+`
-			SELECT count(*),
-			       count(*) FILTER (WHERE kind = 'external'),
-			       count(*) FILTER (WHERE kind = 'agent'),
-			       count(*) FILTER (WHERE status = 'incident'),
-			       count(*) FILTER (WHERE status = 'unprobed'),
-			       count(*) FILTER (WHERE status = 'no_incidents')
-			  FROM filtered`, args...).Scan(&summary.Total, &summary.External,
+			SELECT filtered.total, filtered.external, filtered.agent,
+			       filtered.incident, filtered.unprobed, filtered.no_incidents,
+			       scope.total, scope.external, scope.agent,
+			       scope.incident, scope.unprobed, scope.no_incidents
+			  FROM (
+				SELECT count(*) AS total,
+				       count(*) FILTER (WHERE kind = 'external') AS external,
+				       count(*) FILTER (WHERE kind = 'agent') AS agent,
+				       count(*) FILTER (WHERE status = 'incident') AS incident,
+				       count(*) FILTER (WHERE status = 'unprobed') AS unprobed,
+				       count(*) FILTER (WHERE status = 'no_incidents') AS no_incidents
+				  FROM filtered
+			  ) filtered CROSS JOIN scope_summary scope`, args...).Scan(
+			&summary.Total, &summary.External,
 			&summary.Agent, &summary.Incident, &summary.Unprobed,
-			&summary.NoIncidents)
+			&summary.NoIncidents, &scopeSummary.Total, &scopeSummary.External,
+			&scopeSummary.Agent, &scopeSummary.Incident, &scopeSummary.Unprobed,
+			&scopeSummary.NoIncidents)
 		if err != nil {
-			return nil, TargetInventorySummary{}, fmt.Errorf("summarize targets: %w", err)
+			return nil, TargetInventorySummary{}, TargetInventorySummary{}, fmt.Errorf("summarize targets: %w", err)
 		}
 	}
-	return list, summary, nil
+	return list, summary, scopeSummary, nil
 }
