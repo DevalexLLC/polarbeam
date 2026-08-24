@@ -52,6 +52,14 @@ Settings wrapper): keep raw causes in diagnostics, preserve URL state on
 Retry, and expose Retry only when `web/src/pageState.ts` classifies the
 failure as retryable.
 
+Collection endpoints that use `readListQuery` share the parser and page
+metadata in `internal/server/httpapi/listquery.go`. Those handlers must
+declare every filter and sort allowlist there, preserve their legacy response
+when query mode is off, narrow nonempty explicit networks through
+`listQueryScope`, and perform search, stable tie-broken ordering, counting,
+and pagination in SQL. `/api/v1/users` retains its established, separate
+inventory contract.
+
 ## Coding Style & Naming Conventions
 
 Format Go with `gofmt`; use tabs, lowercase packages, and conventional
