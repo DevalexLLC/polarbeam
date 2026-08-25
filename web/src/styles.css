@@ -1844,37 +1844,14 @@ ol.hops li {
   position: relative;
 }
 
-.map-viewport-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  flex-wrap: wrap;
-  margin-bottom: 0.65rem;
-}
-
-.map-viewport-toolbar button {
-  min-width: var(--minimum-target);
-  min-height: var(--minimum-target);
-  padding: 0.3rem 0.55rem;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  background: var(--surface-2);
-  color: var(--ink);
-  cursor: pointer;
-  font: inherit;
-  font-size: 0.78rem;
-}
-
-.map-viewport-toolbar button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
 .map-zoom-readout {
-  margin-left: auto;
+  position: absolute;
+  top: 0.4rem;
+  right: 0.5rem;
   color: var(--ink-3);
   font-family: var(--mono);
   font-size: 0.75rem;
+  pointer-events: none;
 }
 
 .worldmap {
@@ -1884,6 +1861,12 @@ ol.hops li {
   cursor: grab;
   touch-action: pan-y;
   user-select: none;
+}
+
+.worldmap:focus-visible {
+  border-radius: var(--radius);
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 .worldmap.map-dragging {
@@ -3040,7 +3023,7 @@ button.danger-button {
 
 .secondary-button:disabled,
 .state-panel button:disabled {
-  cursor: wait;
+  cursor: default;
   opacity: 0.65;
 }
 
@@ -3666,7 +3649,6 @@ td.fleet-uptime {
 }
 
 .users-pager .secondary-button:disabled {
-  cursor: default;
   opacity: 0.45;
 }
 
@@ -4015,9 +3997,10 @@ td.users-actions .inline-confirm:disabled {
   outline-offset: 2px;
 }
 
+/* Pagination bounds row count, so only wide content scrolls (horizontally);
+   vertical scrolling belongs to the page. */
 .data-table-desktop {
-  max-height: min(70vh, 42rem);
-  overflow: auto;
+  overflow-x: auto;
 }
 
 table.data-table {
@@ -4028,9 +4011,6 @@ table.data-table {
 }
 
 table.data-table th {
-  position: sticky;
-  z-index: 2;
-  top: 0;
   padding: 0.45rem 0.8rem;
   border-bottom: 1px solid var(--border-strong);
   color: var(--ink-3);
@@ -4046,7 +4026,9 @@ table.data-table th {
 table.data-table td {
   padding: 0.5rem 0.8rem;
   border-bottom: 1px solid var(--border);
-  vertical-align: top;
+  /* Disclosure/action buttons set the row height and center themselves;
+     middle keeps the text cells on the same visual line. */
+  vertical-align: middle;
 }
 
 table.data-table tbody tr:hover > td {
