@@ -29,6 +29,10 @@ export interface DataTableDisclosure<Row> {
   label: (row: Row, expanded: boolean) => string
   render?: (row: Row, surface: 'desktop' | 'mobile') => ReactNode
   desktop?: boolean
+  // false: no per-row trigger column on desktop — rows expand only through an
+  // external control (e.g. an actions menu), but the expanded panel still
+  // renders. Mobile keeps its disclosure button either way.
+  desktopTrigger?: boolean
 }
 
 function FloatingActionMenu({
@@ -316,7 +320,7 @@ export default function DataTable<Row>({
               <thead>
                 <tr>
                   {columns.map(renderSortHeader)}
-                  {disclosure?.render && disclosure.desktop !== false && (
+                  {disclosure?.render && disclosure.desktop !== false && disclosure.desktopTrigger !== false && (
                     <th scope="col">
                       <span className="sr-only">Details</span>
                     </th>
@@ -332,7 +336,8 @@ export default function DataTable<Row>({
                 {rows.map((row) => {
                   const key = rowKey(row)
                   const expanded = disclosure?.expandedKey === key
-                  const desktopDisclosure = disclosure?.render && disclosure.desktop !== false
+                  const desktopDetail = disclosure?.render && disclosure.desktop !== false
+                  const desktopTrigger = desktopDetail && disclosure?.desktopTrigger !== false
                   return (
                     <Fragment key={key}>
                       <tr
@@ -345,7 +350,7 @@ export default function DataTable<Row>({
                             {column.render(row)}
                           </td>
                         ))}
-                        {desktopDisclosure && disclosure && (
+                        {desktopTrigger && disclosure && (
                           <td className="data-table-disclosure-cell">
                             <button
                               type="button"
@@ -361,11 +366,11 @@ export default function DataTable<Row>({
                         )}
                         {actions && <td className="data-table-actions-cell">{renderActions(row, key)}</td>}
                       </tr>
-                      {expanded && desktopDisclosure && disclosure?.render && (
+                      {expanded && desktopDetail && disclosure?.render && (
                         <tr className="data-table-detail-row">
                           <td
                             id={`data-table-detail-desktop-${key}`}
-                            colSpan={columns.length + (desktopDisclosure ? 1 : 0) + (actions ? 1 : 0)}
+                            colSpan={columns.length + (desktopTrigger ? 1 : 0) + (actions ? 1 : 0)}
                           >
                             {disclosure.render(row, 'desktop')}
                           </td>

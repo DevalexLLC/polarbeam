@@ -11,6 +11,7 @@ import { fmtAgo, fmtTime } from '../format'
 import { useTimezone } from '../timezone'
 import type { JoinToken, SitesConfigResponse, TokenCreateResponse, TokensResponse } from '../types'
 import ConfirmButton from './ConfirmButton'
+import DataTable, { type DataTableColumn } from './DataTable'
 import SettingsPageError from './SettingsPageError'
 
 const POLL_MS = 30_000
@@ -59,6 +60,8 @@ export default function EnrollmentPanel({
   // never clear it — it is shown exactly once and cannot be recovered.
   const [minted, setMinted] = useState<TokenCreateResponse | null>(null)
   const [copied, setCopied] = useState(false)
+  const [actionRow, setActionRow] = useState<string | null>(null)
+  const [expandedRow, setExpandedRow] = useState<string | null>(null)
   const feedback = useSettingsMutation()
   useSettingsDraft(
     'enrollment-token-form',
@@ -190,6 +193,25 @@ export default function EnrollmentPanel({
   // also while any listed token names another plane.
   const showNetworkColumn = plane.kind !== 'implicit' || data.tokens.some((t) => t.network !== 'default')
 
+  const columns: DataTableColumn<JoinToken>[] = [
+    { key: 'site', label: 'Site', priority: 'identity', className: 'mono', render: (t) => t.site },
+    ...(showNetworkColumn
+      ? [
+          {
+            key: 'network',
+            label: 'Network',
+            priority: 'primary',
+            className: 'mono',
+            render: (t) => t.network,
+          } satisfies DataTableColumn<JoinToken>,
+        ]
+      : []),
+    { key: 'created-by', label: 'Created by', priority: 'secondary', render: (t) => t.created_by || '—' },
+    { key: 'created', label: 'Created', priority: 'secondary', render: (t) => fmtAgo(t.created_at) },
+    { key: 'expires', label: 'Expires', priority: 'primary', render: (t) => fmtTime(t.expires_at) },
+    { key: 'status', label: 'Status', priority: 'status', render: (t) => tokenStatus(t).label },
+  ]
+
   return (
     <>
       {error !== null && (
@@ -298,69 +320,46 @@ export default function EnrollmentPanel({
             </span>
           </div>
         )}
-        {data.tokens.length === 0 ? (
-          <div className="empty-state">
-            <strong>No join tokens</strong>
-            <span>Issue one above to enroll a new agent.</span>
-          </div>
-        ) : (
-          <div className="scroll-x">
-            <table className="events">
-              <thead>
-                <tr>
-                  <th>Site</th>
-                  {showNetworkColumn && <th>Network</th>}
-                  <th>Created by</th>
-                  <th>Created</th>
-                  <th>Expires</th>
-                  <th>Status</th>
-                  {canWrite && (
-                    <th className="actions-col">
-                      <span className="sr-only">Actions</span>
-                    </th>
-                  )}
-                </tr>
-              </thead>
-              <tbody>
-                {data.tokens.map((t) => {
-                  const status = tokenStatus(t)
-                  return (
-                    <tr key={t.id}>
-                      <td data-label="Site" className="mono">
-                        {t.site}
-                      </td>
-                      {showNetworkColumn && (
-                        <td data-label="Network" className="mono">
-                          {t.network}
-                        </td>
-                      )}
-                      <td data-label="Created by">{t.created_by || '—'}</td>
-                      <td data-label="Created">{fmtAgo(t.created_at)}</td>
-                      <td data-label="Expires">{fmtTime(t.expires_at)}</td>
-                      <td data-label="Status">{status.label}</td>
-                      {canWrite && (
-                        <td data-label="Actions" className="config-actions">
-                          <ConfirmButton
-                            label="Delete"
-                            resource={`Enrollment token ${t.id}`}
-                            consequence={
-                              status.kind === 'active'
-                                ? 'This revokes the token immediately, so it can no longer enroll an agent.'
-                                : 'This permanently removes the expired token record.'
-                            }
-                            disabled={t.used_at !== null}
-                            title={t.used_at !== null ? 'Used tokens are enrollment audit records' : undefined}
-                            onConfirm={() => remove(t)}
-                          />
-                        </td>
-                      )}
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+        <DataTable
+          label="Join tokens"
+          rows={data.tokens}
+          rowKey={(t) => t.id}
+          columns={columns}
+          emptyTitle="No join tokens"
+          emptyDescription="Issue one above to enroll a new agent."
+          disclosure={{
+            expandedKey: expandedRow,
+            onExpandedKeyChange: setExpandedRow,
+            label: (_token, expanded) => (expanded ? 'Hide metadata' : 'Show metadata'),
+            desktop: false,
+          }}
+          actions={
+            canWrite
+              ? {
+                  openKey: actionRow,
+                  onOpenKeyChange: setActionRow,
+                  label: (t) => `Actions for token ${t.id}`,
+                  render: (t) => {
+                    const status = tokenStatus(t)
+                    return (
+                      <ConfirmButton
+                        label="Delete"
+                        resource={`Enrollment token ${t.id}`}
+                        consequence={
+                          status.kind === 'active'
+                            ? 'This revokes the token immediately, so it can no longer enroll an agent.'
+                            : 'This permanently removes the expired token record.'
+                        }
+                        disabled={t.used_at !== null}
+                        title={t.used_at !== null ? 'Used tokens are enrollment audit records' : undefined}
+                        onConfirm={() => remove(t)}
+                      />
+                    )
+                  },
+                }
+              : undefined
+          }
+        />
       </section>
     </>
   )
