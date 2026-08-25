@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from 'react'
 import { MAP_DOTS, MAP_VIEW_H, MAP_VIEW_W } from '../assets/mapGeo'
 import { fmtLatency } from '../format'
 import { projectMap } from '../geo'
@@ -9,8 +16,10 @@ import {
   mapHitRadius,
   mapZoomPercent,
   panMapViewport,
+  pinchMapViewport,
   revealMapPoint,
   zoomMapViewport,
+  zoomMapViewportAt,
   type MapViewport,
 } from '../mapViewport'
 import { inheritRouteNetwork } from '../routeState'
@@ -71,6 +80,16 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
     moved: boolean
   } | null>(null)
   const suppressBackgroundClick = useRef(false)
+  // Once the operator pans or zooms, topology refreshes must not snap the
+  // viewport back to the automatic fit.
+  const interacted = useRef(false)
+  // The wheel handler is a native listener and must read the live viewport
+  // synchronously to decide whether zooming can consume the event.
+  const viewportRef = useRef(viewport)
+  viewportRef.current = viewport
+  // Touch pinch: all live pointers on the map plus the gesture baseline.
+  const pointers = useRef(new Map<number, { clientX: number; clientY: number }>())
+  const pinch = useRef<{ distance: number; midX: number; midY: number; viewport: MapViewport } | null>(null)
   // The info card is interactive (pair links), so leaving a bubble clears
   // the hover on a short delay — long enough to cross onto the card, which
   // cancels the clear. Pinning holds the card open regardless.
@@ -138,6 +157,64 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
     return () => observer.disconnect()
   }, [placed.length])
 
+  // The fleet key tracks WHICH sites are on the map, not their health: a
+  // topology poll leaves it unchanged, while a network-scope switch swaps it
+  // — and must re-arm the automatic fit, or the map could keep a viewport
+  // aimed at a region the new scope has no sites in.
+  const fleetKey = useMemo(
+    () =>
+      placed
+        .map((site) => site.topology.site.name)
+        // oxlint-disable-next-line unicorn/no-array-sort -- sorting a fresh mapped array
+        .sort()
+        .join('\u0000'),
+    [placed],
+  )
+  useEffect(() => {
+    interacted.current = false
+  }, [fleetKey])
+
+  // Until the operator takes over, the viewport tracks the sites so the map
+  // opens scaled to the fleet instead of the whole world.
+  useEffect(() => {
+    if (interacted.current || placed.length === 0) return
+    setViewport(fitMapViewport(placed.map((site) => ({ x: site.anchorX, y: site.anchorY }))))
+  }, [placed])
+
+  // React registers wheel listeners as passive, which cannot stop the page
+  // from scrolling — the zoom handler must be attached natively.
+  useEffect(() => {
+    const svg = svgRef.current
+    if (!svg) return
+    const onWheel = (event: WheelEvent) => {
+      // Alt/meta/shift-modified wheel belongs to the browser. Ctrl+wheel
+      // stays: that is how a trackpad pinch reaches the page, and a pinch
+      // over the map must zoom the map.
+      if (event.altKey || event.metaKey || event.shiftKey) return
+      const bounds = svg.getBoundingClientRect()
+      if (bounds.width === 0 || bounds.height === 0) return
+      const step =
+        event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+          ? 0.5
+          : event.deltaMode === WheelEvent.DOM_DELTA_LINE
+            ? 0.05
+            : 0.0015
+      const factor = Math.pow(2, event.deltaY * step)
+      const current = viewportRef.current
+      const next = zoomMapViewportAt(current, factor, {
+        x: current.x + ((event.clientX - bounds.left) / bounds.width) * current.width,
+        y: current.y + ((event.clientY - bounds.top) / bounds.height) * current.height,
+      })
+      // At the zoom limits the viewport cannot change; let the page scroll.
+      if (next.width === current.width && next.x === current.x && next.y === current.y) return
+      event.preventDefault()
+      interacted.current = true
+      setViewport(next)
+    }
+    svg.addEventListener('wheel', onWheel, { passive: false })
+    return () => svg.removeEventListener('wheel', onWheel)
+  }, [placed.length])
+
   const missingStrip = unplaced.length > 0 && (
     // Fail loud: sites without coordinates never silently vanish, and they
     // keep their live severity while off the map.
@@ -185,10 +262,77 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
   const pan = (horizontal: number, vertical: number) => {
     setViewport((current) => panMapViewport(current, current.width * horizontal, current.height * vertical))
   }
+  const fitSites = () => setViewport(fitMapViewport(placed.map((site) => ({ x: site.anchorX, y: site.anchorY }))))
+  // Pointer and wheel gestures need keyboard equivalents; the map itself is
+  // the focus target now that there is no button toolbar.
+  const keyboardViewport = (event: ReactKeyboardEvent<SVGSVGElement>) => {
+    if (event.target !== event.currentTarget) return
+    // Modified combinations belong to the browser: Ctrl/Cmd+F is find,
+    // Ctrl/Cmd +/-/0 is page zoom, Alt+arrows is history navigation.
+    if (event.ctrlKey || event.metaKey || event.altKey) return
+    let handled = true
+    switch (event.key) {
+      case 'ArrowLeft':
+        pan(-0.2, 0)
+        break
+      case 'ArrowRight':
+        pan(0.2, 0)
+        break
+      case 'ArrowUp':
+        pan(0, -0.2)
+        break
+      case 'ArrowDown':
+        pan(0, 0.2)
+        break
+      case '+':
+      case '=':
+        setViewport((current) => zoomMapViewport(current, 0.7))
+        break
+      case '-':
+      case '_':
+        setViewport((current) => zoomMapViewport(current, 1.4))
+        break
+      case 'f':
+      case 'F':
+        fitSites()
+        break
+      case '0':
+      case 'Home':
+        setViewport(FULL_MAP_VIEWPORT)
+        break
+      default:
+        handled = false
+    }
+    if (handled) {
+      event.preventDefault()
+      interacted.current = true
+    }
+  }
   const beginPointerPan = (event: ReactPointerEvent<SVGSVGElement>) => {
     if (event.button !== 0) return
     suppressBackgroundClick.current = false
-    event.currentTarget.setPointerCapture(event.pointerId)
+    pointers.current.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY })
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId)
+    } catch {
+      // A pointer that already lifted cannot be captured; the pointerup
+      // that follows cleans the gesture up normally.
+    }
+    if (pointers.current.size === 2) {
+      // A second touch turns the pan into a pinch: touch fires no wheel
+      // events, so this is the only zoom gesture touch-only devices have.
+      const [a, b] = [...pointers.current.values()]
+      drag.current = null
+      pinch.current = {
+        distance: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY),
+        midX: (a.clientX + b.clientX) / 2,
+        midY: (a.clientY + b.clientY) / 2,
+        viewport,
+      }
+      setDragging(true)
+      return
+    }
+    if (pointers.current.size > 2) return
     drag.current = {
       pointerID: event.pointerId,
       clientX: event.clientX,
@@ -198,6 +342,34 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
     }
   }
   const movePointerPan = (event: ReactPointerEvent<SVGSVGElement>) => {
+    const tracked = pointers.current.get(event.pointerId)
+    if (tracked) {
+      tracked.clientX = event.clientX
+      tracked.clientY = event.clientY
+    }
+    const gesture = pinch.current
+    if (gesture && pointers.current.size >= 2) {
+      const bounds = event.currentTarget.getBoundingClientRect()
+      if (bounds.width === 0 || bounds.height === 0) return
+      const [a, b] = [...pointers.current.values()]
+      const distance = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)
+      if (distance < 8) return
+      interacted.current = true
+      suppressBackgroundClick.current = true
+      setViewport(
+        pinchMapViewport(
+          gesture.viewport,
+          { distance: gesture.distance, midX: gesture.midX - bounds.left, midY: gesture.midY - bounds.top },
+          {
+            distance,
+            midX: (a.clientX + b.clientX) / 2 - bounds.left,
+            midY: (a.clientY + b.clientY) / 2 - bounds.top,
+          },
+          bounds,
+        ),
+      )
+      return
+    }
     const start = drag.current
     if (!start || start.pointerID !== event.pointerId) return
     const bounds = event.currentTarget.getBoundingClientRect()
@@ -206,11 +378,32 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
     const dy = ((event.clientY - start.clientY) / bounds.height) * start.viewport.height
     if (Math.hypot(event.clientX - start.clientX, event.clientY - start.clientY) > 3) {
       start.moved = true
+      interacted.current = true
       setDragging(true)
     }
     setViewport(panMapViewport(start.viewport, -dx, -dy))
   }
   const endPointerPan = (event: ReactPointerEvent<SVGSVGElement>) => {
+    pointers.current.delete(event.pointerId)
+    if (pinch.current) {
+      if (pointers.current.size >= 2) return
+      pinch.current = null
+      setDragging(false)
+      // A finger left mid-pinch: hand the survivor a fresh pan baseline so
+      // the viewport does not jump.
+      const [remaining] = [...pointers.current.entries()]
+      if (remaining) {
+        drag.current = {
+          pointerID: remaining[0],
+          clientX: remaining[1].clientX,
+          clientY: remaining[1].clientY,
+          viewport: viewportRef.current,
+          moved: true,
+        }
+        setDragging(true)
+      }
+      return
+    }
     const start = drag.current
     if (!start || start.pointerID !== event.pointerId) return
     suppressBackgroundClick.current = start.moved
@@ -227,7 +420,6 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
   const shownStats = shown ? shown.topology.stats : null
   const shownSev = shown ? shown.topology.severity : null
   const zoomPercent = mapZoomPercent(viewport)
-  const resetDisabled = zoomPercent === 100 && viewport.x === 0 && viewport.y === 0
   const shownLeft = shownPoint ? ((shownPoint.x - viewport.x) / viewport.width) * 100 : 0
   const shownTop = shownPoint ? ((shownPoint.y - viewport.y) / viewport.height) * 100 : 0
   const shownInViewport = shownLeft >= 0 && shownLeft <= 100 && shownTop >= 0 && shownTop <= 100
@@ -240,60 +432,23 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
 
   return (
     <>
-      <div className="map-viewport-toolbar" role="group" aria-label="Map viewport controls">
-        <button type="button" aria-label="Pan map left" title="Pan left" onClick={() => pan(-0.2, 0)}>
-          ←
-        </button>
-        <button type="button" aria-label="Pan map up" title="Pan up" onClick={() => pan(0, -0.2)}>
-          ↑
-        </button>
-        <button type="button" aria-label="Pan map down" title="Pan down" onClick={() => pan(0, 0.2)}>
-          ↓
-        </button>
-        <button type="button" aria-label="Pan map right" title="Pan right" onClick={() => pan(0.2, 0)}>
-          →
-        </button>
-        <button
-          type="button"
-          aria-label="Zoom map out"
-          title="Zoom out"
-          disabled={zoomPercent === 100}
-          onClick={() => setViewport((current) => zoomMapViewport(current, 1.4))}
-        >
-          −
-        </button>
-        <button
-          type="button"
-          aria-label="Zoom map in"
-          title="Zoom in"
-          disabled={zoomPercent >= 800}
-          onClick={() => setViewport((current) => zoomMapViewport(current, 0.7))}
-        >
-          +
-        </button>
-        <button
-          type="button"
-          onClick={() => setViewport(fitMapViewport(placed.map((site) => ({ x: site.anchorX, y: site.anchorY }))))}
-        >
-          Fit sites
-        </button>
-        <button type="button" disabled={resetDisabled} onClick={() => setViewport(FULL_MAP_VIEWPORT)}>
-          Reset
-        </button>
-        <span className="map-zoom-readout" aria-hidden="true">
-          {zoomPercent}%
-        </span>
-      </div>
       <span className="sr-only" role="status" aria-live="polite">
         Map viewport at {zoomPercent}% zoom.
       </span>
       <div className="worldmap-shell">
+        {/* The svg is the pan/zoom widget itself: drag and wheel gestures get
+            keyboard equivalents on the focused map, and no interactive ARIA
+            role describes a map viewport. */}
+        {/* oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
         <svg
           ref={svgRef}
           className={'worldmap' + (dragging ? ' map-dragging' : '')}
           viewBox={`${viewport.x} ${viewport.y} ${viewport.width} ${viewport.height}`}
-          role="group"
-          aria-label={`World map of ${placed.length} monitored ${placed.length === 1 ? 'site' : 'sites'}, ${zoomPercent}% zoom. Drag to pan or use the labeled viewport controls.`}
+          role="application"
+          // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- keyboard pan/zoom needs a focusable map
+          tabIndex={0}
+          aria-label={`World map of ${placed.length} monitored ${placed.length === 1 ? 'site' : 'sites'}, ${zoomPercent}% zoom. Drag to pan and scroll to zoom, or focus the map and use the arrow keys to pan, plus and minus to zoom, F to fit all sites, and 0 to reset.`}
+          onKeyDown={keyboardViewport}
           onPointerDown={beginPointerPan}
           onPointerDownCapture={() => {
             suppressBackgroundClick.current = false
@@ -383,6 +538,9 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
             )
           })}
         </svg>
+        <span className="map-zoom-readout" aria-hidden="true">
+          {zoomPercent}%
+        </span>
         {mapLabels.map((label) => {
           const placedSite = placedByName.get(label.id)!
           const { site, severity } = placedSite.topology

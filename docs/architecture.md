@@ -181,7 +181,8 @@ target inventory instead requires active assignment on the selected plane.
 The dashboard's Agents, Targets, Routes, and Settings Sites/Targets/Probes
 inventories render through the controlled, dependency-free `DataTable`.
 Each requests a 25-row server page. Desktop keeps a semantic table inside a
-bounded scroll region with sticky headers; the 760 px breakpoint replaces it
+horizontal-only overflow wrapper — pagination bounds row count, so the page
+owns vertical scrolling; the 760 px breakpoint replaces it
 with a flat list that shows identity, status, and primary evidence before a
 full-width disclosure reveals secondary metadata. Sort, page, disclosure, and
 row-action state use stable IDs, and a refreshed-away focused row returns

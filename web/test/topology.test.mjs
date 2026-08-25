@@ -8,8 +8,10 @@ import {
   mapHitRadius,
   mapZoomPercent,
   panMapViewport,
+  pinchMapViewport,
   revealMapPoint,
   zoomMapViewport,
+  zoomMapViewportAt,
 } from '../src/mapViewport.ts'
 import { declutter } from '../src/mapLayout.ts'
 import { SEVERITY_LABEL } from '../src/severity.ts'
@@ -129,6 +131,50 @@ test('zoom and pan stay inside the world frame', () => {
   const focused = revealMapPoint(zoomed, { x: 1000, y: 550 })
   assert.ok(focused.x <= 1000 && focused.x + focused.width >= 1000)
   assert.ok(focused.y <= 550 && focused.y + focused.height >= 550)
+
+  // Pointer-anchored zoom keeps the focused map point at the same relative
+  // viewport position, so wheel zoom dives into the spot under the cursor.
+  const anchor = { x: 300, y: 150 }
+  const anchored = zoomMapViewportAt(FULL_MAP_VIEWPORT, 0.5, anchor)
+  assert.equal(mapZoomPercent(anchored), 200)
+  const before = (anchor.x - FULL_MAP_VIEWPORT.x) / FULL_MAP_VIEWPORT.width
+  const after = (anchor.x - anchored.x) / anchored.width
+  assert.ok(Math.abs(before - after) < 0.0001)
+  // Anchored zoom-out at a corner still clamps inside the world frame.
+  const cornered = zoomMapViewportAt(anchored, 4, { x: 0, y: 0 })
+  assert.deepEqual(cornered, FULL_MAP_VIEWPORT)
+
+  // Pinch is one pure combined step: pointer spacing sets the scale while
+  // the map point that started under the gesture midpoint follows it.
+  const pinched = pinchMapViewport(
+    FULL_MAP_VIEWPORT,
+    { distance: 100, midX: 540, midY: 300 },
+    { distance: 200, midX: 640, midY: 300 },
+    { width: 1080, height: 600 },
+  )
+  assert.equal(mapZoomPercent(pinched), 200)
+  const startMapMid = FULL_MAP_VIEWPORT.x + (540 / 1080) * FULL_MAP_VIEWPORT.width
+  assert.ok(Math.abs(pinched.x + (640 / 1080) * pinched.width - startMapMid) < 0.0001)
+  // Collapsing the pinch far past the world frame clamps like every gesture.
+  const spread = pinchMapViewport(
+    pinched,
+    { distance: 400, midX: 540, midY: 300 },
+    { distance: 10, midX: 540, midY: 300 },
+    { width: 1080, height: 600 },
+  )
+  assert.deepEqual(spread, FULL_MAP_VIEWPORT)
+
+  // Crossing the 800% cap clamps the scale BEFORE anchoring, so the map
+  // point under a stationary midpoint stays put instead of drifting.
+  const inCap = pinchMapViewport(
+    anchored,
+    { distance: 50, midX: 540, midY: 300 },
+    { distance: 400, midX: 540, midY: 300 },
+    { width: 1080, height: 600 },
+  )
+  assert.equal(mapZoomPercent(inCap), 800)
+  const capAnchor = anchored.x + (540 / 1080) * anchored.width
+  assert.ok(Math.abs(inCap.x + (540 / 1080) * inCap.width - capAnchor) < 0.0001)
 })
 
 test('dense map labels use deterministic non-overlapping vertical tracks', () => {
@@ -171,10 +217,28 @@ test('screen-sized pointer targets feed the same radius into decluttering', () =
 test('map controls, labels, and pointer targets expose the accessibility contract', async () => {
   const map = await readFile(new URL('../src/components/WorldMap.tsx', import.meta.url), 'utf8')
   const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8')
-  assert.match(map, /aria-label="Map viewport controls"/)
-  assert.match(map, /Pan map left/)
-  assert.match(map, /Zoom map in/)
-  assert.match(map, /Fit sites/)
+  // Direct manipulation (drag + wheel) must keep keyboard equivalents: the
+  // focusable map pans with arrows, zooms with +/-, fits with F, resets with 0.
+  assert.match(map, /onKeyDown=\{keyboardViewport\}/)
+  assert.match(map, /case 'ArrowLeft':/)
+  assert.match(map, /case 'F':/)
+  assert.match(map, /case 'Home':/)
+  // Modified combinations (Ctrl/Cmd+F, page zoom, Alt+arrows) stay with the
+  // browser even while the map is focused.
+  assert.match(map, /event\.ctrlKey \|\| event\.metaKey \|\| event\.altKey/)
+  // Wheel zoom must be a native non-passive listener (React's own wheel
+  // registration is passive and cannot preventDefault page scrolling), it
+  // must anchor on the pointer position, and it must release the event to
+  // page scrolling once the viewport is clamped at a zoom limit.
+  assert.match(map, /addEventListener\('wheel', onWheel, \{ passive: false \}\)/)
+  assert.match(map, /zoomMapViewportAt/)
+  assert.match(map, /next\.width === current\.width && next\.x === current\.x && next\.y === current\.y/)
+  // Touch fires no wheel events: two-pointer pinch is the touch zoom path
+  // (via the pure viewport helper), and a fleet swap (network-scope change)
+  // re-arms the automatic fit.
+  assert.match(map, /pinch\.current = \{/)
+  assert.match(map, /pinchMapViewport\(/)
+  assert.match(map, /\[fleetKey\]/)
   assert.match(map, /map-site-label/)
   assert.match(map, /suppressBackgroundClick\.current = false/)
   assert.match(map, /onPointerDownCapture/)

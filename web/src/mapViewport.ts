@@ -51,6 +51,51 @@ export function zoomMapViewport(view: MapViewport, factor: number): MapViewport 
   })
 }
 
+// Wheel zoom anchors on the pointer: the map point under the cursor keeps
+// its on-screen position, so zooming reads as diving into that spot.
+export function zoomMapViewportAt(view: MapViewport, factor: number, focus: MapPoint): MapViewport {
+  const width = Math.min(MAP_VIEW_W, Math.max(MIN_WIDTH, view.width * factor))
+  const height = width / ASPECT
+  const fx = (focus.x - view.x) / view.width
+  const fy = (focus.y - view.y) / view.height
+  return clampMapViewport({
+    x: focus.x - fx * width,
+    y: focus.y - fy * height,
+    width,
+    height,
+  })
+}
+
+export interface PinchInput {
+  distance: number // spacing between the two pointers, client px
+  midX: number // gesture midpoint relative to the rendered map's left edge
+  midY: number // gesture midpoint relative to the rendered map's top edge
+}
+
+// One combined pinch-and-pan step: the map point that started the gesture
+// under its midpoint stays under the current midpoint at the new scale.
+// `bounds` is the rendered map's client size.
+export function pinchMapViewport(
+  start: MapViewport,
+  from: PinchInput,
+  to: PinchInput,
+  bounds: { width: number; height: number },
+): MapViewport {
+  // Clamp the scale BEFORE anchoring: past the zoom caps the requested
+  // width is not the rendered width, and anchoring on it drifts the map
+  // point out from under a stationary midpoint.
+  const width = Math.min(MAP_VIEW_W, Math.max(MIN_WIDTH, start.width * (from.distance / to.distance)))
+  const height = width / ASPECT
+  const mapMidX = start.x + (from.midX / bounds.width) * start.width
+  const mapMidY = start.y + (from.midY / bounds.height) * start.height
+  return clampMapViewport({
+    x: mapMidX - (to.midX / bounds.width) * width,
+    y: mapMidY - (to.midY / bounds.height) * height,
+    width,
+    height,
+  })
+}
+
 export function panMapViewport(view: MapViewport, dx: number, dy: number): MapViewport {
   return clampMapViewport({ ...view, x: view.x + dx, y: view.y + dy })
 }
