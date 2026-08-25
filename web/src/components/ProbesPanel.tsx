@@ -24,6 +24,10 @@ import SettingsPageError from './SettingsPageError'
 
 const POLL_MS = 30_000
 const PROBE_PAGE = 25
+
+// DataTable keeps both surfaces mounted; CSS shows exactly one (the same
+// 760px breakpoint the stylesheet uses), so DOM lookups must pick it.
+const visibleSurface = () => (window.matchMedia('(max-width: 760px)').matches ? 'mobile' : 'desktop')
 // Prober defaults, mirrored from the server's shared validation
 // (internal/server/probeadmin): a zero train budgets as 10 × 200 ms.
 const DEFAULT_TRAIN_COUNT = 10
@@ -254,6 +258,27 @@ export default function ProbesPanel({
   const [editID, setEditID] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState<ProbeDraft | null>(null)
   const [editErrors, setEditErrors] = useState<string[]>([])
+  // Actions → Edit unmounts the floating menu with focus inside it, so the
+  // opened editor must take focus itself or keyboard users land back at the
+  // document root with the expansion unannounced. The request is keyed to
+  // the target probe and survives until its editor mounts — switching away
+  // from another editor takes extra commits (a confirmed discard even lands
+  // one with editID null), and the route still naming the target is what
+  // distinguishes that from an abandoned request. A rejected switch (Stay)
+  // leaves the route elsewhere, so the next transition drops the request
+  // instead of stealing focus from the active input on a later keystroke.
+  // Deep-linked opens never set it — no focus stealing on load.
+  const focusEditor = useRef<string | null>(null)
+  useEffect(() => {
+    if (focusEditor.current === null) return
+    const target = focusEditor.current
+    if (target === editID && editDraft !== null) {
+      focusEditor.current = null
+      document.getElementById(`probe-editor-${editID}-${visibleSurface()}`)?.focus()
+      return
+    }
+    if (selectedProbe !== target) focusEditor.current = null
+  }, [editID, editDraft, selectedProbe])
   const scrolledProbe = useRef<string | null>(null)
   const pinnedProbe = useRef<string | null>(selectedProbe)
   const feedback = useSettingsMutation()
@@ -587,8 +612,7 @@ export default function ProbesPanel({
       setEditErrors([])
     }
     if (scrolledProbe.current !== selectedProbe) {
-      const surface = window.matchMedia('(max-width: 760px)').matches ? 'mobile' : 'desktop'
-      const row = document.getElementById(`settings-probe-${selectedProbe}-${surface}`)
+      const row = document.getElementById(`settings-probe-${selectedProbe}-${visibleSurface()}`)
       if (!row) return
       row.scrollIntoView({ block: 'nearest' })
       scrolledProbe.current = selectedProbe
@@ -802,10 +826,10 @@ export default function ProbesPanel({
     },
   ]
 
-  const editPanel = (probe: ProbeConfig) => {
+  const editPanel = (probe: ProbeConfig, surface: 'desktop' | 'mobile') => {
     if (editID !== probe.id || !editDraft) return null
     return (
-      <div className="config-form">
+      <div className="config-form" id={`probe-editor-${probe.id}-${surface}`} tabIndex={-1}>
         <h3 className="eyebrow">
           Edit {probe.type} · {assignmentLabel(probe)}
           <span className="hint"> — type, assignment, and network are fixed; delete and re-create to re-target</span>
@@ -821,9 +845,14 @@ export default function ProbesPanel({
         )}
         <div className="threshold-foot">
           <span className="hint">Edits keep the probe's series history and incident state.</span>
-          <button className="primary" disabled={busy || !editGuard.dirty} onClick={() => saveEdit(probe)}>
-            {busy ? 'Saving…' : 'Save changes'}
-          </button>
+          <span className="threshold-actions">
+            <button type="button" className="secondary-button" disabled={busy} onClick={() => closeEditor(probe)}>
+              Cancel
+            </button>
+            <button className="primary" disabled={busy || !editGuard.dirty} onClick={() => saveEdit(probe)}>
+              {busy ? 'Saving…' : 'Save changes'}
+            </button>
+          </span>
         </div>
       </div>
     )
@@ -831,6 +860,16 @@ export default function ProbesPanel({
 
   const selectProbe = (key: string | null) => {
     onSelectedProbe(key ?? '', key === null ? 'replace' : 'push')
+  }
+
+  // Cancel unmounts itself with the editor; hand focus back to the row's
+  // Actions toggle instead of dropping it on the document.
+  const closeEditor = (probe: ProbeConfig) => {
+    document
+      .getElementById(`settings-probe-${probe.id}-${visibleSurface()}`)
+      ?.querySelector<HTMLElement>('.data-table-actions-toggle')
+      ?.focus()
+    selectProbe(null)
   }
 
   return (
@@ -960,6 +999,9 @@ export default function ProbesPanel({
                   onExpandedKeyChange: selectProbe,
                   label: (_probe, expanded) => (expanded ? 'Close editor' : 'Edit probe'),
                   render: editPanel,
+                  // Desktop rows open the editor via Actions → Edit; the
+                  // panel's Cancel button closes it.
+                  desktopTrigger: false,
                 }
               : {
                   expandedKey: expandedRow,
@@ -982,6 +1024,13 @@ export default function ProbesPanel({
                         disabled={busy}
                         onClick={() => {
                           setActionRow(null)
+                          // Already open: no state transition will fire the
+                          // effect, and the editor is mounted — focus it now.
+                          if (editID === probe.id) {
+                            document.getElementById(`probe-editor-${probe.id}-${visibleSurface()}`)?.focus()
+                          } else {
+                            focusEditor.current = probe.id
+                          }
                           selectProbe(probe.id)
                         }}
                       >

@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { apiDelete, apiGet, apiPost, apiPut } from '../api'
 import { fmtAgo } from '../format'
 import { useConcurrentSettingsDraft, useSettingsMutation } from '../settingsMutation'
 import type { NetworksConfigResponse, NetworkConfig } from '../types'
 import ConfirmButton from './ConfirmButton'
+import DataTable, { type DataTableColumn } from './DataTable'
 import SettingsPageError from './SettingsPageError'
 
 const POLL_MS = 30_000
@@ -50,6 +51,20 @@ export default function NetworksPanel({
   const [editing, setEditing] = useState(false) // draft edits an existing network (name locked)
   const [formErrors, setFormErrors] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
+  const [actionRow, setActionRow] = useState<string | null>(null)
+  const [expandedRow, setExpandedRow] = useState<string | null>(null)
+  // Actions → Edit unmounts the floating menu with focus inside it; the
+  // always-mounted form below the table takes focus once startEdit's draft
+  // lands, so keyboard users continue from the editor instead of the
+  // document root. startEdit always sets a fresh draft object, so the
+  // effect fires even when re-editing the same network.
+  const editForm = useRef<HTMLDivElement | null>(null)
+  const focusForm = useRef(false)
+  useEffect(() => {
+    if (!focusForm.current) return
+    focusForm.current = false
+    editForm.current?.focus()
+  }, [draft, editing])
   const feedback = useSettingsMutation()
   const loadedNetwork = editing && draft ? data?.networks.find((network) => network.name === draft.name) : undefined
   const loadedDraft = loadedNetwork ? draftFrom(loadedNetwork) : emptyDraft
@@ -171,6 +186,16 @@ export default function NetworksPanel({
     )
   }
 
+  const columns: DataTableColumn<NetworkConfig>[] = [
+    { key: 'name', label: 'Name', priority: 'identity', className: 'mono', render: (n) => n.name },
+    { key: 'display', label: 'Display name', priority: 'primary', render: (n) => n.display_name || '—' },
+    { key: 'agents', label: 'Agents', priority: 'secondary', render: (n) => n.agent_count },
+    { key: 'tokens', label: 'Tokens', priority: 'secondary', render: (n) => n.token_count },
+    { key: 'meshes', label: 'Meshes', priority: 'secondary', render: (n) => n.mesh_count },
+    { key: 'probes', label: 'Probes', priority: 'secondary', render: (n) => n.probe_count },
+    { key: 'created', label: 'Created', priority: 'secondary', render: (n) => fmtAgo(n.created_at) },
+  ]
+
   const field = (label: string, key: keyof Draft, placeholder: string, locked = false) => (
     <label className="threshold-field">
       <span className="eyebrow">{label}</span>
@@ -209,39 +234,36 @@ export default function NetworksPanel({
           paired. Deployments with a single flat network can ignore this tab — everything lives on{' '}
           <span className="mono">default</span>.
         </p>
-        <div className="scroll-x">
-          <table className="events">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Display name</th>
-                <th>Agents</th>
-                <th>Tokens</th>
-                <th>Meshes</th>
-                <th>Probes</th>
-                <th>Created</th>
-                {canWrite && (
-                  <th className="actions-col">
-                    <span className="sr-only">Actions</span>
-                  </th>
-                )}
-              </tr>
-            </thead>
-            <tbody>
-              {data.networks.map((n) => (
-                <tr key={n.id}>
-                  <td data-label="Name" className="mono">
-                    {n.name}
-                  </td>
-                  <td data-label="Display name">{n.display_name || '—'}</td>
-                  <td data-label="Agents">{n.agent_count}</td>
-                  <td data-label="Tokens">{n.token_count}</td>
-                  <td data-label="Meshes">{n.mesh_count}</td>
-                  <td data-label="Probes">{n.probe_count}</td>
-                  <td data-label="Created">{fmtAgo(n.created_at)}</td>
-                  {canWrite && (
-                    <td data-label="Actions" className="config-actions">
-                      <button type="button" className="secondary-button" onClick={() => startEdit(n)}>
+        <DataTable
+          label="Networks"
+          rows={data.networks}
+          rowKey={(n) => n.id}
+          columns={columns}
+          emptyTitle="No networks"
+          emptyDescription="Initialization seeds the default network; add one below."
+          disclosure={{
+            expandedKey: expandedRow,
+            onExpandedKeyChange: setExpandedRow,
+            label: (_network, expanded) => (expanded ? 'Hide metadata' : 'Show metadata'),
+            desktop: false,
+          }}
+          actions={
+            canWrite
+              ? {
+                  openKey: actionRow,
+                  onOpenKeyChange: setActionRow,
+                  label: (n) => `Actions for ${n.name}`,
+                  render: (n) => (
+                    <>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => {
+                          setActionRow(null)
+                          focusForm.current = true
+                          startEdit(n)
+                        }}
+                      >
                         Edit
                       </button>
                       <ConfirmButton
@@ -258,15 +280,14 @@ export default function NetworksPanel({
                         }
                         onConfirm={() => remove(n)}
                       />
-                    </td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                    </>
+                  ),
+                }
+              : undefined
+          }
+        />
         {canWrite && (
-          <div className="config-form">
+          <div className="config-form" ref={editForm} tabIndex={-1}>
             <h3 className="eyebrow">{editing ? `Edit ${draft?.name}` : 'Add network'}</h3>
             <div className="config-form-grid">
               {field('Name', 'name', 'unique handle, e.g. mgmt', editing)}

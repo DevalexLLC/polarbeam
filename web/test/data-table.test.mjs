@@ -80,6 +80,40 @@ test('remote disclosure pins survive re-paging while shared sites ignore the top
   assert.doesNotMatch(sites, /params\.set\('network'/)
 })
 
+test('a suppressed desktop trigger still renders the expanded panel', () => {
+  // desktopTrigger: false removes the per-row trigger column, but the
+  // detail row must key off desktopDetail so an external control (the
+  // actions menu) can still expand the row.
+  assert.match(component, /disclosure\.desktopTrigger !== false/)
+  assert.match(component, /const desktopTrigger = desktopDetail && disclosure\?\.desktopTrigger !== false/)
+  assert.match(component, /expanded && desktopDetail && disclosure\?\.render/)
+  assert.match(component, /colSpan=\{columns\.length \+ \(desktopTrigger \? 1 : 0\) \+ \(actions \? 1 : 0\)\}/)
+
+  // Probes opts in: desktop rows open the editor via Actions → Edit, so
+  // the editor needs its own Cancel to close without saving, and both
+  // transitions unmount the focused control — the editor takes focus on
+  // open and Cancel hands it back to the row's Actions toggle.
+  const probes = readFileSync(new URL('../src/components/ProbesPanel.tsx', import.meta.url), 'utf8')
+  assert.match(probes, /desktopTrigger: false/)
+  assert.match(probes, /onClick=\{\(\) => closeEditor\(probe\)\}>\s*Cancel/)
+  assert.match(probes, /id=\{`probe-editor-\$\{probe\.id\}-\$\{surface\}`\} tabIndex=\{-1\}/)
+  assert.match(probes, /getElementById\(`probe-editor-\$\{editID\}-\$\{visibleSurface\(\)\}`\)\?\.focus\(\)/)
+  assert.match(probes, /querySelector<HTMLElement>\('\.data-table-actions-toggle'\)/)
+
+  // The focus request is keyed to its target probe, survives the extra
+  // commits of a discard-and-switch (the route still names the target),
+  // and is dropped once the route points elsewhere — so a rejected or
+  // no-op switch can never steal focus from an input on a later keystroke.
+  assert.match(probes, /const focusEditor = useRef<string \| null>\(null\)/)
+  assert.match(probes, /if \(selectedProbe !== target\) focusEditor\.current = null/)
+
+  // Networks' Edit action has the same unmounting-menu problem; its
+  // always-mounted form takes focus when the requested draft lands.
+  const networks = readFileSync(new URL('../src/components/NetworksPanel.tsx', import.meta.url), 'utf8')
+  assert.match(networks, /ref=\{editForm\} tabIndex=\{-1\}/)
+  assert.match(networks, /focusForm\.current = true/)
+})
+
 test('mobile list hides secondary metadata behind a full-width touch target', () => {
   assert.match(component, /priority !== 'secondary'/)
   assert.match(component, /priority === 'secondary'/)
