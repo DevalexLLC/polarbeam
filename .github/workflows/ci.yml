@@ -148,6 +148,11 @@ jobs:
         run: pnpm run lint
       - name: Format check
         run: pnpm run fmt:check
+      # `make web` runs these locally, but until this step landed nothing in
+      # CI did — the suite includes the accessibility source gate
+      # (test/a11y-source.test.mjs), which must not be skippable.
+      - name: Unit tests
+        run: pnpm run test
       # offline-build folds the COMMITTED web/THIRD-PARTY-LICENSES into
       # THIRD-PARTY-NOTICES but cannot regenerate it (node_modules is
       # gitignored and absent there), so a dependency bump without `make web`
