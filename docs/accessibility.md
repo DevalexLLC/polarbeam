@@ -62,9 +62,12 @@ themes:
 - `views/Login.tsx` suppresses `jsx-a11y/no-autofocus` once: the login
   form is the page's single purpose, so focusing its first field does not
   disorient.
-- The remaining suppressions (map, health strip, incident timeline, data
-  table, users panel) are known keyboard/semantics gaps scheduled for
-  issues #104 and #105; each is inventoried in the test baseline and
+- `components/DataTable.tsx` suppresses two interaction rules once for
+  the focus-capture bookkeeping on the table region — a listener, not an
+  interaction; the rules cannot tell the difference.
+- The remaining suppressions (map, health strip, incident timeline, and
+  the users panel's sign-ins chart) are pointer-only visualization gaps
+  scheduled for issue #105; each is inventoried in the test baseline and
   justified by a comment at the suppression site.
 
 ## Conformance reporting

@@ -54,6 +54,11 @@ export default function MobileNavigation({
     const previousOverflow = document.body.style.overflow
     const toggle = toggleRef.current
     const drawer = drawerRef.current
+    // The drawer portals to <body>, so inert on the app root hides the
+    // backgrounded page from assistive tech and touch exploration — the
+    // hand-rolled Tab trap alone only contains sequential focus.
+    const appRoot = document.getElementById('root')
+    appRoot?.setAttribute('inert', '')
     document.body.style.overflow = 'hidden'
     drawer?.addEventListener('keydown', onDrawerKeyDown)
     const frame = requestAnimationFrame(() => {
@@ -65,6 +70,8 @@ export default function MobileNavigation({
       cancelAnimationFrame(frame)
       drawer?.removeEventListener('keydown', onDrawerKeyDown)
       document.body.style.overflow = previousOverflow
+      // Lift inert before restoring focus — an inert toggle cannot take it.
+      appRoot?.removeAttribute('inert')
       if (returnFocusRef.current) toggle?.focus()
       returnFocusRef.current = true
     }

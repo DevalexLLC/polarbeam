@@ -22,6 +22,7 @@ import MobileNavigation from './components/MobileNavigation'
 import PageError from './components/PageError'
 import ThemeToggle from './components/ThemeToggle'
 import TimezoneToggle from './components/TimezoneToggle'
+import DisclosureMenu from './components/DisclosureMenu'
 import TopbarFilter from './components/TopbarFilter'
 import About from './views/About'
 import Agents from './views/Agents'
@@ -395,13 +396,16 @@ export default function App() {
             <TopbarFilter networks={networks ?? []} scope={caps?.networks ?? null} />
             <TimezoneToggle />
             <ThemeToggle />
-            <details className={'user-menu' + (route.view === 'settings' ? ' user-menu-current' : '')}>
-              <summary aria-label={`Open user menu for ${user.username}`}>
+            <DisclosureMenu
+              className={'user-menu' + (route.view === 'settings' ? ' user-menu-current' : '')}
+              summaryLabel={`Open user menu for ${user.username}`}
+              summaryChildren={
                 <svg className="user-menu-icon" viewBox="0 0 24 24" aria-hidden="true">
                   <circle cx="12" cy="8" r="3.5" />
                   <path d="M5.5 20c.5-4 2.7-6 6.5-6s6 2 6.5 6" />
                 </svg>
-              </summary>
+              }
+            >
               <div className="user-menu-popover">
                 <div className="user-menu-identity">
                   <strong>{user.username}</strong>
@@ -450,7 +454,7 @@ export default function App() {
                   Log out
                 </button>
               </div>
-            </details>
+            </DisclosureMenu>
           </div>
         </header>
         {changingPassword && (

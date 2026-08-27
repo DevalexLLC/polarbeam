@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import { apiDelete, apiGet, apiPost, apiPut } from '../api'
 import type { Caps } from '../caps'
 import { roleLabel } from '../caps'
@@ -258,6 +258,9 @@ export default function UsersPanel({
   // further resets while one is in flight.
   const [resetting, setResetting] = useState(false)
   const dialogRef = useRef<HTMLDialogElement>(null)
+  // Names the create/reveal dialog from whichever <h2> is rendered — an
+  // aria-label string would go stale when the content switches.
+  const dialogTitleID = useId()
   const feedback = useSettingsMutation()
   const editingUser = scopeEdit ? data?.users.find((user) => user.id === scopeEdit.id) : undefined
   const loadedScope = editingUser
@@ -560,7 +563,7 @@ export default function UsersPanel({
         <dialog
           ref={dialogRef}
           className="users-dialog"
-          aria-label={minted?.kind === 'reset' ? 'Password reset' : 'Create local user'}
+          aria-labelledby={dialogTitleID}
           onCancel={(e) => {
             if (minted) e.preventDefault()
             else {
@@ -573,7 +576,7 @@ export default function UsersPanel({
         >
           {minted ? (
             <>
-              <h2>{minted.kind === 'reset' ? 'Password reset' : 'User created'}</h2>
+              <h2 id={dialogTitleID}>{minted.kind === 'reset' ? 'Password reset' : 'User created'}</h2>
               <p className="section-intro">
                 <strong>{minted.res.username}</strong> ({minted.res.role}). Copy the {minted.kind === 'reset' && 'new '}
                 password now — it is shown only once and cannot be recovered.
@@ -596,7 +599,7 @@ export default function UsersPanel({
                 void create()
               }}
             >
-              <h2>Create local user</h2>
+              <h2 id={dialogTitleID}>Create local user</h2>
               <p className="section-intro">
                 The password is generated and shown once — hand it to the user out-of-band. Federated users sign in via
                 SSO instead.

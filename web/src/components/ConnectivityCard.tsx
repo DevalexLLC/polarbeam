@@ -1,4 +1,5 @@
 import MatrixTable from './MatrixTable'
+import RadioButtonGroup from './RadioButtonGroup'
 import TopologySites from './TopologySites'
 import WorldMap from './WorldMap'
 import type { ThresholdResolver } from '../severity'
@@ -40,29 +41,19 @@ export default function ConnectivityCard({
         </div>
         <div className="card-head-actions">
           <span className="freshness">Latest {Math.round(matrix.horizon_s / 60)}-minute probe horizon</span>
-          <div className="control-group" role="group" aria-label="Connectivity view">
-            <button
-              className={mode === 'sites' ? 'active' : ''}
-              aria-pressed={mode === 'sites'}
-              onClick={() => onModeChange('sites')}
-            >
-              Sites
-            </button>
-            <button
-              className={mode === 'map' ? 'active' : ''}
-              aria-pressed={mode === 'map'}
-              onClick={() => onModeChange('map')}
-            >
-              Map
-            </button>
-            <button
-              className={mode === 'matrix' ? 'active' : ''}
-              aria-pressed={mode === 'matrix'}
-              onClick={() => onModeChange('matrix')}
-            >
-              Matrix
-            </button>
-          </div>
+          {/* One mode is always in effect, so this is a radiogroup, not
+              independent toggles — arrows browse-and-select per the APG. */}
+          <RadioButtonGroup
+            label="Connectivity view"
+            className="control-group"
+            value={mode}
+            options={[
+              { value: 'sites', label: 'Sites' },
+              { value: 'map', label: 'Map' },
+              { value: 'matrix', label: 'Matrix' },
+            ]}
+            onChange={onModeChange}
+          />
         </div>
       </div>
       {mode === 'sites' ? (
