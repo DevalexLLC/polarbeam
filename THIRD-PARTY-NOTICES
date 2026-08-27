@@ -3203,7 +3203,7 @@ cel.dev/expr v0.25.3
    limitations under the License.
 
 --------------------------------------------------------------------------------
-codeberg.org/miekg/dns v0.6.101
+codeberg.org/miekg/dns v0.6.105
 --------------------------------------------------------------------------------
 
 [codeberg.org/miekg/dns/LICENSE]
@@ -13226,7 +13226,7 @@ google.golang.org/genproto/googleapis/rpc v0.0.0-20260810153831-ec0a7760b754
    limitations under the License.
 
 --------------------------------------------------------------------------------
-google.golang.org/grpc v1.83.1
+google.golang.org/grpc v1.83.2
 --------------------------------------------------------------------------------
 
 [google.golang.org/grpc/LICENSE]

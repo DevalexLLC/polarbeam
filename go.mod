@@ -3,7 +3,7 @@ module github.com/devalexllc/polarbeam
 go 1.27.0
 
 require (
-	codeberg.org/miekg/dns v0.6.101
+	codeberg.org/miekg/dns v0.6.105
 	github.com/coreos/go-oidc/v3 v3.20.0
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/google/uuid v1.6.0
@@ -14,7 +14,7 @@ require (
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/term v0.45.0
-	google.golang.org/grpc v1.83.1
+	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 )
