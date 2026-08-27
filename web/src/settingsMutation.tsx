@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -67,6 +68,7 @@ export function SettingsMutationProvider({ children }: { children: ReactNode }) 
   const toastID = useRef(0)
   const dialogRef = useRef<HTMLDialogElement>(null)
   const cancelRef = useRef<HTMLButtonElement>(null)
+  const confirmTitleID = useId()
   const acceptedHash = useRef(typeof location === 'undefined' ? '#/' : canonicalizeRouteHash(location.hash).hash)
   const hasDirty = dirtyForms.current.size > 0
 
@@ -305,6 +307,7 @@ export function SettingsMutationProvider({ children }: { children: ReactNode }) 
       <dialog
         ref={dialogRef}
         className="users-dialog settings-confirm-dialog"
+        aria-labelledby={confirmTitleID}
         onCancel={(event) => {
           event.preventDefault()
           closeConfirmation()
@@ -312,7 +315,7 @@ export function SettingsMutationProvider({ children }: { children: ReactNode }) 
       >
         {confirmation && (
           <>
-            <h2>{confirmation.action}</h2>
+            <h2 id={confirmTitleID}>{confirmation.action}</h2>
             <p>
               <strong>{confirmation.resource}</strong>
             </p>

@@ -75,7 +75,9 @@ test('jsx-a11y lint suppressions match the known baseline rule for rule', () => 
     }
   }
   assert.deepEqual(suppressed, {
-    // Row activation on the <tr>, fix tracked by #104.
+    // Deliberate: onFocusCapture bookkeeping on the table region so a
+    // refresh that removes the focused row can restore focus — not an
+    // interaction the rule should see.
     'components/DataTable.tsx': [
       'jsx-a11y/no-noninteractive-element-interactions',
       'jsx-a11y/no-static-element-interactions',
@@ -90,7 +92,8 @@ test('jsx-a11y lint suppressions match the known baseline rule for rule', () => 
       'jsx-a11y/click-events-have-key-events',
       'jsx-a11y/no-noninteractive-element-interactions',
     ],
-    // Click-to-copy on the credential <code>, fix tracked by #104.
+    // Pointer-only hover readout on the sign-ins chart svg (same class of
+    // gap as HealthStrip), fix tracked by #105.
     'components/UsersPanel.tsx': ['jsx-a11y/no-noninteractive-element-interactions'],
     // Focusable map svg + tip keep-open handlers, fix tracked by #105.
     'components/WorldMap.tsx': [
@@ -127,6 +130,44 @@ test('validation error lists are wired through useErrorSummary', () => {
   const login = readFileSync(new URL('../src/views/Login.tsx', import.meta.url), 'utf8')
   const invalidCount = [...login.matchAll(/aria-invalid=\{credentialError\}/g)].length
   assert.equal(invalidCount, 2, 'both Login fields carry credential-gated aria-invalid wiring')
+})
+
+// #104's composite-widget contract: <details> menus route through
+// DisclosureMenu (Escape / roving / dismissal), exclusive switchers are
+// radiogroups, the portal'd row-action popup is a labelled group with
+// keyboard dismissal, the drawer inerts the backgrounded app, and native
+// dialogs are named by their rendered heading.
+test('composite widgets keep their menu, group, and dialog semantics', () => {
+  const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
+  assert.match(app, /<DisclosureMenu/)
+  assert.doesNotMatch(app, /<details/)
+
+  const filter = readFileSync(new URL('../src/components/TopbarFilter.tsx', import.meta.url), 'utf8')
+  assert.match(filter, /<DisclosureMenu/)
+  assert.match(filter, /<RadioButtonGroup/)
+
+  const connectivity = readFileSync(new URL('../src/components/ConnectivityCard.tsx', import.meta.url), 'utf8')
+  assert.match(connectivity, /<RadioButtonGroup/)
+
+  const radioGroup = readFileSync(new URL('../src/components/RadioButtonGroup.tsx', import.meta.url), 'utf8')
+  assert.match(radioGroup, /role="radiogroup"/)
+  assert.match(radioGroup, /role="radio"/)
+
+  const table = readFileSync(new URL('../src/components/DataTable.tsx', import.meta.url), 'utf8')
+  assert.doesNotMatch(table, /role="toolbar"/)
+  assert.match(table, /event\.key === 'Tab'/)
+  assert.match(table, /closest\('dialog'\)/)
+
+  const drawer = readFileSync(new URL('../src/components/MobileNavigation.tsx', import.meta.url), 'utf8')
+  assert.match(drawer, /setAttribute\('inert', ''\)/)
+  assert.match(drawer, /removeAttribute\('inert'\)/)
+
+  for (const file of ['../src/components/ChangePasswordDialog.tsx', '../src/components/UsersPanel.tsx']) {
+    const source = readFileSync(new URL(file, import.meta.url), 'utf8')
+    assert.match(source, /<dialog[^>]*\n?[^>]*aria-labelledby=\{/, `${file} dialog is named by its heading`)
+  }
+  const mutation = readFileSync(new URL('../src/settingsMutation.tsx', import.meta.url), 'utf8')
+  assert.match(mutation, /aria-labelledby=\{confirmTitleID\}/)
 })
 
 test('global accessibility scaffolding stays in place', () => {

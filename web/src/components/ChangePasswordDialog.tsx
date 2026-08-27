@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
 import { ApiError, apiPut } from '../api'
 import { useErrorSummary } from '../formErrors'
 
@@ -57,6 +57,9 @@ export default function ChangePasswordDialog({
   onAuthError: (err: unknown) => void
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null)
+  // Named by whichever <h2> is rendered — "Change password" becomes
+  // "Password changed" on success, which a static label would miss.
+  const titleID = useId()
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -111,7 +114,7 @@ export default function ChangePasswordDialog({
     <dialog
       ref={dialogRef}
       className="users-dialog password-dialog"
-      aria-label="Change password"
+      aria-labelledby={titleID}
       onClose={onClose}
       onCancel={(e) => {
         // Esc must not dismiss the dialog while the request is in flight —
@@ -122,7 +125,7 @@ export default function ChangePasswordDialog({
     >
       {done ? (
         <>
-          <h2>Password changed</h2>
+          <h2 id={titleID}>Password changed</h2>
           <p className="section-intro">
             Use the new password next time you sign in. Your other sessions were signed out; this one stays active.
           </p>
@@ -134,7 +137,7 @@ export default function ChangePasswordDialog({
         </>
       ) : (
         <form onSubmit={submit} aria-busy={busy}>
-          <h2>Change password</h2>
+          <h2 id={titleID}>Change password</h2>
           <p className="section-intro">Changing your password signs out your other sessions. This one stays active.</p>
           <div className="config-form-grid">
             <PasswordField

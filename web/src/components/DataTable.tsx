@@ -99,27 +99,87 @@ function FloatingActionMenu({
     const dismiss = (event: PointerEvent) => {
       const target = event.target as Node | null
       if (target && (menu.current?.contains(target) || trigger.contains(target))) return
+      // A click inside a modal <dialog> an item opened (confirm) must not
+      // unmount the popup — the dialog restores focus to that item.
+      if (target instanceof Element && target.closest('dialog')) return
       onCloseRef.current()
     }
     document.addEventListener('pointerdown', dismiss, true)
     return () => document.removeEventListener('pointerdown', dismiss, true)
   }, [trigger])
 
+  // Keyboard contract, attached like MobileNavigation's drawer trap. The
+  // popup is a role="group" of native controls, so Tab traverses the items
+  // normally; only at either boundary does Tab close and hand focus back
+  // to the trigger — the portal sits at the end of <body>, so letting the
+  // browser continue from here would drop focus off the page. Escape
+  // closes from anywhere; arrows rove as a convenience.
+  useEffect(() => {
+    const element = menu.current
+    if (!element) return
+    const focusables = () =>
+      Array.from(
+        element.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled])',
+        ),
+      ).filter((item) => item.getClientRects().length > 0)
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onCloseRef.current()
+        trigger.focus()
+        return
+      }
+      const items = focusables()
+      if (items.length === 0) return
+      const active = document.activeElement as HTMLElement
+      if (event.key === 'Tab') {
+        const boundary = event.shiftKey ? items[0] : items[items.length - 1]
+        if (active === boundary || !items.includes(active)) {
+          event.preventDefault()
+          onCloseRef.current()
+          trigger.focus()
+        }
+        return
+      }
+      if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+      event.preventDefault()
+      const current = items.indexOf(active)
+      let destination: number
+      if (event.key === 'Home') destination = 0
+      else if (event.key === 'End') destination = items.length - 1
+      else if (current === -1) destination = 0
+      else destination = (current + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length
+      items[destination].focus()
+    }
+    const onFocusOut = (event: FocusEvent) => {
+      const next = event.relatedTarget as Node | null
+      if (next && (element.contains(next) || trigger.contains(next))) return
+      // Focus entering a modal <dialog> an item opened must not unmount the
+      // popup: the dialog returns focus to that item on close.
+      if (next instanceof Element && next.closest('dialog')) return
+      onCloseRef.current()
+    }
+    element.addEventListener('keydown', onKeyDown)
+    element.addEventListener('focusout', onFocusOut)
+    return () => {
+      element.removeEventListener('keydown', onKeyDown)
+      element.removeEventListener('focusout', onFocusOut)
+    }
+  }, [trigger])
+
+  // role="group" (not menu/menuitem): the items are caller-rendered native
+  // buttons and links, which keep their own roles.
   return createPortal(
     <div
       ref={menu}
       id={id}
       className="data-table-actions-menu"
-      role="toolbar"
+      role="group"
       tabIndex={-1}
       data-action-key={id.slice('data-table-actions-'.length)}
       aria-label={label}
       style={{ top: 0, left: 0, visibility: 'hidden' }}
-      onKeyDown={(event) => {
-        if (event.key !== 'Escape') return
-        onClose()
-        trigger.focus()
-      }}
     >
       {children}
     </div>,

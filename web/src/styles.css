@@ -2900,7 +2900,7 @@ button.danger-button {
   text-transform: uppercase;
 }
 
-.topbar-filter-popover > button {
+.topbar-filter-popover button {
   display: block;
   width: 100%;
   padding: 0.65rem 0.75rem;
@@ -2914,13 +2914,13 @@ button.danger-button {
   text-align: left;
 }
 
-.topbar-filter-popover > button:hover,
-.topbar-filter-popover > button:focus-visible {
+.topbar-filter-popover button:hover,
+.topbar-filter-popover button:focus-visible {
   color: var(--ink);
   background: var(--surface-2);
 }
 
-.topbar-filter-popover > button[aria-pressed='true'] {
+.topbar-filter-popover button[aria-checked='true'] {
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
