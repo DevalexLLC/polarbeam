@@ -3,6 +3,7 @@ import { apiDelete, apiGet, apiPost } from '../api'
 import type { PlaneChoice } from '../plane'
 import { initialPlane, networkField, planeReady } from '../plane'
 import { useSettingsDraft, useSettingsMutation } from '../settingsMutation'
+import { useErrorSummary } from '../formErrors'
 import type { MeshesConfigResponse, MeshConfig, SitesResponse } from '../types'
 import ConfirmButton from './ConfirmButton'
 import PlaneField from './PlaneField'
@@ -24,6 +25,10 @@ export default function MeshesPanel({
   const [error, setError] = useState<unknown>(null)
   const [retryKey, setRetryKey] = useState(0)
   const [actionError, setActionError] = useState('')
+  // Row actions (delete, add/remove member) share actionError's render slot
+  // but must not describe the create form's fields.
+  const [errorScope, setErrorScope] = useState<'create' | 'row'>('create')
+  const summary = useErrorSummary(Boolean(actionError) && errorScope === 'create')
   const [newName, setNewName] = useState('')
   const [newNetworkDraft, setNewNetwork] = useState<string | null>(null)
   const newNetwork = newNetworkDraft ?? initialPlane(plane)
@@ -70,7 +75,7 @@ export default function MeshesPanel({
 
   const reload = () => apiGet<MeshesConfigResponse>('/api/v1/config/meshes').then(setData).catch(onAuthError)
 
-  const run = async (fn: () => Promise<unknown>, successMessage: string) => {
+  const run = async (fn: () => Promise<unknown>, successMessage: string, scope: 'create' | 'row' = 'row') => {
     setBusy(true)
     setActionError('')
     try {
@@ -82,6 +87,7 @@ export default function MeshesPanel({
     } catch (err) {
       onAuthError(err)
       const message = err instanceof Error ? err.message : String(err)
+      setErrorScope(scope)
       setActionError(message)
       feedback.error(`Mesh change failed: ${message}`)
       return false
@@ -134,7 +140,7 @@ export default function MeshesPanel({
           also retires the affected series and closes their open incidents.
         </p>
         {actionError && (
-          <ul className="error threshold-errors">
+          <ul className="error threshold-errors" id={summary.id} ref={summary.ref} tabIndex={-1}>
             <li>{actionError}</li>
           </ul>
         )}
@@ -253,6 +259,7 @@ export default function MeshesPanel({
                     value={newName}
                     placeholder="e.g. core"
                     disabled={busy}
+                    aria-describedby={summary.describedby}
                     onChange={(e) => setNewName(e.target.value)}
                   />
                 </span>
@@ -298,8 +305,10 @@ export default function MeshesPanel({
                           ...networkField(newNetwork),
                         }),
                       `Mesh ${newName.trim()} created.`,
+                      'create',
                     ).then((saved) => {
                       if (saved) setNewName('')
+                      else summary.request()
                     })
                   }
                 >

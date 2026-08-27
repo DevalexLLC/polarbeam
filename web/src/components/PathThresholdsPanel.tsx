@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useState } from 'react'
 import { apiDelete, apiGet } from '../api'
 import { fmtAgo } from '../format'
+import { useErrorSummary } from '../formErrors'
 import { mergeLayers } from '../severity'
 import type { Caps } from '../caps'
 import { canWriteRow } from '../caps'
@@ -123,11 +124,25 @@ export default function PathThresholdsPanel({
   const addDuplicate = addPicked && overridden.has(pairKey(addA, addB, addNetwork))
   const addReady = addPicked && addPlaneOk && !addDuplicate
 
+  // Derived render-time errors on the add flow: the same-site clash names
+  // the two site selects; a duplicate row is a function of the pair AND the
+  // plane, so it names all three controls. No request() — nothing submits
+  // while either error shows (the editor simply does not render).
+  const sameSiteSummary = useErrorSummary(addA !== '' && addA === addB)
+  const duplicateSummary = useErrorSummary(addDuplicate)
+  const siteDescribedby =
+    [sameSiteSummary.describedby, duplicateSummary.describedby].filter(Boolean).join(' ') || undefined
+
   const siteSelect = (value: string, set: (v: string) => void, label: string) => (
     <label className="threshold-field">
       <span className="eyebrow">{label}</span>
       <span className="threshold-input">
-        <select value={value} onChange={(e) => set(e.target.value)}>
+        <select
+          value={value}
+          aria-invalid={sameSiteSummary.invalid || duplicateSummary.invalid}
+          aria-describedby={siteDescribedby}
+          onChange={(e) => set(e.target.value)}
+        >
           <option value="">choose a site…</option>
           {siteNames.map((n) => (
             <option key={n} value={n}>
@@ -309,15 +324,22 @@ export default function PathThresholdsPanel({
                   onChange={setAddNetwork}
                   label="Applies to"
                   hint="all networks grades every plane at this pair"
+                  invalid={duplicateSummary.invalid}
+                  describedby={duplicateSummary.describedby}
                 />
               </div>
               {addA !== '' && addA === addB && (
-                <ul className="error threshold-errors">
+                <ul className="error threshold-errors" id={sameSiteSummary.id} ref={sameSiteSummary.ref} tabIndex={-1}>
                   <li>choose two different sites</li>
                 </ul>
               )}
               {addDuplicate && (
-                <ul className="error threshold-errors">
+                <ul
+                  className="error threshold-errors"
+                  id={duplicateSummary.id}
+                  ref={duplicateSummary.ref}
+                  tabIndex={-1}
+                >
                   <li>
                     this pair already has an override
                     {addNetwork === '' ? ' for all networks' : ` on ${addNetwork}`} — edit it in the table above

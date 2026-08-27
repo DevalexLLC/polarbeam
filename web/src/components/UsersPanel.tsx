@@ -3,6 +3,7 @@ import { apiDelete, apiGet, apiPost, apiPut } from '../api'
 import type { Caps } from '../caps'
 import { roleLabel } from '../caps'
 import { fmtAgo, fmtTime } from '../format'
+import { useErrorSummary } from '../formErrors'
 import { useConcurrentSettingsDraft, useSettingsDraft, useSettingsMutation } from '../settingsMutation'
 import { useTimezone } from '../timezone'
 import type { LoginMonth, Role, UserAccount, UserCreateResponse, UsersResponse } from '../types'
@@ -238,6 +239,7 @@ export default function UsersPanel({
   const [refresh, setRefresh] = useState(0) // bumped after any mutation
   const [actionError, setActionError] = useState('') // row disable/delete failures
   const [createError, setCreateError] = useState('') // shown inside the dialog
+  const createSummary = useErrorSummary(Boolean(createError))
   const [newUsername, setNewUsername] = useState('')
   const [newRole, setNewRole] = useState<Role>('viewer')
   // Only meaningful for the two scoped roles: the server requires at least
@@ -420,6 +422,7 @@ export default function UsersPanel({
       onAuthError(err)
       const message = err instanceof Error ? err.message : String(err)
       setCreateError(message)
+      createSummary.request()
       feedback.error(`User was not created: ${message}`)
     } finally {
       setCreating(false)
@@ -607,6 +610,7 @@ export default function UsersPanel({
                       value={newUsername}
                       disabled={creating}
                       placeholder="username"
+                      aria-describedby={createSummary.describedby}
                       onChange={(e) => setNewUsername(e.target.value)}
                     />
                   </span>
@@ -614,7 +618,12 @@ export default function UsersPanel({
                 <label className="threshold-field">
                   <span className="eyebrow">Role</span>
                   <span className="threshold-input">
-                    <select value={newRole} disabled={creating} onChange={(e) => setNewRole(e.target.value as Role)}>
+                    <select
+                      value={newRole}
+                      disabled={creating}
+                      aria-describedby={createSummary.describedby}
+                      onChange={(e) => setNewRole(e.target.value as Role)}
+                    >
                       {ALL_ROLES.map((r) => (
                         <option key={r} value={r}>
                           {roleLabel(r)}
@@ -632,13 +641,18 @@ export default function UsersPanel({
               {/* The role cannot be changed afterwards — only the scope of a
                 scoped account can — so this choice is the durable one. */}
               {SCOPED_ROLES.has(newRole) && (
-                <div className="threshold-field" role="group" aria-label="Networks">
+                <div
+                  className="threshold-field"
+                  role="group"
+                  aria-label="Networks"
+                  aria-describedby={createSummary.describedby}
+                >
                   <span className="eyebrow">Networks</span>
                   <NetworkPicker all={networks} value={newNetworks} disabled={creating} onChange={setNewNetworks} />
                 </div>
               )}
               {createError && (
-                <ul className="error threshold-errors">
+                <ul className="error threshold-errors" id={createSummary.id} ref={createSummary.ref} tabIndex={-1}>
                   <li>{createError}</li>
                 </ul>
               )}

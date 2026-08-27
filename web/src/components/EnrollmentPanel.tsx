@@ -4,6 +4,7 @@ import type { PlaneChoice } from '../plane'
 import { initialPlane, networkField, planeReady } from '../plane'
 import { inheritRouteNetwork } from '../routeState'
 import { useSettingsDraft, useSettingsMutation } from '../settingsMutation'
+import { useErrorSummary } from '../formErrors'
 import PlaneField from './PlaneField'
 import RoleWall from './RoleWall'
 import { apiDelete, apiGet, apiPost } from '../api'
@@ -51,6 +52,10 @@ export default function EnrollmentPanel({
   const [error, setError] = useState<unknown>(null)
   const [retryKey, setRetryKey] = useState(0)
   const [actionError, setActionError] = useState('')
+  // Token deletion reuses actionError's render slot but must not describe
+  // the issue-token form's fields.
+  const [errorScope, setErrorScope] = useState<'create' | 'row'>('create')
+  const summary = useErrorSummary(Boolean(actionError) && errorScope === 'create')
   const [site, setSite] = useState('')
   const [networkDraft, setNetwork] = useState<string | null>(null)
   const network = networkDraft ?? initialPlane(plane)
@@ -159,7 +164,9 @@ export default function EnrollmentPanel({
     } catch (err) {
       onAuthError(err)
       const message = err instanceof Error ? err.message : String(err)
+      setErrorScope('create')
       setActionError(message)
+      summary.request()
       feedback.error(`Enrollment token was not issued: ${message}`)
     } finally {
       setCreating(false)
@@ -175,6 +182,7 @@ export default function EnrollmentPanel({
     } catch (err) {
       onAuthError(err)
       const message = err instanceof Error ? err.message : String(err)
+      setErrorScope('row')
       setActionError(message)
       feedback.error(`Enrollment token was not deleted: ${message}`)
     }
@@ -248,7 +256,12 @@ export default function EnrollmentPanel({
                 <label className="threshold-field">
                   <span className="eyebrow">Site</span>
                   <span className="threshold-input">
-                    <select value={site} disabled={creating} onChange={(e) => setSite(e.target.value)}>
+                    <select
+                      value={site}
+                      disabled={creating}
+                      aria-describedby={summary.describedby}
+                      onChange={(e) => setSite(e.target.value)}
+                    >
                       <option value="">choose a site…</option>
                       {siteNames.map((n) => (
                         <option key={n} value={n}>
@@ -262,7 +275,12 @@ export default function EnrollmentPanel({
                 <label className="threshold-field">
                   <span className="eyebrow">Valid for</span>
                   <span className="threshold-input">
-                    <select value={ttlMS} disabled={creating} onChange={(e) => setTtlMS(Number(e.target.value))}>
+                    <select
+                      value={ttlMS}
+                      disabled={creating}
+                      aria-describedby={summary.describedby}
+                      onChange={(e) => setTtlMS(Number(e.target.value))}
+                    >
                       {TTL_OPTIONS.map((o) => (
                         <option key={o.ms} value={o.ms}>
                           {o.label}
@@ -274,7 +292,7 @@ export default function EnrollmentPanel({
               </div>
             )}
             {actionError && (
-              <ul className="error threshold-errors">
+              <ul className="error threshold-errors" id={summary.id} ref={summary.ref} tabIndex={-1}>
                 <li>{actionError}</li>
               </ul>
             )}

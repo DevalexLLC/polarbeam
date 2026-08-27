@@ -118,7 +118,7 @@ function SourceCard({ s, label, pairHref }: { s: TargetSourceSummary; label: str
   const checks = s.checks ?? []
   return (
     <div className="pair-card dir-a">
-      <h3>
+      <h2>
         <span className="swatch series-a" />
         {pairHref ? (
           <a href={pairHref} title={`Open the ${s.site} pair view`}>
@@ -130,7 +130,7 @@ function SourceCard({ s, label, pairHref }: { s: TargetSourceSummary; label: str
         <span style={{ marginLeft: 'auto' }} className={'status-text-' + s.status}>
           {statusLabel(s.status)}
         </span>
-      </h3>
+      </h2>
       <div className="pair-headline">
         <span className="big">
           {fmtLatencyParts(s.latency.avg_us).value}
@@ -690,9 +690,9 @@ export default function TargetDetail({
                       key={srcKey(s.site, s.network)}
                       className={'path-current' + (isWidePath(s.paths) ? ' path-current-wide' : '')}
                     >
-                      <h4>
+                      <h2>
                         <span className="swatch series-a" /> {srcLabel(s.site, s.network)} → {title}
-                      </h4>
+                      </h2>
                       <PathGraph
                         mode="current"
                         source={srcLabel(s.site, s.network)}
@@ -754,12 +754,12 @@ export default function TargetDetail({
               ) : undefined
             return (
               <div key={srcKey(src.site, src.network)} className="card chart-card">
-                <h3>
+                <h2>
                   <span className="swatch series-a" /> {srcLabel(src.site, src.network)} → {title}
                   {metric === 'latency' && (
                     <span className="metric-source">{latencySourceName(src.latency_source)}</span>
                   )}
-                </h3>
+                </h2>
                 <Chart
                   options={mkOptions(srcKey(src.site, src.network), axisLabel, withPctl, lossCeiling)}
                   data={toChartData(points, metric, withPctl)}
@@ -771,7 +771,7 @@ export default function TargetDetail({
           })}
 
           <div className="card chart-card">
-            <h3>
+            <h2>
               Stage timings
               {/* The stages endpoint folds across planes server-side, so
                   under an active filter this chart alone stays fleet-wide —
@@ -779,7 +779,7 @@ export default function TargetDetail({
               <span className="metric-source">
                 {network !== '' && multiNetwork ? 'all probing sites · all networks' : 'all probing sites'}
               </span>
-            </h3>
+            </h2>
             <Chart
               options={stageOptions}
               data={toStageChartData(stagePoints)}

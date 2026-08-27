@@ -5,6 +5,7 @@ import SettingsPageError from './SettingsPageError'
 import { apiGet, apiPut } from '../api'
 import { fmtAgo } from '../format'
 import { useConcurrentSettingsDraft, useSettingsMutation } from '../settingsMutation'
+import { useErrorSummary } from '../formErrors'
 import type { BannerSettings, BannerSettingsPut, UIBanner } from '../types'
 
 const POLL_MS = 30_000
@@ -46,6 +47,7 @@ export default function BannerSettingsPanel({
   const [retryKey, setRetryKey] = useState(0)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [formErrors, setFormErrors] = useState<string[]>([])
+  const summary = useErrorSummary(formErrors.length > 0)
   const [saving, setSaving] = useState(false)
   const feedback = useSettingsMutation()
   const loadedDraft = data ? draftFrom(data) : null
@@ -122,6 +124,7 @@ export default function BannerSettingsPanel({
     const { errors, body } = validate(form)
     setFormErrors(errors)
     if (errors.length > 0) {
+      summary.request()
       feedback.error(`Screen banner: ${errors.join('; ')}`)
       return
     }
@@ -145,6 +148,7 @@ export default function BannerSettingsPanel({
       onAuthError(err)
       const message = err instanceof Error ? err.message : String(err)
       setFormErrors([message])
+      summary.request()
       feedback.error(`Screen banner was not saved: ${message}`)
     } finally {
       setSaving(false)
@@ -187,6 +191,7 @@ export default function BannerSettingsPanel({
               aria-checked={form.enabled}
               checked={form.enabled}
               disabled={saving}
+              aria-describedby={summary.describedby}
               onChange={(e) => update({ enabled: e.target.checked })}
             />
             <span className="oidc-enable-copy">
@@ -211,13 +216,14 @@ export default function BannerSettingsPanel({
                 maxLength={MAX_TEXT_CHARS}
                 disabled={saving}
                 autoComplete="off"
+                aria-describedby={summary.describedby}
                 onChange={(e) => update({ text: e.target.value })}
               />
               <span className="hint">a single line, up to {MAX_TEXT_CHARS} characters</span>
             </span>
           </label>
           {formErrors.length > 0 && (
-            <ul className="error threshold-errors">
+            <ul className="error threshold-errors" id={summary.id} ref={summary.ref} tabIndex={-1}>
               {formErrors.map((e) => (
                 <li key={e}>{e}</li>
               ))}

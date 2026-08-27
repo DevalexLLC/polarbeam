@@ -989,7 +989,7 @@ table.agents tr:last-child td {
   border-top: 3px solid var(--series-b);
 }
 
-.pair-card h3 {
+.pair-card h2 {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -1125,7 +1125,7 @@ a.check-chip:hover {
   padding-bottom: 0.9rem;
 }
 
-.chart-card h3 {
+.chart-card > h2 {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -1458,7 +1458,7 @@ tr.hop-changed td {
   grid-column: 1 / -1;
 }
 
-.path-current h4 {
+.path-current h2 {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -3082,7 +3082,7 @@ button.danger-button {
    never the browser default blue. */
 table.events td a,
 .probe-strip-label a,
-.pair-card h3 a {
+.pair-card h2 a {
   color: inherit;
   text-decoration: underline;
   text-decoration-color: var(--border-strong);
@@ -3091,7 +3091,7 @@ table.events td a,
 
 table.events td a:hover,
 .probe-strip-label a:hover,
-.pair-card h3 a:hover {
+.pair-card h2 a:hover {
   color: var(--accent);
   text-decoration-color: currentColor;
 }
@@ -4312,10 +4312,12 @@ table.data-table tbody tr:last-child > td {
   height: 64px;
   margin-bottom: 2rem;
 }
-.login-context h1 {
+.login-context .login-headline {
   max-width: 12ch;
   margin: 0.35rem 0 1rem;
   font-size: clamp(2.5rem, 4vw, 3.8rem);
+  /* Was a heading; the paragraph keeps its rendered weight. */
+  font-weight: 700;
   line-height: 1;
   letter-spacing: -0.05em;
 }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, apiDelete, apiGet, apiPost, apiPut } from '../api'
 import { fmtAgo } from '../format'
+import { useErrorSummary } from '../formErrors'
 import { useNetworkFilter } from '../networkFilter'
 import { updateRouteParams } from '../routeState'
 import { useConcurrentSettingsDraft, useSettingsMutation } from '../settingsMutation'
@@ -252,12 +253,14 @@ export default function ProbesPanel({
   // Create form
   const [draft, setDraft] = useState<ProbeDraft | null>(null)
   const [formErrors, setFormErrors] = useState<string[]>([])
+  const createSummary = useErrorSummary(formErrors.length > 0)
   const [warnings, setWarnings] = useState<string[]>([])
 
   // Inline edit
   const [editID, setEditID] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState<ProbeDraft | null>(null)
   const [editErrors, setEditErrors] = useState<string[]>([])
+  const editSummary = useErrorSummary(editErrors.length > 0)
   // Actions → Edit unmounts the floating menu with focus inside it, so the
   // opened editor must take focus itself or keyboard users land back at the
   // document root with the expansion unannounced. The request is keyed to
@@ -435,6 +438,7 @@ export default function ProbesPanel({
     setFormErrors(errors)
     if (!body) {
       feedback.error(`New probe: ${errors.join('; ')}`)
+      createSummary.request()
       return
     }
     setBusy(true)
@@ -466,6 +470,7 @@ export default function ProbesPanel({
       onAuthError(err)
       const message = err instanceof Error ? err.message : String(err)
       setFormErrors([message])
+      createSummary.request()
       feedback.error(`Probe was not added: ${message}`)
     } finally {
       setBusy(false)
@@ -479,6 +484,7 @@ export default function ProbesPanel({
     setEditErrors(errors)
     if (!body) {
       feedback.error(`Probe ${assignmentLabel(p)}: ${errors.join('; ')}`)
+      editSummary.request()
       return
     }
     setBusy(true)
@@ -513,6 +519,7 @@ export default function ProbesPanel({
       onAuthError(err)
       const message = err instanceof Error ? err.message : String(err)
       setEditErrors([message])
+      editSummary.request()
       feedback.error(`Probe was not saved: ${message}`)
     } finally {
       setBusy(false)
@@ -648,6 +655,7 @@ export default function ProbesPanel({
   const numField = (
     d: ProbeDraft,
     set: (fn: (d: ProbeDraft) => ProbeDraft) => void,
+    summary: ReturnType<typeof useErrorSummary>,
     label: string,
     unit: string,
     key: 'intervalS' | 'timeoutS' | 'trainCount' | 'trainSpacingMs',
@@ -662,6 +670,7 @@ export default function ProbesPanel({
           value={d[key]}
           placeholder={placeholder}
           disabled={busy}
+          aria-describedby={summary.describedby}
           onChange={(e) => {
             set((prev) => ({ ...prev, [key]: e.target.value }))
           }}
@@ -671,7 +680,11 @@ export default function ProbesPanel({
     </label>
   )
 
-  const paramFields = (d: ProbeDraft, set: (fn: (d: ProbeDraft) => ProbeDraft) => void) => {
+  const paramFields = (
+    d: ProbeDraft,
+    set: (fn: (d: ProbeDraft) => ProbeDraft) => void,
+    summary: ReturnType<typeof useErrorSummary>,
+  ) => {
     const specs = paramSpecsFor(registry, d.type, d.mode)
     if (specs.length === 0) return null
     const setParam = (key: string, value: string) =>
@@ -688,6 +701,7 @@ export default function ProbesPanel({
                   type="checkbox"
                   checked={d.params[spec.key] === 'true'}
                   disabled={busy}
+                  aria-describedby={summary.describedby}
                   onChange={(e) => setParam(spec.key, e.target.checked ? 'true' : '')}
                 />
                 <span>{spec.key}</span>
@@ -703,6 +717,7 @@ export default function ProbesPanel({
                   <select
                     value={d.params[spec.key] ?? ''}
                     disabled={busy}
+                    aria-describedby={summary.describedby}
                     onChange={(e) => setParam(spec.key, e.target.value)}
                   >
                     <option value="">default</option>
@@ -728,6 +743,7 @@ export default function ProbesPanel({
                     value={d.params[spec.key] ?? ''}
                     placeholder={spec.hint}
                     disabled={busy}
+                    aria-describedby={summary.describedby}
                     onChange={(e) => setParam(spec.key, e.target.value)}
                   />
                   {spec.min !== undefined && spec.max !== undefined && (
@@ -748,6 +764,7 @@ export default function ProbesPanel({
                   value={d.params[spec.key] ?? ''}
                   placeholder={spec.hint}
                   disabled={busy}
+                  aria-describedby={summary.describedby}
                   onChange={(e) => setParam(spec.key, e.target.value)}
                 />
               </span>
@@ -758,12 +775,16 @@ export default function ProbesPanel({
     )
   }
 
-  const cadenceFields = (d: ProbeDraft, set: (fn: (d: ProbeDraft) => ProbeDraft) => void) => (
+  const cadenceFields = (
+    d: ProbeDraft,
+    set: (fn: (d: ProbeDraft) => ProbeDraft) => void,
+    summary: ReturnType<typeof useErrorSummary>,
+  ) => (
     <div className="config-form-grid">
-      {numField(d, set, 'Interval', 's', 'intervalS')}
-      {numField(d, set, 'Timeout', 's', 'timeoutS')}
-      {numField(d, set, 'Train count', 'pkts', 'trainCount', 'default 10 (icmp)')}
-      {numField(d, set, 'Train spacing', 'ms', 'trainSpacingMs', 'default 200')}
+      {numField(d, set, summary, 'Interval', 's', 'intervalS')}
+      {numField(d, set, summary, 'Timeout', 's', 'timeoutS')}
+      {numField(d, set, summary, 'Train count', 'pkts', 'trainCount', 'default 10 (icmp)')}
+      {numField(d, set, summary, 'Train spacing', 'ms', 'trainSpacingMs', 'default 200')}
     </div>
   )
 
@@ -834,10 +855,10 @@ export default function ProbesPanel({
           Edit {probe.type} · {assignmentLabel(probe)}
           <span className="hint"> — type, assignment, and network are fixed; delete and re-create to re-target</span>
         </h3>
-        {cadenceFields(editDraft, setEditDraftFn)}
-        {paramFields(editDraft, setEditDraftFn)}
+        {cadenceFields(editDraft, setEditDraftFn, editSummary)}
+        {paramFields(editDraft, setEditDraftFn, editSummary)}
         {editErrors.length > 0 && (
-          <ul className="error threshold-errors">
+          <ul className="error threshold-errors" id={editSummary.id} ref={editSummary.ref} tabIndex={-1}>
             {editErrors.map((message) => (
               <li key={message}>{message}</li>
             ))}
@@ -1080,7 +1101,12 @@ export default function ProbesPanel({
                   label to name. The group carries its own accessible name. */}
               <div className="threshold-field">
                 <span className="eyebrow">Assignment</span>
-                <span className="control-group config-mode" role="group" aria-label="Probe assignment">
+                <span
+                  className="control-group config-mode"
+                  role="group"
+                  aria-label="Probe assignment"
+                  aria-describedby={createSummary.describedby}
+                >
                   <button
                     type="button"
                     className={createDraft.mode === 'mesh' ? 'active' : ''}
@@ -1115,6 +1141,7 @@ export default function ProbesPanel({
                   <select
                     value={createDraft.type}
                     disabled={busy}
+                    aria-describedby={createSummary.describedby}
                     onChange={(e) => setCreateDraft((d) => ({ ...d, type: e.target.value, params: {} }))}
                   >
                     {(registry?.types ?? [])
@@ -1134,6 +1161,7 @@ export default function ProbesPanel({
                     <select
                       value={createDraft.mesh}
                       disabled={busy}
+                      aria-describedby={createSummary.describedby}
                       onChange={(e) => setCreateDraft((d) => ({ ...d, mesh: e.target.value }))}
                     >
                       <option value="">pick…</option>
@@ -1153,6 +1181,7 @@ export default function ProbesPanel({
                       <select
                         value={createDraft.site}
                         disabled={busy}
+                        aria-describedby={createSummary.describedby}
                         onChange={(e) => setCreateDraft((d) => ({ ...d, site: e.target.value }))}
                       >
                         <option value="">pick…</option>
@@ -1170,6 +1199,7 @@ export default function ProbesPanel({
                       <select
                         value={createDraft.target}
                         disabled={busy}
+                        aria-describedby={createSummary.describedby}
                         onChange={(e) => setCreateDraft((d) => ({ ...d, target: e.target.value }))}
                       >
                         <option value="">pick…</option>
@@ -1191,10 +1221,10 @@ export default function ProbesPanel({
                 </>
               )}
             </div>
-            {cadenceFields(createDraft, setCreateDraft)}
-            {paramFields(createDraft, setCreateDraft)}
+            {cadenceFields(createDraft, setCreateDraft, createSummary)}
+            {paramFields(createDraft, setCreateDraft, createSummary)}
             {formErrors.length > 0 && (
-              <ul className="error threshold-errors">
+              <ul className="error threshold-errors" id={createSummary.id} ref={createSummary.ref} tabIndex={-1}>
                 {formErrors.map((e) => (
                   <li key={e}>{e}</li>
                 ))}

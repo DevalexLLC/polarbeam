@@ -20,6 +20,11 @@ export default function Login({ sso, onLogin }: { sso: boolean; onLogin: (res: L
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
+  // Only a 401 indicts the entered credentials; SSO callback failures and
+  // rate-limit/server errors must not mark the untouched fields invalid.
+  const [errorKind, setErrorKind] = useState<'credentials' | 'submit' | 'sso'>('submit')
+  const credentialError = Boolean(error) && errorKind === 'credentials'
+  const fieldError = Boolean(error) && errorKind !== 'sso'
   const [busy, setBusy] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
 
@@ -29,6 +34,7 @@ export default function Login({ sso, onLogin }: { sso: boolean; onLogin: (res: L
     const consumeSSOError = () => {
       const m = /^#\/sso-error=([a-z-]+)$/.exec(location.hash)
       if (!m) return
+      setErrorKind('sso')
       setError(SSO_ERRORS[m[1]] ?? 'Single sign-on failed. Details are in the server log.')
       history.replaceState(null, '', location.pathname + location.search)
     }
@@ -46,11 +52,14 @@ export default function Login({ sso, onLogin }: { sso: boolean; onLogin: (res: L
       onLogin(res)
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
+        setErrorKind('credentials')
         setError('Invalid username or password.')
       } else if (err instanceof ApiError && err.status === 429) {
+        setErrorKind('submit')
         setError('Too many attempts — wait a minute and try again.')
       } else {
         console.error('login request failed', err)
+        setErrorKind('submit')
         setError('Sign-in is temporarily unavailable. Try again.')
       }
     } finally {
@@ -62,7 +71,9 @@ export default function Login({ sso, onLogin }: { sso: boolean; onLogin: (res: L
     <div className="login-wrap">
       <section className="login-context" aria-label="Product introduction">
         <LogoMark className="logo-mark login-context-mark" />
-        <h1>See the network clearly.</h1>
+        {/* Marketing copy, not a section heading: the page's outline is the
+            always-visible brand h1 in the form (this panel hides <900px). */}
+        <p className="login-headline">See the network clearly.</p>
         <p>
           Monitor inter-site connectivity, correlate incidents, and investigate directional performance from one control
           plane.
@@ -85,8 +96,16 @@ export default function Login({ sso, onLogin }: { sso: boolean; onLogin: (res: L
           {/* Sign-in is this page's only purpose and this is its first field,
               so focusing it costs no orientation and saves every operator a
               keystroke. */}
-          {/* oxlint-disable-next-line jsx-a11y/no-autofocus */}
-          <input autoFocus autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} />
+          {/* oxlint-disable jsx-a11y/no-autofocus */}
+          <input
+            autoFocus
+            autoComplete="username"
+            value={username}
+            aria-invalid={credentialError}
+            aria-describedby={fieldError ? 'login-error' : undefined}
+            onChange={(e) => setUsername(e.target.value)}
+          />
+          {/* oxlint-enable jsx-a11y/no-autofocus */}
         </label>
         <label className="eyebrow">
           Password
@@ -95,8 +114,8 @@ export default function Login({ sso, onLogin }: { sso: boolean; onLogin: (res: L
               type={showPassword ? 'text' : 'password'}
               autoComplete="current-password"
               value={password}
-              aria-invalid={Boolean(error)}
-              aria-describedby={error ? 'login-error' : undefined}
+              aria-invalid={credentialError}
+              aria-describedby={fieldError ? 'login-error' : undefined}
               onChange={(e) => setPassword(e.target.value)}
             />
             <button
