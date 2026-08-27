@@ -4,6 +4,7 @@ import RoleWall from './RoleWall'
 import SettingsPageError from './SettingsPageError'
 import { apiGet, apiPost, apiPut } from '../api'
 import { fmtAgo } from '../format'
+import { useErrorSummary } from '../formErrors'
 import { useConcurrentSettingsDraft, useSettingsMutation } from '../settingsMutation'
 import type { OIDCDiscoveryInfo, OIDCRoleRule, OIDCSettings, OIDCSettingsPut, UnmatchedRole } from '../types'
 
@@ -154,6 +155,7 @@ export default function OIDCSettingsPanel({
   const [retryKey, setRetryKey] = useState(0)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [formErrors, setFormErrors] = useState<string[]>([])
+  const formSummary = useErrorSummary(formErrors.length > 0)
   const [saving, setSaving] = useState(false)
   const [warnings, setWarnings] = useState<string[]>([])
   const [testing, setTesting] = useState(false)
@@ -247,6 +249,7 @@ export default function OIDCSettingsPanel({
     setFormErrors(errors)
     if (errors.length > 0) {
       feedback.error(`OpenID Connect settings: ${errors.join('; ')}`)
+      formSummary.request()
       return
     }
     setSaving(true)
@@ -268,6 +271,7 @@ export default function OIDCSettingsPanel({
       onAuthError(err)
       const message = err instanceof Error ? err.message : String(err)
       setFormErrors([message])
+      formSummary.request()
       feedback.error(`OpenID Connect settings were not saved: ${message}`)
     } finally {
       setSaving(false)
@@ -283,6 +287,7 @@ export default function OIDCSettingsPanel({
     }
     if (errors.length > 0) {
       setFormErrors(errors)
+      formSummary.request()
       feedback.error(`OpenID Connect test: ${errors.join('; ')}`)
       return
     }
@@ -322,6 +327,7 @@ export default function OIDCSettingsPanel({
           placeholder={placeholder}
           disabled={saving}
           autoComplete="off"
+          aria-describedby={formSummary.describedby}
           onChange={(e) => update({ [key]: e.target.value })}
         />
         {opts.hint && <span className="hint">{opts.hint}</span>}
@@ -379,6 +385,7 @@ export default function OIDCSettingsPanel({
               aria-checked={current.enabled}
               checked={current.enabled}
               disabled={saving}
+              aria-describedby={formSummary.describedby}
               onChange={(e) => update({ enabled: e.target.checked })}
             />
             <span className="oidc-enable-copy">
@@ -416,13 +423,19 @@ export default function OIDCSettingsPanel({
               rows={3}
               spellCheck={false}
               disabled={saving}
+              aria-describedby={formSummary.describedby}
               onChange={(e) => update({ adminValues: e.target.value })}
             />
             <span className="hint">
               role-claim values granting global admin, matched exactly (commas allowed); this list always wins
             </span>
           </label>
-          <div className="threshold-field" role="group" aria-label="Network role rules">
+          <div
+            className="threshold-field"
+            role="group"
+            aria-label="Network role rules"
+            aria-describedby={formSummary.describedby}
+          >
             <span className="eyebrow">Network role rules</span>
             <span className="hint">
               Ordered mappings from the same role claim to a network-scoped role. Every matching rule contributes: the
@@ -516,6 +529,7 @@ export default function OIDCSettingsPanel({
               <select
                 value={current.unmatchedRole}
                 disabled={saving}
+                aria-describedby={formSummary.describedby}
                 onChange={(e) => update({ unmatchedRole: e.target.value as UnmatchedRole })}
               >
                 <option value="viewer">become global viewers</option>
@@ -535,11 +549,12 @@ export default function OIDCSettingsPanel({
               rows={5}
               spellCheck={false}
               disabled={saving}
+              aria-describedby={formSummary.describedby}
               onChange={(e) => update({ caPem: e.target.value })}
             />
           </label>
           {formErrors.length > 0 && (
-            <ul className="error threshold-errors">
+            <ul className="error threshold-errors" id={formSummary.id} ref={formSummary.ref} tabIndex={-1}>
               {formErrors.map((e) => (
                 <li key={e}>{e}</li>
               ))}

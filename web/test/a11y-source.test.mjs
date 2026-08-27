@@ -38,14 +38,10 @@ function headingViolations(source) {
   return violations
 }
 
-// Fixed by #103. The baseline pins each file's exact violations, so a
-// baselined file gaining a further defect fails just like a clean file
-// gaining its first; fixing a file leaves a stale entry the test rejects.
-const KNOWN_HEADING_VIOLATIONS = {
-  'views/Login.tsx': ['more than one <h1>'],
-  'views/PairDetail.tsx': ['skips <h1> to <h3>'],
-  'views/TargetDetail.tsx': ['skips <h1> to <h4>'],
-}
+// Emptied by #103. A file gaining a heading defect must be fixed, not
+// baselined; entries here pin a defect's exact violations only while a
+// tracked issue owns the fix.
+const KNOWN_HEADING_VIOLATIONS = {}
 
 test('heading levels descend without skips in every component', () => {
   for (const { path, source } of sourceFiles('.tsx')) {
@@ -117,6 +113,20 @@ test('every lint suppression names the rules it disables', () => {
       }
     }
   }
+})
+
+// Files that render inline validation lists must use the shared summary
+// hook (aria-describedby + focus-on-request; formErrors.ts). This is a
+// presence-level pin — per-list wiring depth is covered by the manual
+// protocol in docs/accessibility.md, not by source regexes.
+test('validation error lists are wired through useErrorSummary', () => {
+  for (const { path, source } of sourceFiles('.tsx')) {
+    if (!source.includes('className="error threshold-errors"')) continue
+    assert.match(source, /useErrorSummary\(/, `${path} renders a validation error list without useErrorSummary`)
+  }
+  const login = readFileSync(new URL('../src/views/Login.tsx', import.meta.url), 'utf8')
+  const invalidCount = [...login.matchAll(/aria-invalid=\{credentialError\}/g)].length
+  assert.equal(invalidCount, 2, 'both Login fields carry credential-gated aria-invalid wiring')
 })
 
 test('global accessibility scaffolding stays in place', () => {

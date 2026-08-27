@@ -49,13 +49,13 @@ function DirectionCard({ title, s, dir }: { title: string; s: DirectionSummary; 
   const checks = s.checks ?? []
   return (
     <div className={'pair-card dir-' + dir}>
-      <h3>
+      <h2>
         <span className={'swatch series-' + dir} />
         {title}
         <span style={{ marginLeft: 'auto' }} className={'status-text-' + s.status}>
           {statusLabel(s.status)}
         </span>
-      </h3>
+      </h2>
       <div className="pair-headline">
         <span className="big">
           {fmtLatencyParts(s.latency.avg_us).value}
@@ -144,9 +144,9 @@ function DirectionCard({ title, s, dir }: { title: string; s: DirectionSummary; 
 function PathList({ src, dst, dir, paths }: { src: string; dst: string; dir: 'a' | 'b'; paths: CurrentPath[] }) {
   return (
     <div className={'path-current' + (isWidePath(paths) ? ' path-current-wide' : '')}>
-      <h4>
+      <h2>
         <span className={'swatch series-' + dir} /> {src} → {dst}
-      </h4>
+      </h2>
       {paths.length === 0 ? (
         <p className="muted">No traceroute yet. Traces run on a slower cadence.</p>
       ) : (
@@ -199,9 +199,9 @@ function PathList({ src, dst, dir, paths }: { src: string; dst: string; dir: 'a'
 function MtuList({ title, dir, mtus }: { title: string; dir: 'a' | 'b'; mtus: CurrentPathMtu[] }) {
   return (
     <div className="path-current">
-      <h4>
+      <h2>
         <span className={'swatch series-' + dir} /> {title}
-      </h4>
+      </h2>
       {mtus.length === 0 ? (
         <p className="muted">No path MTU measurement yet.</p>
       ) : (
@@ -539,10 +539,10 @@ export default function PairDetail({
           ) : undefined
         return (
           <div key={key} className="card chart-card">
-            <h3>
+            <h2>
               <span className={'swatch series-' + dir} /> {title}
               {metric === 'latency' && <span className="metric-source">{latencySourceName(directionSource)}</span>}
-            </h3>
+            </h2>
             <Chart
               options={mkOptions(chart, axisLabel, withPctl, lossCeiling)}
               data={chartData}

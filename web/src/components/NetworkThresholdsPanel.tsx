@@ -2,6 +2,7 @@ import { Fragment, useState } from 'react'
 import { apiDelete, apiGet } from '../api'
 import type { Caps } from '../caps'
 import { fmtAgo } from '../format'
+import { useErrorSummary } from '../formErrors'
 import type { PlaneChoice } from '../plane'
 import { initialPlane, planeReady } from '../plane'
 import { useSettingsDraft, useSettingsMutation } from '../settingsMutation'
@@ -69,6 +70,10 @@ export default function NetworkThresholdsPanel({
         }
       : plane
   const addNetwork = addNetworkDraft ?? initialPlane(addChoice)
+  // Derived render-time error: the picked network already has a row. It
+  // describes the network select above it, so no request() — there is no
+  // submit that lands on it (the editor simply does not render).
+  const addSummary = useErrorSummary(addNetwork !== '' && configured.has(addNetwork))
 
   const remove = async (d: NetworkThreshold) => {
     setRowError('')
@@ -230,10 +235,17 @@ export default function NetworkThresholdsPanel({
                 <span className="hint"> — applies to every pair on that plane without its own override</span>
               </h3>
               <div className="config-form-grid">
-                <PlaneField choice={addChoice} value={addNetwork} onChange={setAddNetwork} label="Network" />
+                <PlaneField
+                  choice={addChoice}
+                  value={addNetwork}
+                  onChange={setAddNetwork}
+                  label="Network"
+                  invalid={addSummary.invalid}
+                  describedby={addSummary.describedby}
+                />
               </div>
               {addNetwork !== '' && configured.has(addNetwork) && (
-                <ul className="error threshold-errors">
+                <ul className="error threshold-errors" id={addSummary.id} ref={addSummary.ref} tabIndex={-1}>
                   <li>{addNetwork} already has defaults — edit them in the table above</li>
                 </ul>
               )}

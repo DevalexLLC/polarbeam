@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { apiGet, apiPut } from '../api'
 import { fmtAgo } from '../format'
+import { useErrorSummary } from '../formErrors'
 import { useConcurrentSettingsDraft, useSettingsMutation } from '../settingsMutation'
 import type { SettingsResponse, ThresholdSettings } from '../types'
 
@@ -76,6 +77,7 @@ export default function ThresholdSettingsPanel({
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [errors, setErrors] = useState<string[]>([])
+  const summary = useErrorSummary(errors.length > 0)
   const [warnings, setWarnings] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const feedback = useSettingsMutation()
@@ -125,6 +127,7 @@ export default function ThresholdSettingsPanel({
     const { errors: errs, parsed } = validate(current)
     setErrors(errs)
     if (!parsed) {
+      summary.request()
       feedback.error(`Connectivity thresholds: ${errs.join('; ')}`)
       return
     }
@@ -149,6 +152,7 @@ export default function ThresholdSettingsPanel({
       onAuthError(err)
       const message = err instanceof Error ? err.message : String(err)
       setErrors([message])
+      summary.request()
       feedback.error(`Connectivity thresholds were not saved: ${message}`)
     } finally {
       setSaving(false)
@@ -164,6 +168,7 @@ export default function ThresholdSettingsPanel({
           inputMode="decimal"
           value={(draft ?? draftFrom(settings.thresholds))[key]}
           disabled={!canWrite || saving}
+          aria-describedby={summary.describedby}
           onChange={(e) => {
             setDraft((d) => ({ ...(d ?? draftFrom(settings.thresholds)), [key]: e.target.value }))
           }}
@@ -189,7 +194,7 @@ export default function ThresholdSettingsPanel({
             {field('Loss critical', '%', 'lossCritPct')}
           </div>
           {errors.length > 0 && (
-            <ul className="error threshold-errors">
+            <ul className="error threshold-errors" id={summary.id} ref={summary.ref} tabIndex={-1}>
               {errors.map((e) => (
                 <li key={e}>{e}</li>
               ))}

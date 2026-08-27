@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ApiError, apiPut } from '../api'
+import { useErrorSummary } from '../formErrors'
 
 // The CLI and server enforce this; checking client-side just saves a round
 // trip — the server remains the authority.
@@ -11,12 +12,16 @@ function PasswordField({
   value,
   autoComplete,
   disabled,
+  invalid,
+  describedby,
   onChange,
 }: {
   label: string
   value: string
   autoComplete: string
   disabled: boolean
+  invalid?: boolean
+  describedby?: string
   onChange: (v: string) => void
 }) {
   const [show, setShow] = useState(false)
@@ -29,6 +34,8 @@ function PasswordField({
           autoComplete={autoComplete}
           value={value}
           disabled={disabled}
+          aria-invalid={invalid || undefined}
+          aria-describedby={describedby}
           onChange={(e) => onChange(e.target.value)}
         />
         <button type="button" className="password-toggle" aria-pressed={show} onClick={() => setShow(!show)}>
@@ -53,7 +60,10 @@ export default function ChangePasswordDialog({
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
   const [confirm, setConfirm] = useState('')
-  const [error, setError] = useState('')
+  // Each failure names the field it belongs to (null = the whole form) so
+  // only that field is marked invalid.
+  const [error, setError] = useState<{ field: 'current' | 'next' | 'confirm' | null; text: string } | null>(null)
+  const summary = useErrorSummary(Boolean(error))
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState(false)
 
@@ -67,15 +77,17 @@ export default function ChangePasswordDialog({
     // verification attempt. Spread counts code points, matching the
     // server's rune count (.length counts UTF-16 units).
     if ([...next].length < MIN_PASSWORD_LEN) {
-      setError(`New password must be at least ${MIN_PASSWORD_LEN} characters.`)
+      setError({ field: 'next', text: `New password must be at least ${MIN_PASSWORD_LEN} characters.` })
+      summary.request()
       return
     }
     if (next !== confirm) {
-      setError('New passwords do not match.')
+      setError({ field: 'confirm', text: 'New passwords do not match.' })
+      summary.request()
       return
     }
     setBusy(true)
-    setError('')
+    setError(null)
     try {
       await apiPut('/api/v1/auth/password', { current_password: current, new_password: next })
       setDone(true)
@@ -84,9 +96,11 @@ export default function ChangePasswordDialog({
         // A real 401 means the session died server-side: back to login.
         onAuthError(err)
       } else if (err instanceof ApiError && err.status === 429) {
-        setError('Too many attempts — wait a minute and try again.')
+        setError({ field: null, text: 'Too many attempts — wait a minute and try again.' })
+        summary.request()
       } else {
-        setError(err instanceof Error ? err.message : String(err))
+        setError({ field: null, text: err instanceof Error ? err.message : String(err) })
+        summary.request()
       }
     } finally {
       setBusy(false)
@@ -128,6 +142,8 @@ export default function ChangePasswordDialog({
               value={current}
               autoComplete="current-password"
               disabled={busy}
+              invalid={error?.field === 'current'}
+              describedby={error && (error.field === 'current' || error.field === null) ? summary.id : undefined}
               onChange={setCurrent}
             />
             <PasswordField
@@ -135,6 +151,8 @@ export default function ChangePasswordDialog({
               value={next}
               autoComplete="new-password"
               disabled={busy}
+              invalid={error?.field === 'next'}
+              describedby={error && (error.field === 'next' || error.field === null) ? summary.id : undefined}
               onChange={setNext}
             />
             <PasswordField
@@ -142,12 +160,14 @@ export default function ChangePasswordDialog({
               value={confirm}
               autoComplete="new-password"
               disabled={busy}
+              invalid={error?.field === 'confirm'}
+              describedby={error && (error.field === 'confirm' || error.field === null) ? summary.id : undefined}
               onChange={setConfirm}
             />
           </div>
           {error && (
-            <ul className="error threshold-errors">
-              <li>{error}</li>
+            <ul className="error threshold-errors" id={summary.id} ref={summary.ref} tabIndex={-1}>
+              <li>{error.text}</li>
             </ul>
           )}
           <div className="users-dialog-foot">

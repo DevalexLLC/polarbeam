@@ -4,6 +4,7 @@ import { updateRouteParams } from '../routeState'
 import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
 import { fmtAgo } from '../format'
 import { useConcurrentSettingsDraft, useSettingsMutation } from '../settingsMutation'
+import { useErrorSummary } from '../formErrors'
 import type { SitesConfigResponse, SiteConfig } from '../types'
 import ConfirmButton from './ConfirmButton'
 import DataTable, { type DataTableColumn } from './DataTable'
@@ -83,6 +84,7 @@ export default function SitesPanel({
   const [draft, setDraft] = useState<Draft | null>(null)
   const [editing, setEditing] = useState(false) // draft edits an existing site (name locked)
   const [formErrors, setFormErrors] = useState<string[]>([])
+  const summary = useErrorSummary(formErrors.length > 0)
   const [saving, setSaving] = useState(false)
   const [query, setQuery] = useRouteSearch()
   const [queryParam] = useRouteParam('q')
@@ -168,6 +170,7 @@ export default function SitesPanel({
     const { errors, latitude, longitude } = validate(draft)
     setFormErrors(errors)
     if (errors.length > 0) {
+      summary.request()
       feedback.error(`Site: ${errors.join('; ')}`)
       return
     }
@@ -204,6 +207,7 @@ export default function SitesPanel({
       onAuthError(err)
       const message = err instanceof Error ? err.message : String(err)
       setFormErrors([message])
+      summary.request()
       feedback.error(`Site was not saved: ${message}`)
     } finally {
       setSaving(false)
@@ -334,6 +338,7 @@ export default function SitesPanel({
           value={draft?.[key] ?? ''}
           placeholder={placeholder}
           disabled={saving || locked}
+          aria-describedby={summary.describedby}
           onChange={(e) => {
             setDraft((d) => ({ ...(d ?? emptyDraft), [key]: e.target.value }))
           }}
@@ -449,7 +454,7 @@ export default function SitesPanel({
               {field('Longitude', 'longitude', '-180..180, with latitude')}
             </div>
             {formErrors.length > 0 && (
-              <ul className="error threshold-errors">
+              <ul className="error threshold-errors" id={summary.id} ref={summary.ref} tabIndex={-1}>
                 {formErrors.map((e) => (
                   <li key={e}>{e}</li>
                 ))}

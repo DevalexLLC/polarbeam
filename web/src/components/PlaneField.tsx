@@ -14,6 +14,8 @@ export default function PlaneField({
   disabled,
   label = 'Network',
   hint,
+  invalid,
+  describedby,
 }: {
   choice: PlaneChoice
   value: string
@@ -21,6 +23,10 @@ export default function PlaneField({
   disabled?: boolean
   label?: string
   hint?: string
+  // Error-summary wiring (WCAG 3.3.1): applied to the select only — the
+  // static shapes have nothing the user can correct.
+  invalid?: boolean
+  describedby?: string
 }) {
   if (choice.kind === 'implicit') return null
   if (choice.kind === 'unknown') {
@@ -53,7 +59,13 @@ export default function PlaneField({
     <label className="threshold-field">
       <span className="eyebrow">{label}</span>
       <span className="threshold-input">
-        <select value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)}>
+        <select
+          value={value}
+          disabled={disabled}
+          aria-invalid={invalid || undefined}
+          aria-describedby={describedby}
+          onChange={(e) => onChange(e.target.value)}
+        >
           {choice.options.map((n) => (
             <option key={n} value={n}>
               {n === '' ? 'All networks (operator-owned)' : n}
