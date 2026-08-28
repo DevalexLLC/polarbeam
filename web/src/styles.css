@@ -1923,17 +1923,6 @@ button.map-marker {
   pointer-events: none;
 }
 
-.map-label-leaders {
-  pointer-events: none;
-}
-
-.map-label-leader {
-  stroke: var(--ink-3);
-  stroke-width: 1;
-  opacity: 0.55;
-  vector-effect: non-scaling-stroke;
-}
-
 .map-leader {
   stroke: var(--ink-3);
   stroke-width: 1;
@@ -1995,35 +1984,6 @@ button.map-marker {
   stroke: var(--ink);
   stroke-width: 1.2;
   opacity: 0.55;
-}
-
-.map-site-label {
-  position: absolute;
-  z-index: 2;
-  max-width: 16rem;
-  padding: 0.08rem 0.3rem;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: calc(var(--radius) - 2px);
-  background: var(--surface);
-  color: var(--ink-2);
-  text-overflow: ellipsis;
-  transform: translate(0.7rem, calc(-100% - 0.35rem));
-  white-space: nowrap;
-  pointer-events: none;
-  font-family: var(--sans);
-  font-size: 0.78rem;
-  font-weight: 650;
-}
-
-.map-site-label.selected {
-  color: var(--ink);
-  border-color: var(--border-strong);
-  font-weight: 750;
-}
-
-.map-site-label-right {
-  transform: translate(calc(-100% - 0.7rem), calc(-100% - 0.35rem));
 }
 
 .map-legend {

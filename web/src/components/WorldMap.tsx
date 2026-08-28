@@ -5,7 +5,6 @@ import { projectMap } from '../geo'
 import {
   fitMapViewport,
   FULL_MAP_VIEWPORT,
-  layoutMapLabels,
   mapHitRadius,
   mapZoomPercent,
   panMapViewport,
@@ -514,12 +513,6 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
   const shownLeft = shownPoint ? ((shownPoint.x - viewport.x) / viewport.width) * 100 : 0
   const shownTop = shownPoint ? ((shownPoint.y - viewport.y) / viewport.height) * 100 : 0
   const shownInViewport = shownLeft >= 0 && shownLeft <= 100 && shownTop >= 0 && shownTop <= 100
-  const labeledSites = placed.filter(({ topology: entry }) => entry.severity !== 'ok' || pinned === entry.site.name)
-  const mapLabels = layoutMapLabels(
-    labeledSites.map((placedSite) => ({ id: placedSite.topology.site.name, x: placedSite.x, y: placedSite.y })),
-    viewport,
-  )
-  const placedByName = new Map(placed.map((placedSite) => [placedSite.topology.site.name, placedSite]))
 
   return (
     <>
@@ -566,23 +559,6 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
                   <circle className="map-anchor-dot" cx={p.anchorX} cy={p.anchorY} r={1.8} />
                 </g>
               ))}
-          </g>
-          <g className="map-label-leaders" aria-hidden="true">
-            {mapLabels.map((label) => {
-              const placedSite = placedByName.get(label.id)!
-              const desiredTop = ((placedSite.y - viewport.y) / viewport.height) * 100
-              if (Math.abs(desiredTop - label.top) < 1) return null
-              return (
-                <line
-                  key={label.id}
-                  className="map-label-leader"
-                  x1={placedSite.x}
-                  y1={placedSite.y}
-                  x2={placedSite.x}
-                  y2={viewport.y + (label.top / 100) * viewport.height}
-                />
-              )
-            })}
           </g>
           {/* Purely decorative under the svg's role="img": the interactive
               markers are the HTML buttons layered over the shell, which
@@ -650,24 +626,6 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
         <span className="map-zoom-readout" aria-hidden="true">
           {zoomPercent}%
         </span>
-        {mapLabels.map((label) => {
-          const placedSite = placedByName.get(label.id)!
-          const { site, severity } = placedSite.topology
-          return (
-            <span
-              key={site.name}
-              className={
-                'map-site-label' +
-                (pinned === site.name ? ' selected' : '') +
-                (label.align === 'right' ? ' map-site-label-right' : '')
-              }
-              style={{ left: `${label.left}%`, top: `${label.top}%` }}
-              aria-hidden="true"
-            >
-              {site.display_name || site.name} · {SEVERITY_LABEL[severity]}
-            </span>
-          )
-        })}
         {shownSite &&
           shownPoint &&
           shownStats &&
