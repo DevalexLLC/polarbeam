@@ -763,6 +763,7 @@ export default function TargetDetail({
                 <Chart
                   options={mkOptions(srcKey(src.site, src.network), axisLabel, withPctl, lossCeiling)}
                   data={toChartData(points, metric, withPctl)}
+                  label={`${srcLabel(src.site, src.network)} → ${title} ${metric} chart`}
                   contextKey={[id, network, win, metric, selectedProbe, srcKey(src.site, src.network)].join('\u0000')}
                   empty={empty}
                 />
@@ -783,6 +784,7 @@ export default function TargetDetail({
             <Chart
               options={stageOptions}
               data={toStageChartData(stagePoints)}
+              label="Stage timings chart"
               contextKey={[id, network, win, metric, selectedProbe, 'stages'].join('\u0000')}
               empty={
                 stageData ? undefined : (

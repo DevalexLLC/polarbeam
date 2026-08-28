@@ -44,34 +44,46 @@ const MAX_BAR = CHART_H - 8
 // child near the top edge.
 function LoginBars({ months }: { months: LoginMonth[] }) {
   const [hover, setHover] = useState<{ i: number; x: number; y: number; below: boolean } | null>(null)
+  const svgRef = useRef<SVGSVGElement>(null)
   const max = Math.max(1, ...months.map((m) => m.total))
   const n = months.length
 
-  const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
-    const r = e.currentTarget.getBoundingClientRect()
-    const i = Math.min(n - 1, Math.max(0, Math.floor(((e.clientX - r.left) / r.width) * n)))
-    const x = Math.min(Math.max(r.left + ((i + 0.5) / n) * r.width, 140), window.innerWidth - 140)
-    const below = r.top < 150
-    const y = below ? r.bottom : r.top
-    setHover((prev) =>
-      prev && prev.i === i && prev.x === x && prev.y === y && prev.below === below ? prev : { i, x, y, below },
-    )
-  }
+  // Hover-only readout mirroring the aggregate aria-label, as on the fleet
+  // health strips. The listeners attach natively so the labeled svg stays a
+  // plain image to assistive technology; the sr-only breakdown below is the
+  // non-visual equivalent of what hovering reveals.
+  useEffect(() => {
+    const svg = svgRef.current
+    if (!svg) return
+    const onMove = (e: MouseEvent) => {
+      const r = svg.getBoundingClientRect()
+      const i = Math.min(n - 1, Math.max(0, Math.floor(((e.clientX - r.left) / r.width) * n)))
+      const x = Math.min(Math.max(r.left + ((i + 0.5) / n) * r.width, 140), window.innerWidth - 140)
+      const below = r.top < 150
+      const y = below ? r.bottom : r.top
+      setHover((prev) =>
+        prev && prev.i === i && prev.x === x && prev.y === y && prev.below === below ? prev : { i, x, y, below },
+      )
+    }
+    const onLeave = () => setHover(null)
+    svg.addEventListener('mousemove', onMove)
+    svg.addEventListener('mouseleave', onLeave)
+    return () => {
+      svg.removeEventListener('mousemove', onMove)
+      svg.removeEventListener('mouseleave', onLeave)
+    }
+  }, [n])
 
   const m = hover ? months[hover.i] : null
   return (
     <>
-      {/* Hover-only readout mirroring the aggregate aria-label, as on the
-          fleet health strips. */}
-      {/* oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
       <svg
+        ref={svgRef}
         className="login-bars"
         viewBox={`0 0 ${n * SLOT_W} ${CHART_H}`}
         preserveAspectRatio="none"
         role="img"
         aria-label={`Sign-ins per month: ${months.map((mo) => `${monthLabel(mo, true)} ${mo.total}`).join(', ')}`}
-        onMouseMove={onMove}
-        onMouseLeave={() => setHover(null)}
       >
         {months.map((mo, i) => {
           const x = i * SLOT_W + (SLOT_W - BAR_W) / 2
@@ -108,6 +120,20 @@ function LoginBars({ months }: { months: LoginMonth[] }) {
           <span key={mo.month}>{monthLabel(mo, i === 0 || mo.month.endsWith('-01'))}</span>
         ))}
       </div>
+      <p className="sr-only">
+        {'Sign-ins by month: '}
+        {months
+          .map(
+            (mo) =>
+              `${monthLabel(mo, true)}: ${
+                mo.total === 0
+                  ? 'no sign-ins'
+                  : `${mo.total} total, ${mo.local} local, ${mo.oidc} SSO, ${mo.unique_users} unique ${mo.unique_users === 1 ? 'user' : 'users'}`
+              }`,
+          )
+          .join('; ')}
+        .
+      </p>
       {hover && m && (
         <div
           className={'map-tip strip-tip' + (hover.below ? ' strip-tip-below' : '')}

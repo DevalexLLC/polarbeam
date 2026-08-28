@@ -144,6 +144,40 @@ export function lossScaleCeiling(pointArrays: SeriesPoint[][]): number {
   return [5, 10, 25, 50, 100].find((ceiling) => ceiling >= target) ?? 100
 }
 
+// Per-series digest of the visible x range, feeding each chart's sr-only
+// text alternative. One entry per value column; nulls are skipped, an
+// all-null column yields the null summary.
+export interface SeriesSummary {
+  count: number
+  latest: number | null
+  min: number | null
+  max: number | null
+  avg: number | null
+}
+
+export function summarizeSeries(data: uPlot.AlignedData, range: { min: number; max: number } | null): SeriesSummary[] {
+  return data.slice(1).map((column) => {
+    let count = 0
+    let latest: number | null = null
+    let min = Number.POSITIVE_INFINITY
+    let max = Number.NEGATIVE_INFINITY
+    let sum = 0
+    for (let i = 0; i < column.length; i++) {
+      const x = data[0][i]
+      if (range && (x < range.min || x > range.max)) continue
+      const value = column[i]
+      if (value == null) continue
+      count++
+      latest = value
+      min = Math.min(min, value)
+      max = Math.max(max, value)
+      sum += value
+    }
+    if (count === 0) return { count: 0, latest: null, min: null, max: null, avg: null }
+    return { count, latest, min, max, avg: sum / count }
+  })
+}
+
 export function latestValueIndex(data: uPlot.AlignedData, range?: { min: number; max: number }): number | null {
   for (let i = data[0].length - 1; i >= 0; i--) {
     const x = data[0][i]

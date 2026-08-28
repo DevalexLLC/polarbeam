@@ -1,11 +1,4 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
-} from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { MAP_DOTS, MAP_VIEW_H, MAP_VIEW_W } from '../assets/mapGeo'
 import { fmtLatency } from '../format'
 import { projectMap } from '../geo'
@@ -69,7 +62,15 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
   const [viewport, setViewport] = useState<MapViewport>(FULL_MAP_VIEWPORT)
   const [dragging, setDragging] = useState(false)
   const [renderedMapWidth, setRenderedMapWidth] = useState(0)
+  // The zoom announcer is debounced: wheel and pinch stream viewport
+  // changes, and a polite live region firing on every frame reads as
+  // babble. Only the settled value, half a second after the last change,
+  // is announced.
+  const [announcedZoom, setAnnouncedZoom] = useState<number | null>(null)
   const svgRef = useRef<SVGSVGElement>(null)
+  const shellRef = useRef<HTMLDivElement>(null)
+  const cardRef = useRef<HTMLDivElement>(null)
+  const hintId = useId()
   const targetPixels = useMapTargetPixels()
   const targetRadius = mapHitRadius(targetPixels, renderedMapWidth || MAP_VIEW_W)
   const drag = useRef<{
@@ -182,10 +183,14 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
   }, [placed])
 
   // React registers wheel listeners as passive, which cannot stop the page
-  // from scrolling — the zoom handler must be attached natively.
+  // from scrolling — the zoom handler must be attached natively. It listens
+  // on the shell, not the svg: the marker buttons and the info card are
+  // HTML siblings layered over the svg, and a wheel over them must still
+  // zoom the map underneath.
   useEffect(() => {
+    const shell = shellRef.current
     const svg = svgRef.current
-    if (!svg) return
+    if (!shell || !svg) return
     const onWheel = (event: WheelEvent) => {
       // Alt/meta/shift-modified wheel belongs to the browser. Ctrl+wheel
       // stays: that is how a trackpad pinch reaches the page, and a pinch
@@ -211,9 +216,86 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
       interacted.current = true
       setViewport(next)
     }
-    svg.addEventListener('wheel', onWheel, { passive: false })
-    return () => svg.removeEventListener('wheel', onWheel)
+    shell.addEventListener('wheel', onWheel, { passive: false })
+    return () => shell.removeEventListener('wheel', onWheel)
   }, [placed.length])
+
+  // Keyboard and pointer handlers attach natively like the wheel listener:
+  // the svg is a plain labeled image to assistive technology (its keyboard
+  // affordance is described by the visible hint), and the delegated JSX
+  // handlers a noninteractive element cannot carry move here instead. The
+  // ref latch always dispatches to the latest render's closures, so
+  // gestures never re-attach mid-drag.
+  const handlerRef = useRef<{
+    keydown: (event: KeyboardEvent) => void
+    pointerdown: (event: PointerEvent) => void
+    pointermove: (event: PointerEvent) => void
+    pointerup: (event: PointerEvent) => void
+  } | null>(null)
+  useEffect(() => {
+    const svg = svgRef.current
+    if (!svg) return
+    svg.tabIndex = 0
+    const onKeyDown = (event: KeyboardEvent) => handlerRef.current?.keydown(event)
+    const onPointerDown = (event: PointerEvent) => handlerRef.current?.pointerdown(event)
+    const onPointerMove = (event: PointerEvent) => handlerRef.current?.pointermove(event)
+    const onPointerUp = (event: PointerEvent) => handlerRef.current?.pointerup(event)
+    svg.addEventListener('keydown', onKeyDown)
+    svg.addEventListener('pointerdown', onPointerDown)
+    svg.addEventListener('pointermove', onPointerMove)
+    svg.addEventListener('pointerup', onPointerUp)
+    svg.addEventListener('pointercancel', onPointerUp)
+    return () => {
+      svg.removeEventListener('keydown', onKeyDown)
+      svg.removeEventListener('pointerdown', onPointerDown)
+      svg.removeEventListener('pointermove', onPointerMove)
+      svg.removeEventListener('pointerup', onPointerUp)
+      svg.removeEventListener('pointercancel', onPointerUp)
+    }
+  }, [placed.length])
+
+  // The info card keep-open handlers (pointer or focus inside the card
+  // cancels the pending hover clear) are delegated from the shell so the
+  // card stays a pure live region with no JSX handlers of its own. The
+  // handlers only touch refs and stable setters, so mount-time closures
+  // cannot go stale.
+  useEffect(() => {
+    const shell = shellRef.current
+    if (!shell) return
+    const within = (t: EventTarget | null) => t instanceof Node && (cardRef.current?.contains(t) ?? false)
+    const onOver = (event: MouseEvent) => {
+      if (within(event.target)) cancelHoverClear()
+    }
+    const onOut = (event: MouseEvent) => {
+      if (within(event.target) && !within(event.relatedTarget)) scheduleHoverClear()
+    }
+    const onFocusIn = (event: FocusEvent) => {
+      if (within(event.target)) cancelHoverClear()
+    }
+    const onFocusOut = (event: FocusEvent) => {
+      if (within(event.target) && !within(event.relatedTarget)) scheduleHoverClear()
+    }
+    shell.addEventListener('mouseover', onOver)
+    shell.addEventListener('mouseout', onOut)
+    shell.addEventListener('focusin', onFocusIn)
+    shell.addEventListener('focusout', onFocusOut)
+    return () => {
+      shell.removeEventListener('mouseover', onOver)
+      shell.removeEventListener('mouseout', onOut)
+      shell.removeEventListener('focusin', onFocusIn)
+      shell.removeEventListener('focusout', onFocusOut)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [placed.length])
+
+  const zoomPercent = mapZoomPercent(viewport)
+  useEffect(() => {
+    // Only operator-driven changes announce: the mount-time auto-fit and
+    // fleet-swap refits are not zoom feedback anyone asked for.
+    if (!interacted.current) return
+    const timer = window.setTimeout(() => setAnnouncedZoom(zoomPercent), 500)
+    return () => window.clearTimeout(timer)
+  }, [zoomPercent])
 
   const missingStrip = unplaced.length > 0 && (
     // Fail loud: sites without coordinates never silently vanish, and they
@@ -265,7 +347,7 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
   const fitSites = () => setViewport(fitMapViewport(placed.map((site) => ({ x: site.anchorX, y: site.anchorY }))))
   // Pointer and wheel gestures need keyboard equivalents; the map itself is
   // the focus target now that there is no button toolbar.
-  const keyboardViewport = (event: ReactKeyboardEvent<SVGSVGElement>) => {
+  const keyboardViewport = (event: KeyboardEvent) => {
     if (event.target !== event.currentTarget) return
     // Modified combinations belong to the browser: Ctrl/Cmd+F is find,
     // Ctrl/Cmd +/-/0 is page zoom, Alt+arrows is history navigation.
@@ -308,12 +390,12 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
       interacted.current = true
     }
   }
-  const beginPointerPan = (event: ReactPointerEvent<SVGSVGElement>) => {
+  const beginPointerPan = (event: PointerEvent) => {
     if (event.button !== 0) return
     suppressBackgroundClick.current = false
     pointers.current.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY })
     try {
-      event.currentTarget.setPointerCapture(event.pointerId)
+      svgRef.current?.setPointerCapture(event.pointerId)
     } catch {
       // A pointer that already lifted cannot be captured; the pointerup
       // that follows cleans the gesture up normally.
@@ -341,7 +423,9 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
       moved: false,
     }
   }
-  const movePointerPan = (event: ReactPointerEvent<SVGSVGElement>) => {
+  const movePointerPan = (event: PointerEvent) => {
+    const svg = svgRef.current
+    if (!svg) return
     const tracked = pointers.current.get(event.pointerId)
     if (tracked) {
       tracked.clientX = event.clientX
@@ -349,7 +433,7 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
     }
     const gesture = pinch.current
     if (gesture && pointers.current.size >= 2) {
-      const bounds = event.currentTarget.getBoundingClientRect()
+      const bounds = svg.getBoundingClientRect()
       if (bounds.width === 0 || bounds.height === 0) return
       const [a, b] = [...pointers.current.values()]
       const distance = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)
@@ -372,7 +456,7 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
     }
     const start = drag.current
     if (!start || start.pointerID !== event.pointerId) return
-    const bounds = event.currentTarget.getBoundingClientRect()
+    const bounds = svg.getBoundingClientRect()
     if (bounds.width === 0 || bounds.height === 0) return
     const dx = ((event.clientX - start.clientX) / bounds.width) * start.viewport.width
     const dy = ((event.clientY - start.clientY) / bounds.height) * start.viewport.height
@@ -383,7 +467,7 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
     }
     setViewport(panMapViewport(start.viewport, -dx, -dy))
   }
-  const endPointerPan = (event: ReactPointerEvent<SVGSVGElement>) => {
+  const endPointerPan = (event: PointerEvent) => {
     pointers.current.delete(event.pointerId)
     if (pinch.current) {
       if (pointers.current.size >= 2) return
@@ -410,6 +494,14 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
     drag.current = null
     setDragging(false)
   }
+  // Re-latched every render so the native listeners above always call the
+  // closures over the current viewport and placement state.
+  handlerRef.current = {
+    keydown: keyboardViewport,
+    pointerdown: beginPointerPan,
+    pointermove: movePointerPan,
+    pointerup: endPointerPan,
+  }
   // The pinned site holds the info card open; hover previews another site.
   // The card anchors to the DISPLAY position, not the raw projection — a
   // decluttered bubble may sit a nudge away from its city, and the card
@@ -419,7 +511,6 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
   const shownPoint = shown ? { x: shown.x, y: shown.y } : null
   const shownStats = shown ? shown.topology.stats : null
   const shownSev = shown ? shown.topology.severity : null
-  const zoomPercent = mapZoomPercent(viewport)
   const shownLeft = shownPoint ? ((shownPoint.x - viewport.x) / viewport.width) * 100 : 0
   const shownTop = shownPoint ? ((shownPoint.y - viewport.y) / viewport.height) * 100 : 0
   const shownInViewport = shownLeft >= 0 && shownLeft <= 100 && shownTop >= 0 && shownTop <= 100
@@ -433,29 +524,21 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
   return (
     <>
       <span className="sr-only" role="status" aria-live="polite">
-        Map viewport at {zoomPercent}% zoom.
+        {announcedZoom == null ? '' : `Map viewport at ${announcedZoom}% zoom.`}
       </span>
-      <div className="worldmap-shell">
-        {/* The svg is the pan/zoom widget itself: drag and wheel gestures get
-            keyboard equivalents on the focused map, and no interactive ARIA
-            role describes a map viewport. */}
-        {/* oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
+      <div ref={shellRef} className="worldmap-shell">
+        {/* The svg is the pan/zoom surface: a labeled image whose drag and
+            wheel gestures have keyboard equivalents on the focused map
+            (native listeners, attached in the effect above), described by
+            the visible key hint. Site markers are the HTML buttons layered
+            over it, so browse mode reads them as ordinary buttons. */}
         <svg
           ref={svgRef}
           className={'worldmap' + (dragging ? ' map-dragging' : '')}
           viewBox={`${viewport.x} ${viewport.y} ${viewport.width} ${viewport.height}`}
-          role="application"
-          // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- keyboard pan/zoom needs a focusable map
-          tabIndex={0}
-          aria-label={`World map of ${placed.length} monitored ${placed.length === 1 ? 'site' : 'sites'}, ${zoomPercent}% zoom. Drag to pan and scroll to zoom, or focus the map and use the arrow keys to pan, plus and minus to zoom, F to fit all sites, and 0 to reset.`}
-          onKeyDown={keyboardViewport}
-          onPointerDown={beginPointerPan}
-          onPointerDownCapture={() => {
-            suppressBackgroundClick.current = false
-          }}
-          onPointerMove={movePointerPan}
-          onPointerUp={endPointerPan}
-          onPointerCancel={endPointerPan}
+          role="img"
+          aria-label={`World map of ${placed.length} monitored ${placed.length === 1 ? 'site' : 'sites'}, ${zoomPercent}% zoom.`}
+          aria-describedby={hintId}
         >
           <rect
             className="map-bg"
@@ -501,36 +584,19 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
               )
             })}
           </g>
+          {/* Purely decorative under the svg's role="img": the interactive
+              markers are the HTML buttons layered over the shell, which
+              also carry hover state back here via the hovered class. */}
           {placed.map((p) => {
             const { site: s, severity: sev } = p.topology
             const { x, y, r } = p
-            const title = `${s.display_name || s.name} · ${SEVERITY_LABEL[sev]}${s.location ? ` · ${s.location}` : ''}`
             return (
               <g
                 key={s.name}
-                className={`map-site sev-${sev}` + (pinned === s.name ? ' pinned' : '')}
-                role="button"
-                tabIndex={0}
-                aria-pressed={pinned === s.name}
-                aria-label={`${title}. Select to keep the site details open.`}
-                onClick={() => togglePin(s.name)}
-                onPointerDown={(event) => event.stopPropagation()}
-                onMouseEnter={() => hoverSite(s.name)}
-                onMouseLeave={scheduleHoverClear}
-                onFocus={() => {
-                  hoverSite(s.name)
-                  setViewport((current) => revealMapPoint(current, { x, y }))
-                }}
-                onBlur={scheduleHoverClear}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault()
-                    togglePin(s.name)
-                  }
-                }}
+                className={
+                  `map-site sev-${sev}` + (pinned === s.name ? ' pinned' : '') + (hovered === s.name ? ' hovered' : '')
+                }
               >
-                <title>{title}</title>
-                <circle className="map-site-hit" cx={x} cy={y} r={p.hitR} />
                 <circle className="map-bubble" cx={x} cy={y} r={r} />
                 <circle className="map-bubble-core" cx={x} cy={y} r={3} />
                 {pinned === s.name && <circle className="map-selection" cx={x} cy={y} r={r + 3.5} />}
@@ -538,6 +604,49 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
             )
           })}
         </svg>
+        <div className="map-markers">
+          {placed.map((p) => {
+            const { site: s, severity: sev } = p.topology
+            const { x, y } = p
+            const title = `${s.display_name || s.name} · ${SEVERITY_LABEL[sev]}${s.location ? ` · ${s.location}` : ''}`
+            // The button is the hit target the svg hit circle used to be:
+            // at least the coarse-pointer touch size, grown to cover a
+            // bubble the zoom has rendered larger.
+            const bubblePx = ((2 * p.r) / viewport.width) * (renderedMapWidth || MAP_VIEW_W)
+            const sizePx = Math.max(targetPixels, Math.ceil(bubblePx) + 8)
+            return (
+              <button
+                key={s.name}
+                type="button"
+                className={`map-marker sev-${sev}` + (pinned === s.name ? ' pinned' : '')}
+                style={{
+                  left: `${((x - viewport.x) / viewport.width) * 100}%`,
+                  top: `${((y - viewport.y) / viewport.height) * 100}%`,
+                  width: sizePx,
+                  height: sizePx,
+                }}
+                aria-pressed={pinned === s.name}
+                aria-label={`${title}. Select to keep the site details open.`}
+                onClick={() => togglePin(s.name)}
+                onMouseEnter={() => hoverSite(s.name)}
+                onMouseLeave={scheduleHoverClear}
+                onFocus={(event) => {
+                  // Focusing a clipped off-viewport marker makes the
+                  // browser scroll the overflow-hidden marker layer; undo
+                  // that and recenter the viewport on the site instead.
+                  const layer = event.currentTarget.parentElement
+                  if (layer) {
+                    layer.scrollLeft = 0
+                    layer.scrollTop = 0
+                  }
+                  hoverSite(s.name)
+                  setViewport((current) => revealMapPoint(current, { x, y }))
+                }}
+                onBlur={scheduleHoverClear}
+              />
+            )
+          })}
+        </div>
         <span className="map-zoom-readout" aria-hidden="true">
           {zoomPercent}%
         </span>
@@ -564,25 +673,18 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
           shownStats &&
           shownSev &&
           shownInViewport && (
-            // The handlers below keep this hover card open while the pointer or
-            // keyboard focus is inside it; they add no interaction of their own,
-            // so the card stays a live region rather than becoming a control.
-            // oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
+            // Pointer or keyboard focus inside this card keeps it open (the
+            // shell-delegated listeners in the effect above cancel the
+            // pending hover clear), so the card stays a pure live region
+            // rather than becoming a control.
             <div
+              ref={cardRef}
               className={'map-tip' + (shownLeft > 72 ? ' map-tip-left' : '')}
               style={{
                 left: `${shownLeft}%`,
                 top: `${shownTop}%`,
               }}
               role="status"
-              onMouseEnter={cancelHoverClear}
-              onMouseLeave={scheduleHoverClear}
-              // Focus/blur bubble from the pair links, so keyboard entry
-              // cancels the pending clear exactly like mouse entry — without
-              // this, tabbing from the last bubble into the card races the
-              // 140 ms clear and the focused link can unmount mid-tab.
-              onFocus={cancelHoverClear}
-              onBlur={scheduleHoverClear}
             >
               <div className="map-tip-head">
                 <b>{shownSite.name.toUpperCase()}</b>
@@ -645,6 +747,10 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
           )}
       </div>
       {legend}
+      <p className="hint map-keys-hint" id={hintId}>
+        Focus the map, then pan with the arrow keys, zoom with + and −, press F to fit all sites, 0 to reset. Drag to
+        pan; scroll or pinch to zoom. Tab moves through site markers.
+      </p>
       {missingStrip}
     </>
   )

@@ -82,25 +82,6 @@ test('jsx-a11y lint suppressions match the known baseline rule for rule', () => 
       'jsx-a11y/no-noninteractive-element-interactions',
       'jsx-a11y/no-static-element-interactions',
     ],
-    // Pointer-only slot drill-down, fix tracked by #105.
-    'components/HealthStrip.tsx': [
-      'jsx-a11y/click-events-have-key-events',
-      'jsx-a11y/no-noninteractive-element-interactions',
-    ],
-    // Pointer-only chart interaction, fix tracked by #105.
-    'components/IncidentTimeline.tsx': [
-      'jsx-a11y/click-events-have-key-events',
-      'jsx-a11y/no-noninteractive-element-interactions',
-    ],
-    // Pointer-only hover readout on the sign-ins chart svg (same class of
-    // gap as HealthStrip), fix tracked by #105.
-    'components/UsersPanel.tsx': ['jsx-a11y/no-noninteractive-element-interactions'],
-    // Focusable map svg + tip keep-open handlers, fix tracked by #105.
-    'components/WorldMap.tsx': [
-      'jsx-a11y/no-noninteractive-element-interactions',
-      'jsx-a11y/no-noninteractive-element-interactions',
-      'jsx-a11y/no-noninteractive-tabindex',
-    ],
     // Deliberate: autofocus on the single-purpose login form.
     'views/Login.tsx': ['jsx-a11y/no-autofocus'],
   })
@@ -168,6 +149,42 @@ test('composite widgets keep their menu, group, and dialog semantics', () => {
   }
   const mutation = readFileSync(new URL('../src/settingsMutation.tsx', import.meta.url), 'utf8')
   assert.match(mutation, /aria-labelledby=\{confirmTitleID\}/)
+})
+
+// #105's keyboard-visualization contract: the slot-grid strips (health
+// strip, incident timeline) are roving-tabindex button composites over
+// decorative svgs; the chart host carries a keyboard investigation path
+// (pure range math from chartRange.ts) plus an sr-only series digest; the
+// world map is a labeled image with native keyboard/pointer listeners,
+// HTML marker buttons, a visible key hint, and a debounced zoom announcer;
+// the sign-ins chart pairs its hover readout with an sr-only breakdown.
+test('charts, strips, and the map keep their keyboard access contract', () => {
+  for (const file of ['../src/components/HealthStrip.tsx', '../src/components/IncidentTimeline.tsx']) {
+    const strip = readFileSync(new URL(file, import.meta.url), 'utf8')
+    assert.match(strip, /role="group"/, `${file} wraps its slots in a labelled group`)
+    assert.match(strip, /aria-hidden="true"/, `${file} svg is decorative`)
+    assert.match(strip, /aria-pressed=/, `${file} slot buttons expose their toggle state`)
+    assert.match(strip, /e\.key === 'ArrowLeft'/, `${file} roves focus with the arrow keys`)
+    assert.match(strip, /tabIndex=\{i === focusI \? 0 : -1\}/, `${file} keeps one roving tab stop`)
+  }
+
+  const chart = readFileSync(new URL('../src/components/Chart.tsx', import.meta.url), 'utf8')
+  assert.match(chart, /host\.tabIndex = 0/)
+  assert.match(chart, /addEventListener\('keydown', onKeyDown\)/)
+  assert.match(chart, /zoomChartRange\(/)
+  assert.match(chart, /panChartRange\(/)
+  assert.match(chart, /className="sr-only"/)
+  assert.match(chart, /role="status"/)
+
+  const map = readFileSync(new URL('../src/components/WorldMap.tsx', import.meta.url), 'utf8')
+  assert.doesNotMatch(map, /role="application"/)
+  assert.match(map, /role="img"/)
+  assert.match(map, /className=\{`map-marker sev-\$\{sev\}`/)
+  assert.match(map, /aria-describedby=\{hintId\}/)
+  assert.match(map, /setTimeout\(\(\) => setAnnouncedZoom\(zoomPercent\), 500\)/)
+
+  const users = readFileSync(new URL('../src/components/UsersPanel.tsx', import.meta.url), 'utf8')
+  assert.match(users, /Sign-ins by month: /)
 })
 
 test('global accessibility scaffolding stays in place', () => {
