@@ -41,7 +41,12 @@ themes:
    Tab through the changed views. Every visible control must be reachable,
    operable (Enter/Space, arrows where a widget defines them, Escape to
    dismiss), and show the focus outline. Dialogs must trap focus and return
-   it to their trigger on close.
+   it to their trigger on close. The composite visualizations have their
+   own keyboard contracts: health-strip and incident-timeline slots are one
+   roving tab stop (arrows/Home/End move, Enter/Space pins or filters),
+   charts pan with arrows and zoom with +/− (Escape/0 returns live), and
+   the map pans/zooms from its focused surface (arrows, +/−, F, 0) with
+   each site marker a separate button.
 2. **Assistive-technology scan.** Run ANDI (section508.gov's bookmarklet)
    or the axe DevTools browser extension against the changed views; no new
    WCAG 2.1 AA violations.
@@ -65,10 +70,33 @@ themes:
 - `components/DataTable.tsx` suppresses two interaction rules once for
   the focus-capture bookkeeping on the table region — a listener, not an
   interaction; the rules cannot tell the difference.
-- The remaining suppressions (map, health strip, incident timeline, and
-  the users panel's sign-ins chart) are pointer-only visualization gaps
-  scheduled for issue #105; each is inventoried in the test baseline and
-  justified by a comment at the suppression site.
+
+## Visualization patterns
+
+Issue #105 removed the last pointer-only surfaces with three deliberate
+patterns, pinned by the source tests:
+
+- **Slot grids** (health strips, incident timeline): the svg is decorative
+  (`aria-hidden`) under a `role="group"` wrapper carrying the aggregate
+  label; each slot is a real transparent `<button>` layered over it with a
+  roving tabindex, so a table of strips stays one tab stop each. Hover and
+  focus drive the same `role="status"` readout card.
+- **Focusable pan/zoom surfaces** (chart hosts, the map svg): keyboard and
+  pointer listeners attach natively in effects — the same idiom
+  `DisclosureMenu.tsx` documents — because a noninteractive element cannot
+  carry delegated JSX handlers without tripping the lint rules it should
+  trip on real gaps. Charts expose their plotted series as an sr-only
+  per-series digest of the visible range (not a live region; zoom changes
+  are announced through the existing status span). The map is a labelled
+  `role="img"` with its site markers as HTML buttons layered above,
+  its key bindings named in a visible hint the svg is `aria-describedby`-
+  linked to, and its zoom announcer debounced so wheel and pinch streams
+  announce only the settled value. Focus-driven readout cards may announce
+  after the button's own label; that double announcement is accepted.
+- **Hover-only readouts** (the users panel's sign-ins chart): the svg
+  keeps its aggregate `role="img"` label and pairs the pointer readout
+  with an sr-only per-month breakdown instead of synthetic tab stops —
+  there is no action to activate.
 
 ## Conformance reporting
 

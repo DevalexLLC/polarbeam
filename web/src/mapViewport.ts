@@ -5,17 +5,6 @@ export interface MapPoint {
   y: number
 }
 
-export interface MapLabelPoint extends MapPoint {
-  id: string
-}
-
-export interface MapLabelPlacement {
-  id: string
-  left: number
-  top: number
-  align: 'left' | 'right'
-}
-
 export interface MapViewport {
   x: number
   y: number
@@ -151,42 +140,4 @@ export function mapZoomPercent(view: MapViewport): number {
 export function mapHitRadius(targetPixels: number, renderedMapWidth: number): number {
   if (!Number.isFinite(renderedMapWidth) || renderedMapWidth <= 0) return targetPixels / 2
   return (targetPixels / 2) * (MAP_VIEW_W / renderedMapWidth)
-}
-
-// Labels use two deterministic vertical tracks (left- and right-opening)
-// so a cluster of unhealthy markers cannot paint unreadable text on top of
-// itself. The leader layer connects any shifted label back to its marker.
-export function layoutMapLabels(points: readonly MapLabelPoint[], view: MapViewport): MapLabelPlacement[] {
-  const visible = points
-    .map((point) => ({
-      id: point.id,
-      left: ((point.x - view.x) / view.width) * 100,
-      desiredTop: ((point.y - view.y) / view.height) * 100,
-      align: point.x < view.x + view.width / 2 ? ('left' as const) : ('right' as const),
-    }))
-    .filter((point) => point.left >= 0 && point.left <= 100 && point.desiredTop >= 0 && point.desiredTop <= 100)
-
-  const placements: MapLabelPlacement[] = []
-  for (const align of ['left', 'right'] as const) {
-    const track = visible
-      .filter((point) => point.align === align)
-      // oxlint-disable-next-line unicorn/no-array-sort -- sorting a fresh filtered array
-      .sort((a, b) => a.desiredTop - b.desiredTop || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-    if (track.length === 0) continue
-    const gap = Math.min(12, 92 / Math.max(1, track.length - 1))
-    let previous = 4 - gap
-    const laidOut = track.map((point) => {
-      const top = Math.max(4, point.desiredTop, previous + gap)
-      previous = top
-      return { id: point.id, left: point.left, top, align }
-    })
-    if (laidOut.at(-1)!.top > 96) {
-      for (let index = laidOut.length - 1; index >= 0; index--) {
-        const ceiling = index === laidOut.length - 1 ? 96 : laidOut[index + 1].top - gap
-        laidOut[index].top = Math.min(laidOut[index].top, ceiling)
-      }
-    }
-    placements.push(...laidOut)
-  }
-  return placements
 }

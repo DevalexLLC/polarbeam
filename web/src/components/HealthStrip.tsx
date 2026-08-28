@@ -39,6 +39,17 @@ function probeLabel(g: AgentBucketFailureGroup): string {
   return g.dst_site ?? g.target ?? 'deleted target'
 }
 
+// The card anchors to a slot button's center, clamped so it stays on
+// screen at the viewport edges; it flips below the strip when a scrolled
+// row leaves no headroom above.
+function cardAnchor(el: HTMLElement): { x: number; y: number; below: boolean } {
+  const r = el.getBoundingClientRect()
+  const x = Math.min(Math.max(r.left + r.width / 2, 140), window.innerWidth - 140)
+  const below = r.top < 150
+  const y = below ? r.bottom : r.top
+  return { x, y, below }
+}
+
 // One series' 24 h as a segmented bar strip (hand-rolled SVG — uPlot is for
 // real charts). Slots align to bucket boundaries ending at the current
 // bucket; a slot with no samples renders muted, never as success. Hovering
@@ -46,14 +57,19 @@ function probeLabel(g: AgentBucketFailureGroup): string {
 // local time window, state, and counts. The card is fixed-position because
 // strips sit inside scroll containers that would clip an absolute child.
 //
-// With fetchSlotDetail wired, clicking a degraded/down slot pins the card
-// and fills it with that bucket's failure breakdown — the "why" behind the
-// slot's color. Only then is the card interactive (the error text must be
-// selectable); the hover readout stays pointer-inert, so the map card's
-// delayed-clear persistence dance is still not needed — a pin is held by
-// state, not by pointer position. Slot drill-down is a pointer refinement
-// of the hover readout; the svg keeps its aggregate aria-label and the
-// card's role="status" announces the loading→loaded transition.
+// With fetchSlotDetail wired, activating a degraded/down slot pins the
+// card and fills it with that bucket's failure breakdown — the "why"
+// behind the slot's color. Only then is the card interactive (the error
+// text must be selectable); the hover readout stays pointer-inert, so the
+// map card's delayed-clear persistence dance is still not needed — a pin
+// is held by state, not by pointer position.
+//
+// Each slot is a real transparent <button> over the aria-hidden svg, in a
+// role="group" wrapper carrying the aggregate label. One tab stop per
+// strip (fleet tables render dozens): a roving tabindex starts on the
+// newest slot, arrows and Home/End move it, and hover or focus drive the
+// same readout card, whose role="status" announces the loading→loaded
+// transition.
 export default function HealthStrip({
   buckets,
   bucketS,
@@ -74,8 +90,9 @@ export default function HealthStrip({
   const [detail, setDetail] = useState<{ t: number; data: AgentBucketFailuresResponse | null; error: string } | null>(
     null,
   )
-  const svgRef = useRef<SVGSVGElement>(null)
+  const wrapRef = useRef<HTMLDivElement>(null)
   const cardRef = useRef<HTMLDivElement>(null)
+  const [focusI, setFocusI] = useState(SLOTS - 1)
   const byStart = new Map(buckets.map((b) => [b.t, b]))
   // Local mode only: a UTC-offset change inside the window means a DST
   // transition — label every slot with the zone that day so repeated
@@ -97,43 +114,42 @@ export default function HealthStrip({
     slots.push({ cls, range, b })
   }
 
-  const slotAt = (e: React.MouseEvent<SVGSVGElement>) => {
-    const r = e.currentTarget.getBoundingClientRect()
-    const i = Math.min(SLOTS - 1, Math.max(0, Math.floor(((e.clientX - r.left) / r.width) * SLOTS)))
-    // Clamp so the centered card stays on screen at the viewport edges;
-    // flip it below the strip when a scrolled row leaves no headroom above.
-    const x = Math.min(Math.max(r.left + ((i + 0.5) / SLOTS) * r.width, 140), window.innerWidth - 140)
-    const below = r.top < 150
-    const y = below ? r.bottom : r.top
-    return { i, x, y, below }
-  }
-
-  const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
+  const showSlot = (i: number, el: HTMLElement) => {
     if (pinned) return // the pinned card owns the readout until dismissed
-    const p = slotAt(e)
-    setHover((prev) =>
-      prev && prev.i === p.i && prev.x === p.x && prev.y === p.y && prev.below === p.below ? prev : p,
-    )
+    setHover({ i, ...cardAnchor(el) })
   }
 
-  // Clicking a degraded/down slot pins its breakdown; clicking the pinned
-  // slot again, or any slot with nothing to explain, unpins. Propagation
-  // stops so a strip click can never double as the fleet row's navigate
-  // (the row's closest() guard is the other half of that belt).
-  const onClick = (e: React.MouseEvent<SVGSVGElement>) => {
+  // Activating a degraded/down slot pins its breakdown; activating the
+  // pinned slot again, or any slot with nothing to explain, unpins.
+  // Propagation stops so a slot click can never double as the fleet row's
+  // navigate (the row's closest() guard is the other half of that belt).
+  const onSlotClick = (i: number, e: React.MouseEvent<HTMLButtonElement>) => {
     if (!fetchSlotDetail) return
     e.stopPropagation()
-    const p = slotAt(e)
-    const cls = slots[p.i].cls
-    const t = endS - (SLOTS - p.i) * bucketS
+    const cls = slots[i].cls
+    const t = endS - (SLOTS - i) * bucketS
     if ((cls !== 'degraded' && cls !== 'down') || pinned?.t === t) {
       setPinned(null)
       return
     }
+    const p = cardAnchor(e.currentTarget)
     // Re-clamp for the pinned card's wider max-width (22rem vs the hover
     // card's 16rem) so a slot near the viewport edge doesn't clip it.
     setPinned({ t, x: Math.min(Math.max(p.x, 190), window.innerWidth - 190), y: p.y, below: p.below })
     setHover(null)
+  }
+
+  // One tab stop per strip: arrows and Home/End rove focus across slots.
+  const onSlotKeyDown = (i: number, e: React.KeyboardEvent<HTMLButtonElement>) => {
+    let j: number
+    if (e.key === 'ArrowLeft') j = Math.max(0, i - 1)
+    else if (e.key === 'ArrowRight') j = Math.min(SLOTS - 1, i + 1)
+    else if (e.key === 'Home') j = 0
+    else if (e.key === 'End') j = SLOTS - 1
+    else return
+    e.preventDefault()
+    setFocusI(j)
+    wrapRef.current?.querySelectorAll<HTMLButtonElement>('.fleet-strip-slot')[j]?.focus()
   }
 
   // Load the pinned slot's breakdown; a re-pin mid-flight drops the stale
@@ -170,7 +186,7 @@ export default function HealthStrip({
     }
     const onDocClick = (e: MouseEvent) => {
       const t = e.target as Node
-      if (!cardRef.current?.contains(t) && !svgRef.current?.contains(t)) setPinned(null)
+      if (!cardRef.current?.contains(t) && !wrapRef.current?.contains(t)) setPinned(null)
     }
     const onScroll = () => setPinned(null)
     document.addEventListener('keydown', onKey)
@@ -196,26 +212,51 @@ export default function HealthStrip({
   const pct = slot?.b && slot.b.samples > 0 ? (100 * slot.b.ok) / slot.b.samples : null
   return (
     <>
-      {/* Pointer-gained readout: the svg keeps its aggregate aria-label; the
-          card mirrors what a sighted user gains, as on the world map. The
-          slot drill-down is likewise pointer-only for now (per-slot focus
-          targets are the eventual fix), so no key handler either. */}
-      {/* oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/click-events-have-key-events */}
-      <svg
-        ref={svgRef}
-        className={'fleet-strip' + (fetchSlotDetail ? ' fleet-strip-clickable' : '')}
-        viewBox={`0 0 ${SLOTS * 2} 12`}
-        preserveAspectRatio="none"
-        role="img"
+      <div
+        ref={wrapRef}
+        className={'fleet-strip-wrap' + (fetchSlotDetail ? ' fleet-strip-clickable' : '')}
+        role="group"
         aria-label={label}
-        onMouseMove={onMove}
-        onMouseLeave={() => setHover(null)}
-        onClick={onClick}
       >
-        {slots.map((s, i) => (
-          <rect key={i} className={'fleet-strip-seg strip-' + s.cls} x={i * 2} y={1} width={1.4} height={10} rx={0.7} />
-        ))}
-      </svg>
+        <svg className="fleet-strip" viewBox={`0 0 ${SLOTS * 2} 12`} preserveAspectRatio="none" aria-hidden="true">
+          {slots.map((s, i) => (
+            <rect
+              key={i}
+              className={'fleet-strip-seg strip-' + s.cls}
+              x={i * 2}
+              y={1}
+              width={1.4}
+              height={10}
+              rx={0.7}
+            />
+          ))}
+        </svg>
+        {slots.map((s, i) => {
+          const t = endS - (SLOTS - i) * bucketS
+          const pinnable = fetchSlotDetail != null && (s.cls === 'degraded' || s.cls === 'down')
+          return (
+            <button
+              key={i}
+              type="button"
+              className="fleet-strip-slot"
+              style={{ left: `${(i / SLOTS) * 100}%`, width: `${100 / SLOTS}%` }}
+              tabIndex={i === focusI ? 0 : -1}
+              aria-label={`${s.range}: ${SLOT_LABEL[s.cls]}${
+                s.b && s.b.samples > 0
+                  ? `, ${s.b.ok} of ${s.b.samples} ${s.b.samples === 1 ? 'probe' : 'probes'} ok`
+                  : ''
+              }`}
+              aria-pressed={pinnable ? pinned?.t === t : undefined}
+              onClick={(e) => onSlotClick(i, e)}
+              onKeyDown={(e) => onSlotKeyDown(i, e)}
+              onMouseEnter={(e) => showSlot(i, e.currentTarget)}
+              onMouseLeave={() => setHover(null)}
+              onFocus={(e) => showSlot(i, e.currentTarget)}
+              onBlur={() => setHover(null)}
+            />
+          )
+        })}
+      </div>
       {active && slot && (
         <div
           ref={cardRef}

@@ -546,6 +546,7 @@ export default function PairDetail({
             <Chart
               options={mkOptions(chart, axisLabel, withPctl, lossCeiling)}
               data={chartData}
+              label={`${title} ${metric} chart`}
               contextKey={[a, b, net, win, metric, chart].join('\u0000')}
               empty={empty}
             />

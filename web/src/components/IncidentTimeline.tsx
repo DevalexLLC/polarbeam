@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useTimezone } from '../timezone'
 import type { OutageEvent, Window } from '../types'
 
@@ -155,9 +155,12 @@ function slotTotal(s: Slot): number {
 // (resolved).
 // Heights use sqrt scaling: outage counts are heavy-tailed, and one
 // agent-offline cascade would flatten every other bar under linear.
-// Hovering shows a HealthStrip-style fixed-position readout; clicking
-// selects the slice (parent-owned, time-addressed) to filter the groups
-// card below — no pin machinery, so none of HealthStrip's dismissal dance.
+// Each slice is a real transparent <button> over the aria-hidden svg (the
+// HealthStrip composite: role="group" wrapper with the aggregate label,
+// one roving tab stop, arrows and Home/End moving it). Hover or focus
+// shows a fixed-position readout; activation selects the slice
+// (parent-owned, time-addressed) to filter the groups card below — no pin
+// machinery, so none of HealthStrip's dismissal dance.
 export default function IncidentTimeline({
   events,
   win,
@@ -174,6 +177,8 @@ export default function IncidentTimeline({
   const { mode } = useTimezone()
   const utc = mode === 'utc'
   const [hover, setHover] = useState<{ i: number; x: number; y: number; below: boolean } | null>(null)
+  const [focusI, setFocusI] = useState(GRID_SLOTS - 1)
+  const wrapRef = useRef<HTMLDivElement>(null)
   const grid = timelineGrid(win, nowMs)
   const { startMs, endMs, bucketMs } = grid
   const withZone = gridWithZone(grid, win, utc)
@@ -219,31 +224,29 @@ export default function IncidentTimeline({
     return { slots: built, maxTotal: Math.max(1, busiest), peak: busiest }
   }, [events, startMs, bucketMs, nowMs])
 
-  const slotAt = (e: React.MouseEvent<SVGSVGElement>) => {
-    const r = e.currentTarget.getBoundingClientRect()
-    const i = Math.min(GRID_SLOTS - 1, Math.max(0, Math.floor(((e.clientX - r.left) / r.width) * GRID_SLOTS)))
-    // Clamp so the centered card stays on screen at the viewport edges;
-    // flip it below the chart when a scrolled page leaves no headroom
-    // above. The threshold must cover the card's tallest content (wrapped
-    // range + pill + captions), not HealthStrip's shorter 150.
-    const x = Math.min(Math.max(r.left + ((i + 0.5) / GRID_SLOTS) * r.width, 140), window.innerWidth - 140)
+  // The card anchors to a slice button's center, clamped so it stays on
+  // screen at the viewport edges; it flips below the chart when a scrolled
+  // page leaves no headroom above. The threshold must cover the card's
+  // tallest content (wrapped range + pill + captions), not HealthStrip's
+  // shorter 150.
+  const showSlot = (i: number, el: HTMLElement) => {
+    const r = el.getBoundingClientRect()
+    const x = Math.min(Math.max(r.left + r.width / 2, 140), window.innerWidth - 140)
     const below = r.top < 260
-    const y = below ? r.bottom : r.top
-    return { i, x, y, below }
+    setHover({ i, x, y: below ? r.bottom : r.top, below })
   }
 
-  const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
-    const p = slotAt(e)
-    setHover((prev) =>
-      prev && prev.i === p.i && prev.x === p.x && prev.y === p.y && prev.below === p.below ? prev : p,
-    )
-  }
-
-  // Clicking toggles the slice filter; empty slices are selectable too —
-  // showing the honest empty state beats a dead click.
-  const onClick = (e: React.MouseEvent<SVGSVGElement>) => {
-    const t = slots[slotAt(e).i].t
-    onSelect(t === selected ? null : t)
+  // One tab stop for the timeline: arrows and Home/End rove focus.
+  const onSlotKeyDown = (i: number, e: React.KeyboardEvent<HTMLButtonElement>) => {
+    let j: number
+    if (e.key === 'ArrowLeft') j = Math.max(0, i - 1)
+    else if (e.key === 'ArrowRight') j = Math.min(GRID_SLOTS - 1, i + 1)
+    else if (e.key === 'Home') j = 0
+    else if (e.key === 'End') j = GRID_SLOTS - 1
+    else return
+    e.preventDefault()
+    setFocusI(j)
+    wrapRef.current?.querySelectorAll<HTMLButtonElement>('.itl-slot')[j]?.focus()
   }
 
   const ariaLabel =
@@ -263,82 +266,101 @@ export default function IncidentTimeline({
     : null
   return (
     <>
-      {/* Pointer-gained readout mirroring the aggregate aria-label, as on
-          the fleet health strips; per-slot focus targets are the eventual
-          fix for keyboard selection (the clear-filter chip in the groups
-          card keeps an applied filter keyboard-recoverable meanwhile). */}
-      {/* oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/click-events-have-key-events */}
-      <svg
-        className="incident-timeline"
-        viewBox={`0 0 ${GRID_SLOTS * SLOT_W} ${CHART_H}`}
-        preserveAspectRatio="none"
-        role="img"
-        aria-label={ariaLabel}
-        onMouseMove={onMove}
-        onMouseLeave={() => setHover(null)}
-        onClick={onClick}
-      >
-        {slots.map((s) => {
-          const i = (s.t - startMs) / bucketMs
-          const x = i * SLOT_W + (SLOT_W - BAR_W) / 2
-          const open = s.openOffline + s.openProbe + s.openDegraded
-          const res = s.resOffline + s.resProbe + s.resDegraded
-          const total = open + res
-          const isSelected = selected === s.t
-          const backdrop = isSelected && (
-            <rect className="itl-slot-selected" x={i * SLOT_W} y={0} width={SLOT_W} height={CHART_H} />
-          )
-          if (total === 0)
+      <div ref={wrapRef} className="itl-wrap" role="group" aria-label={ariaLabel}>
+        <svg
+          className="incident-timeline"
+          viewBox={`0 0 ${GRID_SLOTS * SLOT_W} ${CHART_H}`}
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        >
+          {slots.map((s) => {
+            const i = (s.t - startMs) / bucketMs
+            const x = i * SLOT_W + (SLOT_W - BAR_W) / 2
+            const open = s.openOffline + s.openProbe + s.openDegraded
+            const res = s.resOffline + s.resProbe + s.resDegraded
+            const total = open + res
+            const isSelected = selected === s.t
+            const backdrop = isSelected && (
+              <rect className="itl-slot-selected" x={i * SLOT_W} y={0} width={SLOT_W} height={CHART_H} />
+            )
+            if (total === 0)
+              return (
+                <g key={s.t}>
+                  {backdrop}
+                  <rect className="itl-bar-zero" x={x} y={BASELINE - 1} width={BAR_W} height={1} />
+                </g>
+              )
+            const h = (MAX_BAR * Math.sqrt(total)) / Math.sqrt(maxTotal)
+            // Stack by kind, mildest at the baseline — degraded probes
+            // (warn), probe failures (crit), agent outages (down) — each kind
+            // solid (open) under muted (resolved), so a wide bucket holding
+            // several kinds still shows its mix instead of only the worst.
+            // Proportional split, floored so a small segment stays visible;
+            // the 1-unit surface gap separates the kind blocks only (the
+            // solid→muted edge already marks the state boundary within a
+            // kind).
+            const segs = [
+              { n: s.openDegraded, kind: 'warn', cls: 'itl-bar-open sev-warn' },
+              { n: s.resDegraded, kind: 'warn', cls: 'itl-bar-resolved sev-warn' },
+              { n: s.openProbe, kind: 'crit', cls: 'itl-bar-open sev-crit' },
+              { n: s.resProbe, kind: 'crit', cls: 'itl-bar-resolved sev-crit' },
+              { n: s.openOffline, kind: 'down', cls: 'itl-bar-open sev-down' },
+              { n: s.resOffline, kind: 'down', cls: 'itl-bar-resolved sev-down' },
+            ].filter((seg) => seg.n > 0)
+            const selCls = isSelected ? ' itl-bar-selected' : ''
+            const rects = []
+            let y = BASELINE
+            for (let j = 0; j < segs.length; j++) {
+              if (j > 0 && segs[j].kind !== segs[j - 1].kind) y -= 1
+              const segH = Math.max((h * segs[j].n) / total, 1.5)
+              y -= segH
+              rects.push(
+                <rect
+                  key={segs[j].cls}
+                  className={segs[j].cls + selCls}
+                  x={x}
+                  y={y}
+                  width={BAR_W}
+                  height={segH}
+                  rx={1}
+                />,
+              )
+            }
             return (
               <g key={s.t}>
                 {backdrop}
-                <rect className="itl-bar-zero" x={x} y={BASELINE - 1} width={BAR_W} height={1} />
+                {rects}
               </g>
             )
-          const h = (MAX_BAR * Math.sqrt(total)) / Math.sqrt(maxTotal)
-          // Stack by kind, mildest at the baseline — degraded probes
-          // (warn), probe failures (crit), agent outages (down) — each kind
-          // solid (open) under muted (resolved), so a wide bucket holding
-          // several kinds still shows its mix instead of only the worst.
-          // Proportional split, floored so a small segment stays visible;
-          // the 1-unit surface gap separates the kind blocks only (the
-          // solid→muted edge already marks the state boundary within a
-          // kind).
-          const segs = [
-            { n: s.openDegraded, kind: 'warn', cls: 'itl-bar-open sev-warn' },
-            { n: s.resDegraded, kind: 'warn', cls: 'itl-bar-resolved sev-warn' },
-            { n: s.openProbe, kind: 'crit', cls: 'itl-bar-open sev-crit' },
-            { n: s.resProbe, kind: 'crit', cls: 'itl-bar-resolved sev-crit' },
-            { n: s.openOffline, kind: 'down', cls: 'itl-bar-open sev-down' },
-            { n: s.resOffline, kind: 'down', cls: 'itl-bar-resolved sev-down' },
-          ].filter((seg) => seg.n > 0)
-          const selCls = isSelected ? ' itl-bar-selected' : ''
-          const rects = []
-          let y = BASELINE
-          for (let j = 0; j < segs.length; j++) {
-            if (j > 0 && segs[j].kind !== segs[j - 1].kind) y -= 1
-            const segH = Math.max((h * segs[j].n) / total, 1.5)
-            y -= segH
-            rects.push(
-              <rect
-                key={segs[j].cls}
-                className={segs[j].cls + selCls}
-                x={x}
-                y={y}
-                width={BAR_W}
-                height={segH}
-                rx={1}
-              />,
-            )
-          }
+          })}
+        </svg>
+        {slots.map((s, i) => {
+          const open = s.openOffline + s.openProbe + s.openDegraded
+          const res = s.resOffline + s.resProbe + s.resDegraded
+          const total = open + res
           return (
-            <g key={s.t}>
-              {backdrop}
-              {rects}
-            </g>
+            <button
+              key={s.t}
+              type="button"
+              className="itl-slot"
+              style={{ left: `${(i / GRID_SLOTS) * 100}%`, width: `${100 / GRID_SLOTS}%` }}
+              tabIndex={i === focusI ? 0 : -1}
+              aria-label={`${bucketRangeLabel(s.t, bucketMs, win, utc, withZone, withYear)}: ${
+                total === 0
+                  ? 'no incidents'
+                  : `${total} ${total === 1 ? 'incident' : 'incidents'}, ${open} open, ${res} resolved`
+              }`}
+              aria-pressed={selected === s.t}
+              onClick={() => onSelect(s.t === selected ? null : s.t)}
+              onKeyDown={(e) => onSlotKeyDown(i, e)}
+              onMouseEnter={(e) => showSlot(i, e.currentTarget)}
+              onMouseLeave={() => setHover(null)}
+              onFocus={(e) => showSlot(i, e.currentTarget)}
+              onBlur={() => setHover(null)}
+            />
           )
         })}
-      </svg>
+      </div>
       <div className="incident-timeline-axis" aria-hidden="true">
         <span>{axisLabel(startMs, win, utc, withZone, withYear)}</span>
         {/* The flexbox centers the middle span, so its text must be the
@@ -376,7 +398,7 @@ export default function IncidentTimeline({
               ? 'no incidents in this slice'
               : `${tip.open} open · ${tip.res} resolved — ${tip.offline} agent outage${tip.offline === 1 ? '' : 's'} · ${tip.probe} probe failure${tip.probe === 1 ? '' : 's'} · ${tip.degraded} degraded`}
           </div>
-          {selected === slot.t && <div className="map-tip-caption">Filtering groups below — click again to clear</div>}
+          {selected === slot.t && <div className="map-tip-caption">Filtering groups below — select again to clear</div>}
         </div>
       )}
     </>

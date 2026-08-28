@@ -4,7 +4,6 @@ import test from 'node:test'
 import {
   fitMapViewport,
   FULL_MAP_VIEWPORT,
-  layoutMapLabels,
   mapHitRadius,
   mapZoomPercent,
   panMapViewport,
@@ -177,28 +176,6 @@ test('zoom and pan stay inside the world frame', () => {
   assert.ok(Math.abs(inCap.x + (540 / 1080) * inCap.width - capAnchor) < 0.0001)
 })
 
-test('dense map labels use deterministic non-overlapping vertical tracks', () => {
-  const labels = layoutMapLabels(
-    ['delta', 'alpha', 'charlie', 'bravo'].map((id) => ({ id, x: 300, y: 300 })),
-    FULL_MAP_VIEWPORT,
-  )
-  assert.deepEqual(
-    labels.map(({ id }) => id),
-    ['alpha', 'bravo', 'charlie', 'delta'],
-  )
-  for (let index = 1; index < labels.length; index++) {
-    assert.ok(labels[index].top - labels[index - 1].top >= 12)
-  }
-  const edges = layoutMapLabels(
-    [
-      { id: 'top', x: 300, y: 0 },
-      { id: 'bottom', x: 300, y: 600 },
-    ],
-    FULL_MAP_VIEWPORT,
-  )
-  assert.ok(edges.every(({ top }) => top >= 4 && top <= 96))
-})
-
 test('screen-sized pointer targets feed the same radius into decluttering', () => {
   assert.equal(mapHitRadius(24, 540), 24)
   assert.equal(mapHitRadius(44, 360), 66)
@@ -218,8 +195,11 @@ test('map controls, labels, and pointer targets expose the accessibility contrac
   const map = await readFile(new URL('../src/components/WorldMap.tsx', import.meta.url), 'utf8')
   const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8')
   // Direct manipulation (drag + wheel) must keep keyboard equivalents: the
-  // focusable map pans with arrows, zooms with +/-, fits with F, resets with 0.
-  assert.match(map, /onKeyDown=\{keyboardViewport\}/)
+  // focusable map pans with arrows, zooms with +/-, fits with F, resets
+  // with 0 — attached natively (like the wheel listener) through the
+  // render-latched handler ref.
+  assert.match(map, /addEventListener\('keydown', onKeyDown\)/)
+  assert.match(map, /keydown: keyboardViewport/)
   assert.match(map, /case 'ArrowLeft':/)
   assert.match(map, /case 'F':/)
   assert.match(map, /case 'Home':/)
@@ -239,13 +219,19 @@ test('map controls, labels, and pointer targets expose the accessibility contrac
   assert.match(map, /pinch\.current = \{/)
   assert.match(map, /pinchMapViewport\(/)
   assert.match(map, /\[fleetKey\]/)
-  assert.match(map, /map-site-label/)
   assert.match(map, /suppressBackgroundClick\.current = false/)
-  assert.match(map, /onPointerDownCapture/)
   assert.match(map, /revealMapPoint/)
   assert.match(map, /return large \? 44 : 24/)
   assert.match(map, /Math\.max\(targetRadius, bubbleRadius/)
-  assert.match(styles, /\.map-site-hit[\s\S]*pointer-events: all/)
+  // Site markers are HTML buttons layered over the decorative svg, sized to
+  // the pointer target, clipped by a pointer-inert layer so drags between
+  // markers still reach the pan surface; the visible key hint names the
+  // bindings for sighted keyboard users.
+  assert.match(map, /className=\{`map-marker sev-\$\{sev\}`/)
+  assert.match(map, /Math\.max\(targetPixels, Math\.ceil\(bubblePx\) \+ 8\)/)
+  assert.match(map, /aria-describedby=\{hintId\}/)
+  assert.match(styles, /\.map-markers \{[^}]*pointer-events: none/)
+  assert.match(styles, /\.map-marker \{[^}]*pointer-events: auto/)
   assert.match(styles, /touch-action: pan-y/)
 })
 

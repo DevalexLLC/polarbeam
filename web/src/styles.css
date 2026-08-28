@@ -1885,11 +1885,35 @@ ol.hops li {
   pointer-events: none;
 }
 
-/* Invisible twin of each bubble: the visible mark alone can be a small
-   target at phone viewports. */
-.map-site-hit {
-  fill: transparent;
-  pointer-events: all;
+/* Interactive twin of each bubble: a real button layered over the svg so
+   markers are reliably focusable and browse-mode readable while the svg
+   stays a decorative image. Transparent — the bubble underneath is the
+   visual — and sized to the touch target (the visible mark alone can be a
+   small target at phone viewports). The layer clips buttons whose sites
+   sit outside the current viewport; it is pointer-inert so drags between
+   markers reach the pan surface. */
+.map-markers {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* button.* beats the global control-target rule's specificity: these
+   buttons manage their own hit geometry (markers honor the coarse-pointer
+   target through their inline size; slots ARE the strip's cells), and the
+   global min-width/min-height would inflate and overlap them. */
+button.map-marker {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 /* Leader marks tie a decluttered bubble back to its true projection.
@@ -1897,17 +1921,6 @@ ol.hops li {
    (for z-order), and alarms stay the map's only pop of color. */
 .map-leaders {
   pointer-events: none;
-}
-
-.map-label-leaders {
-  pointer-events: none;
-}
-
-.map-label-leader {
-  stroke: var(--ink-3);
-  stroke-width: 1;
-  opacity: 0.55;
-  vector-effect: non-scaling-stroke;
 }
 
 .map-leader {
@@ -1920,19 +1933,6 @@ ol.hops li {
 .map-anchor-dot {
   fill: var(--ink-3);
   opacity: 0.7;
-}
-
-.map-site {
-  cursor: pointer;
-}
-
-.map-site:focus-visible {
-  outline: none;
-}
-
-.map-site:focus-visible .map-bubble {
-  stroke: var(--focus);
-  stroke-width: 2;
 }
 
 /* Healthy sites wear the template's translucent accent (the map's own
@@ -1970,7 +1970,7 @@ ol.hops li {
   stroke-width: 1.5;
 }
 
-.map-site:hover .map-bubble,
+.map-site.hovered .map-bubble,
 .map-site.pinned .map-bubble {
   fill: color-mix(in srgb, var(--map-bubble-color) 34%, transparent);
 }
@@ -1984,35 +1984,6 @@ ol.hops li {
   stroke: var(--ink);
   stroke-width: 1.2;
   opacity: 0.55;
-}
-
-.map-site-label {
-  position: absolute;
-  z-index: 2;
-  max-width: 16rem;
-  padding: 0.08rem 0.3rem;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: calc(var(--radius) - 2px);
-  background: var(--surface);
-  color: var(--ink-2);
-  text-overflow: ellipsis;
-  transform: translate(0.7rem, calc(-100% - 0.35rem));
-  white-space: nowrap;
-  pointer-events: none;
-  font-family: var(--sans);
-  font-size: 0.78rem;
-  font-weight: 650;
-}
-
-.map-site-label.selected {
-  color: var(--ink);
-  border-color: var(--border-strong);
-  font-weight: 750;
-}
-
-.map-site-label-right {
-  transform: translate(calc(-100% - 0.7rem), calc(-100% - 0.35rem));
 }
 
 .map-legend {
@@ -2052,6 +2023,10 @@ ol.hops li {
 }
 .map-legend-hint {
   margin-left: auto;
+}
+
+.map-keys-hint {
+  margin: 0.5rem 0 0;
 }
 
 /* Site info card, template style: name + status, headline value, severity
@@ -3324,10 +3299,29 @@ table.fleet-table td small {
   min-width: 7rem;
 }
 
+.fleet-strip-wrap {
+  position: relative;
+  display: block;
+}
+
 .fleet-strip {
   display: block;
   width: 100%;
   height: 16px;
+}
+
+/* Transparent slot buttons over the strip: the roving focus targets. The
+   vertical inset grows the 16px strip's hit and focus target; min sizes
+   reset for the same reason as button.map-marker. */
+button.fleet-strip-slot {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .fleet-strip-seg.strip-ok {
@@ -3466,7 +3460,7 @@ td.fleet-uptime {
 }
 
 /* Clickable slots: the strip has a drill-down wired. */
-.fleet-strip-clickable {
+.fleet-strip-clickable .fleet-strip-slot {
   cursor: pointer;
 }
 
@@ -3556,11 +3550,28 @@ td.fleet-uptime {
 /* Incidents: bucketed timeline (48 slices of the selected window, hover
    card via .strip-tip like the fleet strips, click filters the groups
    card below). Colors ride the status vars, so both themes are covered. */
+.itl-wrap {
+  position: relative;
+  margin-top: 0.5rem;
+}
+
 .incident-timeline {
   display: block;
   width: 100%;
   height: 80px;
-  margin-top: 0.5rem;
+}
+
+/* Transparent slice buttons over the timeline: the roving focus targets;
+   min sizes reset for the same reason as button.map-marker. */
+button.itl-slot {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
   cursor: pointer;
 }
 
@@ -4900,7 +4911,11 @@ td.users-actions .inline-confirm {
   min-height: max(72px, var(--control-target));
 }
 
-button:not(.linklike),
+/* The three overlay-composite buttons are exempt: strip and timeline
+   slots ARE their visualization's cells (a minimum width would overlap
+   the 48-slot grid into uselessness), and map markers size themselves to
+   the coarse-pointer target through their inline geometry. */
+button:not(.linklike):not(.fleet-strip-slot):not(.itl-slot):not(.map-marker),
 summary,
 select,
 textarea,
