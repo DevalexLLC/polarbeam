@@ -6,9 +6,10 @@ import test from 'node:test'
 // Source-level accessibility gate (issue #102, epic #107). There is no DOM
 // in this test environment, so like the rest of the suite these tests read
 // component source as text. Runtime behavior (screen reader announcements,
-// focus order, contrast) is covered by the manual protocol in
-// docs/accessibility.md. Contrast-token assertions join this file once the
-// measured table from issue #106 lands.
+// focus order) is covered by the manual protocol in docs/accessibility.md.
+// Contrast is enforced here at the source: the token pairs from the
+// measured table in docs/accessibility.md are recomputed from styles.css
+// on every run (#106).
 
 const srcRoot = new URL('../src/', import.meta.url).pathname
 
@@ -202,4 +203,176 @@ test('global accessibility scaffolding stays in place', () => {
   assert.match(index, /<meta name="viewport"/)
   // Blocking pinch zoom is a WCAG 1.4.4 failure; neither directive may appear.
   assert.doesNotMatch(index, /maximum-scale|user-scalable/)
+})
+
+// ---- #106: measured contrast, type scaling, forced colors ----
+
+const stylesSource = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
+
+// The two top-level token blocks (light `:root`, dark override). The ^
+// anchor keeps the `:root` nested inside @media (prefers-contrast) from
+// matching.
+function parseTokenBlock(body) {
+  return Object.fromEntries(
+    [...body.replaceAll(/\/\*[\s\S]*?\*\//g, '').matchAll(/--([a-z0-9-]+):\s*([^;]+);/g)].map((m) => [
+      m[1],
+      m[2].trim(),
+    ]),
+  )
+}
+
+function themeTokens() {
+  const blocks = [...stylesSource.matchAll(/^:root(\[data-theme='dark'\])?\s*\{([^}]*)\}/gm)]
+  assert.equal(blocks.length, 2, 'styles.css holds exactly one light and one dark token block')
+  const light = parseTokenBlock(blocks[0][2])
+  // Dark declares only overrides; everything else inherits from light.
+  return { light, dark: { ...light, ...parseTokenBlock(blocks[1][2]) } }
+}
+
+// Resolves a token to sRGB channels ([r, g, b] in 0-255, kept as floats),
+// following var() chains and the color-mix(in srgb, <hex> <pct>%,
+// var(--token)) shape the status backgrounds use. Mixing stays in
+// floating point — CSS color-mix does not round to 8-bit — so the
+// asserted ratios are exactly what ships: two pairs (light crit on
+// surface, dark ok on ok-bg) clear 4.5:1 by under 0.05, and any change
+// to a surface or a mix percentage must re-clear them.
+function resolveColor(tokens, name) {
+  let value = tokens[name]
+  assert.ok(value, `token --${name} exists`)
+  for (let hops = 0; value.startsWith('var('); hops++) {
+    assert.ok(hops < 4, `--${name} var() chain terminates`)
+    value = tokens[value.slice('var(--'.length, -1)]
+  }
+  const mix = value.match(/^color-mix\(in srgb, (#[0-9a-f]{6}) (\d+)%, var\(--([a-z0-9-]+)\)\)$/)
+  if (mix) {
+    const pct = Number(mix[2]) / 100
+    const base = channels(mix[1])
+    const rest = resolveColor(tokens, mix[3])
+    return base.map((v, i) => v * pct + rest[i] * (1 - pct))
+  }
+  assert.match(value, /^#[0-9a-f]{6}$/, `--${name} resolves to a 6-digit hex color, got: ${value}`)
+  return channels(value)
+}
+
+function channels(hex) {
+  return [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16))
+}
+
+// WCAG 2.x relative luminance and contrast ratio over channel triples.
+function luminance(rgb) {
+  const [r, g, b] = rgb.map((v) => {
+    const c = v / 255
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+  })
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+function contrast(fg, bg) {
+  const [hi, lo] = [luminance(fg), luminance(bg)].toSorted((a, b) => b - a)
+  return (hi + 0.05) / (lo + 0.05)
+}
+
+// The measured table from docs/accessibility.md: [fg, bg, threshold].
+// 4.5:1 pairs are text roles (WCAG 1.4.3); 3:1 pairs are non-text marks
+// (1.4.11). Deliberate exemptions (map dot grid, series adjacency, canvas
+// axis text) are documented there, not asserted here.
+const CONTRAST_PAIRS = [
+  ['ink', 'bg', 4.5],
+  ['ink', 'surface', 4.5],
+  ['ink', 'surface-2', 4.5],
+  ['ink-2', 'bg', 4.5],
+  ['ink-2', 'surface', 4.5],
+  ['ink-2', 'surface-2', 4.5],
+  ['ink-3', 'bg', 4.5],
+  ['ink-3', 'surface', 4.5],
+  ['ink-3', 'surface-2', 4.5],
+  ['accent-ink', 'accent', 4.5],
+  ['accent', 'surface', 4.5],
+  ['accent', 'bg', 4.5],
+  ['status-ok', 'surface', 4.5],
+  ['status-ok', 'status-ok-bg', 4.5],
+  ['status-degraded', 'surface', 4.5],
+  ['status-degraded', 'status-degraded-bg', 4.5],
+  ['status-down', 'surface', 4.5],
+  ['status-down', 'status-down-bg', 4.5],
+  ['status-stale', 'surface', 4.5],
+  ['status-stale', 'status-stale-bg', 4.5],
+  ['status-warn', 'surface', 4.5],
+  ['status-crit', 'surface', 4.5],
+  ['focus', 'bg', 3],
+  ['focus', 'surface', 3],
+  ['series-a', 'surface', 3],
+  ['series-b', 'surface', 3],
+  ['chart-local', 'surface', 3],
+  ['chart-oidc', 'surface', 3],
+  // Hovered fleet rows and inset panels paint surface-2 behind these
+  // marks, so they must clear the bar on both grounds.
+  ['strip-nodata', 'surface', 3],
+  ['strip-nodata', 'surface-2', 3],
+  ['control-border', 'surface', 3],
+  ['control-border', 'surface-2', 3],
+]
+
+test('every token pair in the measured contrast table meets its bar in both themes', () => {
+  const themes = themeTokens()
+  for (const [themeName, tokens] of Object.entries(themes)) {
+    for (const [fg, bg, threshold] of CONTRAST_PAIRS) {
+      const ratio = contrast(resolveColor(tokens, fg), resolveColor(tokens, bg))
+      assert.ok(
+        ratio >= threshold,
+        `${themeName}: --${fg} on --${bg} is ${ratio.toFixed(2)}:1, below the ${threshold}:1 bar`,
+      )
+    }
+  }
+})
+
+// WCAG 1.4.4: the root type size must follow the browser's font-size
+// preference, so no pixel root; visible text keeps the project's 0.75rem
+// floor (#76 set it for chart labels, #106 extends it dashboard-wide).
+// The only px type is PathGraph's two 12px SVG labels — fixed user units
+// that scale with the viewBox (see PathGraph.tsx), pinned by
+// topology.test.mjs.
+test('type scales from a rem root and visible text stays at or above 0.75rem', () => {
+  assert.match(stylesSource, /body\s*\{[^}]*font-size:\s*0\.9375rem/)
+  assert.doesNotMatch(stylesSource, /body\s*\{[^}]*font-size:[^}]*px/)
+
+  const pxSizes = [...stylesSource.matchAll(/font-size:\s*([\d.]+)px/g)]
+  assert.equal(pxSizes.length, 2, 'only the two PathGraph SVG label rules may use px type')
+  for (const match of pxSizes) assert.equal(match[1], '12')
+
+  for (const match of stylesSource.matchAll(/font-size:\s*([\d.]+)(rem|em)/g)) {
+    assert.ok(Number(match[1]) >= 0.75, `font-size ${match[0].trim()} sits below the 0.75rem floor`)
+  }
+})
+
+// Forced colors (Windows High Contrast) and increased-contrast support:
+// focus rides the system Highlight, data marks that carry severity or
+// series identity keep their AA-verified palette via forced-color-adjust
+// opt-outs, and prefers-contrast: more lifts the lowest-margin roles.
+test('forced-colors and prefers-contrast handling stays in place', () => {
+  const forcedBlock = stylesSource.match(/@media \(forced-colors: active\) \{[\s\S]*?\n\}/)?.[0]
+  assert.ok(forcedBlock, 'styles.css carries a forced-colors block')
+  assert.match(forcedBlock, /:focus-visible\s*\{[^}]*outline-color:\s*Highlight/)
+  assert.match(forcedBlock, /\.search-field input:focus\s*\{[^}]*Highlight/)
+  for (const island of ['.swatch', '.fleet-strip', '.login-bars', '.itl-wrap', '.worldmap', '.chart-card']) {
+    assert.ok(
+      new RegExp(`${island.replaceAll('.', '\\.')}[^}]*\\{[^}]*forced-color-adjust:\\s*none`).test(forcedBlock) ||
+        new RegExp(`${island.replaceAll('.', '\\.')},`).test(forcedBlock),
+      `${island} keeps its verified palette under forced colors`,
+    )
+  }
+  // An island without its own ground would strand its kept palette on a
+  // forced Canvas of the opposite luminance (dark theme, light system
+  // palette), so every opt-out rule must pin the themed surface.
+  for (const rule of forcedBlock.matchAll(/\{([^}]*forced-color-adjust:\s*none[^}]*)\}/g)) {
+    assert.match(rule[1], /background:\s*var\(--surface\)/, 'forced-color islands carry their themed backdrop')
+  }
+  assert.match(forcedBlock, /\.swatch\s*\{[^}]*border:\s*1px solid CanvasText/)
+
+  const contrastBlock = stylesSource.match(/@media \(prefers-contrast: more\) \{[\s\S]*?\n\}/)?.[0]
+  assert.ok(contrastBlock, 'styles.css carries a prefers-contrast block')
+  assert.match(contrastBlock, /--ink-3:\s*var\(--ink-2\)/)
+  // :root[data-theme='dark'] outranks a bare :root, so the override must
+  // restate the dark selector or dark users get no increased contrast.
+  assert.match(contrastBlock, /:root\[data-theme='dark'\]/)
 })
