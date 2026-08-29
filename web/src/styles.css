@@ -12,9 +12,12 @@
   --surface-2: #f4f4f5;
   --border: #e4e4e7;
   --border-strong: #d4d4d8;
+  /* Form-control boundaries need the 3:1 non-text bar (WCAG 1.4.11); the
+     decorative hairlines above deliberately stay lighter. */
+  --control-border: #8a8a93;
   --ink: #18181b;
   --ink-2: #52525b;
-  --ink-3: #71717a;
+  --ink-3: #6c6c74;
   --accent: #4f46e5;
   --accent-ink: #ffffff;
   --focus: #6366f1;
@@ -32,10 +35,14 @@
   --chart-local: var(--accent);
   --chart-oidc: var(--series-b);
 
-  --status-ok: #0ca30c;
+  /* Status colors double as text on light surfaces, so ok and stale run
+     darker here than in dark mode (which overrides them back to the
+     brighter originals). Every pair is measured in the contrast table in
+     docs/accessibility.md and enforced by web/test/a11y-source.test.mjs. */
+  --status-ok: #097509;
   --status-degraded: #8a6100;
   --status-down: #b4232d;
-  --status-stale: #8a897f;
+  --status-stale: #6e6d64;
 
   /* Map severity: warn shares the degraded amber; crit sits between amber
      and the down red so all four stay distinguishable on one line. */
@@ -46,6 +53,10 @@
   --status-degraded-bg: color-mix(in srgb, #fab219 16%, var(--surface));
   --status-down-bg: color-mix(in srgb, #d03b3b 12%, var(--surface));
   --status-stale-bg: var(--surface-2);
+
+  /* Fleet-strip "no data" fill: a meaningful mark, so it cannot reuse the
+     1.3:1 --border hairline — it holds its own 3:1 grey. */
+  --strip-nodata: #84848d;
 
   --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', 'JetBrains Mono', Consolas, monospace;
   --sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -79,6 +90,7 @@
   --surface-2: #1d1d21;
   --border: #27272b;
   --border-strong: #3b3b41;
+  --control-border: #6e6e77;
   --ink: #f4f4f5;
   --ink-2: #b6b6bf;
   --ink-3: #a1a1aa;
@@ -92,6 +104,10 @@
      lightness band, so the chart takes the nearest passing indigo step. */
   --chart-local: #7b87f7;
 
+  /* Light darkens ok/stale to hold 4.5:1 on white; near-black surfaces
+     take the brighter originals (measured in docs/accessibility.md). */
+  --status-ok: #0ca30c;
+  --status-stale: #8a897f;
   --status-degraded: #ffc247;
   --status-down: #ff6b72;
   --status-crit: #f0692e;
@@ -100,6 +116,8 @@
   --status-degraded-bg: color-mix(in srgb, #fab219 14%, var(--surface));
   --status-down-bg: color-mix(in srgb, #d03b3b 17%, var(--surface));
   --status-stale-bg: var(--surface-2);
+
+  --strip-nodata: #6e6e77;
 
   --shadow-card: none;
   --map-dot: #3a3a42;
@@ -146,7 +164,9 @@
 body {
   margin: 0;
   font-family: var(--sans);
-  font-size: 15px;
+  /* 15px at the browser default root, expressed in rem so a user's
+     font-size preference rescales the entire type ladder (WCAG 1.4.4). */
+  font-size: 0.9375rem;
   line-height: 1.5;
   background: var(--bg);
   color: var(--ink);
@@ -160,7 +180,7 @@ body {
 /* Structure labels: the instrument's engraved text. */
 .eyebrow {
   font-family: var(--sans);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 600;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -323,7 +343,7 @@ button.linklike:hover {
   font-size: 0.95rem;
   color: var(--ink);
   background: var(--bg);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius);
 }
 
@@ -494,7 +514,7 @@ button.linklike:hover {
   font-size: 0.85rem;
   color: var(--ink);
   background: var(--bg);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius);
   resize: vertical;
 }
@@ -513,7 +533,7 @@ button.linklike:hover {
   font-size: 0.8rem;
   color: var(--ink);
   background: var(--bg);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius);
   resize: vertical;
 }
@@ -597,7 +617,7 @@ button.linklike:hover {
   color: var(--ink-2);
   background: var(--surface);
   border: 1px solid var(--border-strong);
-  font-size: 0.68rem;
+  font-size: 0.75rem;
   font-weight: 700;
 }
 
@@ -1061,7 +1081,7 @@ table.agents tr:last-child td {
   background: var(--surface-2);
   color: var(--ink-2);
   font-family: var(--mono);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   white-space: nowrap;
 }
 
@@ -1100,7 +1120,7 @@ a.check-chip:hover {
   border: 1px solid var(--border);
   border-radius: 999px;
   color: var(--ink-2);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 500;
 }
 
@@ -1230,7 +1250,7 @@ table.events th {
   padding: 0.45rem 0.8rem;
   border-bottom: 1px solid var(--border);
   color: var(--ink-3);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   font-weight: 650;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -1267,7 +1287,7 @@ tr.outage-open td:first-child {
   display: inline-block;
   padding: 0.1rem 0.5rem;
   border-radius: 999px;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 650;
   white-space: nowrap;
   border: 1px solid var(--border-strong);
@@ -1400,7 +1420,7 @@ table.hop-diff td {
   border: 1px solid var(--status-degraded);
   border-radius: 999px;
   color: var(--status-degraded);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   font-weight: 650;
   text-align: center;
   text-transform: uppercase;
@@ -1781,7 +1801,7 @@ ol.hops li {
     content: attr(data-label);
     color: var(--ink-3);
     font-family: var(--sans);
-    font-size: 0.68rem;
+    font-size: 0.75rem;
     font-weight: 650;
     letter-spacing: 0.1em;
     text-transform: uppercase;
@@ -2372,7 +2392,7 @@ button.map-marker {
   font-size: 0.85rem;
   color: var(--ink);
   background: var(--bg);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius);
 }
 
@@ -2502,7 +2522,7 @@ button.danger-button {
   padding: 0 1rem;
   background: var(--surface-2);
   color: var(--ink-3);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 600;
   letter-spacing: 0.12em;
   line-height: var(--banner-h);
@@ -2599,7 +2619,7 @@ button.danger-button {
   min-width: 40px;
   padding: 0 0.7rem;
   border-radius: 999px;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 650;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -2687,7 +2707,7 @@ button.danger-button {
 
 .user-menu-identity span {
   color: var(--ink-3);
-  font-size: 0.65rem;
+  font-size: 0.75rem;
   font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -2750,7 +2770,7 @@ button.danger-button {
    must wrap rather than push the popover wide. */
 .user-menu-scope {
   color: var(--ink-3);
-  font-size: 0.65rem;
+  font-size: 0.75rem;
   font-weight: 500;
   letter-spacing: 0;
   overflow-wrap: anywhere;
@@ -2869,7 +2889,7 @@ button.danger-button {
   display: block;
   padding: 0.5rem 0.75rem 0.35rem;
   color: var(--ink-3);
-  font-size: 0.65rem;
+  font-size: 0.75rem;
   font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -2965,7 +2985,7 @@ button.danger-button {
   min-height: var(--control-target);
   min-width: var(--minimum-target);
   padding: 0.35rem 1.8rem 0.35rem 0.55rem;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius);
   color: var(--ink);
   background: var(--surface);
@@ -3021,7 +3041,7 @@ button.danger-button {
   width: 100%;
   min-height: 40px;
   padding: 0.5rem 0.75rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius);
   color: var(--ink);
   background: var(--surface);
@@ -3114,7 +3134,7 @@ button.stat-card {
 
 .stat-label {
   color: var(--ink-3);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -3153,7 +3173,7 @@ button.stat-card {
   border-radius: 999px;
   color: var(--ink-2);
   background: var(--surface-2);
-  font-size: 0.68rem;
+  font-size: 0.75rem;
   font-weight: 650;
 }
 
@@ -3225,7 +3245,7 @@ table.fleet-table th {
   border-bottom: 1px solid var(--border);
   background: var(--surface);
   color: var(--ink-3);
-  font-size: 0.68rem;
+  font-size: 0.75rem;
   font-weight: 650;
   letter-spacing: 0.07em;
   text-align: left;
@@ -3275,7 +3295,7 @@ table.fleet-table td strong {
 table.fleet-table td strong .chip {
   margin-left: 0.45rem;
   padding: 0.05rem 0.5rem;
-  font-size: 0.68rem;
+  font-size: 0.75rem;
   font-weight: 500;
 }
 
@@ -3284,7 +3304,7 @@ table.fleet-table td small {
   overflow: hidden;
   max-width: 11rem;
   color: var(--ink-3);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3334,7 +3354,7 @@ button.fleet-strip-slot {
   fill: var(--status-down);
 }
 .fleet-strip-seg.strip-nodata {
-  fill: var(--border);
+  fill: var(--strip-nodata);
 }
 
 th.fleet-uptime,
@@ -3756,7 +3776,7 @@ td.users-actions .inline-confirm:disabled {
   align-items: center;
   padding: 0.2rem 0.5rem;
   border-radius: 999px;
-  font-size: 0.68rem;
+  font-size: 0.75rem;
   font-weight: 700;
 }
 
@@ -3885,7 +3905,7 @@ td.users-actions .inline-confirm:disabled {
 }
 .incident-summary small {
   color: var(--ink-3);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
 }
 .incident-primary small {
   overflow: hidden;
@@ -3938,7 +3958,7 @@ td.users-actions .inline-confirm:disabled {
 
 .incident-detail-head {
   color: var(--ink-3);
-  font-size: 0.66rem;
+  font-size: 0.75rem;
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -4026,7 +4046,7 @@ table.data-table th {
   border-bottom: 1px solid var(--border-strong);
   color: var(--ink-3);
   background: var(--surface);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   font-weight: 650;
   letter-spacing: 0.07em;
   text-align: left;
@@ -4225,7 +4245,7 @@ table.data-table tbody tr:last-child > td {
     display: block;
     margin-bottom: 0.12rem;
     color: var(--ink-3);
-    font-size: 0.66rem;
+    font-size: 0.75rem;
     font-weight: 650;
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -4428,6 +4448,13 @@ table.data-table tbody tr:last-child > td {
     order: -1;
   }
   .incident-toolbar .control-group:last-child {
+    overflow-x: auto;
+  }
+  /* The role/status segmented controls are wider than the narrowest
+     reflow viewport (320px); like the incident toolbar's, they pan
+     within themselves instead of widening the page. */
+  .users-toolbar .control-group {
+    max-width: 100%;
     overflow-x: auto;
   }
   .incident-summary {
@@ -4681,7 +4708,7 @@ table.data-table tbody tr:last-child > td {
   font-size: 0.85rem;
   color: var(--ink);
   background: var(--bg);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius);
 }
 
@@ -4858,7 +4885,7 @@ button.path-toggle:hover {
   gap: 1rem;
   margin-bottom: 0.75rem;
   color: var(--ink-3);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -5057,7 +5084,7 @@ button.linklike {
   font-size: 0.8rem;
   color: var(--ink);
   background: var(--surface);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--control-border);
   border-radius: var(--radius);
 }
 
@@ -5094,4 +5121,70 @@ button.linklike {
 .mesh-members .chip .inline-confirm {
   min-width: var(--minimum-target);
   min-height: var(--control-target);
+}
+
+/* ---- Forced colors (Windows High Contrast) ---- */
+/* System colors take over everywhere except the marks whose color IS the
+   data. Those opt out via forced-color-adjust: none AND carry their own
+   themed backdrop: the forced Canvas may sit at the opposite luminance
+   from the active theme (dark theme, forced-light palette), so a
+   transparent island would strand its verified colors on an unverified
+   ground. With the backdrop pinned, every kept pair is exactly the one
+   measured in docs/accessibility.md. Swatches and map bubbles also gain
+   CanvasText strokes so they stay bounded chips on any forced page. */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline-color: Highlight;
+  }
+
+  /* The base ring here is a 24%-alpha color-mix, which forcing would
+     erase; replace it with a solid system ring. */
+  .search-field input:focus {
+    outline: 2px solid Highlight;
+  }
+
+  /* Severity/series islands: legend swatches, fleet strips, the sign-in
+     bars, the incident timeline, the map (dot grid, bubbles, labels) and
+     its legend and hover tip (adjust is inherited, so container opt-outs
+     cover their SVG children). */
+  .swatch,
+  .fleet-strip,
+  .login-bars,
+  .itl-wrap,
+  .worldmap,
+  .map-legend,
+  .map-tip {
+    forced-color-adjust: none;
+    background: var(--surface);
+  }
+
+  .swatch {
+    border: 1px solid CanvasText;
+  }
+
+  .map-bubble {
+    stroke: CanvasText;
+  }
+
+  /* uPlot draws to canvas, which forcing cannot repaint. Keep the whole
+     chart card on its themed, AA-verified surface so the plot never sits
+     on a clashing forced background. */
+  .chart-card,
+  .chart-investigation {
+    forced-color-adjust: none;
+    background: var(--surface);
+  }
+}
+
+/* ---- Increased contrast preference ---- */
+/* Every pair already meets AA; lift the two lowest-margin roles further
+   for users who ask for more. Var indirection keeps it theme-agnostic;
+   the dark selector must be restated because :root[data-theme='dark']
+   outranks a bare :root. */
+@media (prefers-contrast: more) {
+  :root,
+  :root[data-theme='dark'] {
+    --ink-3: var(--ink-2);
+    --border: var(--border-strong);
+  }
 }
