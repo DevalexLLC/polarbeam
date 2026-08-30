@@ -698,17 +698,24 @@ func (s *Store) AgentBucketFailures(ctx context.Context, agentID uuid.UUID,
 // SOURCE agent's plane — the series' plane, since expansion pairs
 // same-network agents.
 func (s *Store) MatrixLatest(ctx context.Context, horizon time.Duration, networks []uuid.UUID) ([]MatrixRow, error) {
-	rows, err := s.pool.Query(ctx, fmt.Sprintf(
+	// Served from series_state (one row per series, display columns
+	// maintained by the ingest fold — migration 0023), not from a DISTINCT
+	// ON scan over the raw hypertable's horizon: this runs on every 30s
+	// dashboard poll and must scale with series count, not with the whole
+	// fleet's result rate. last_latency_source is NULL for a series that
+	// predates 0023 or measured nothing — COALESCE to the raw expression's
+	// '' spelling so consumers see one vocabulary.
+	rows, err := s.pool.Query(ctx,
 		`WITH latest AS (
 		    SELECT DISTINCT ON (agent_id, target_id, probe_type)
-		           agent_id, target_id, probe_type, time, status, loss_pct,
-		           %s AS latency_us, %s AS latency_source
-		      FROM probe_results
-		     WHERE time > now() - $1::interval
-		     ORDER BY agent_id, target_id, probe_type, time DESC
+		           agent_id, target_id, probe_type, last_time, last_status,
+		           last_loss_pct, last_latency_us, last_latency_source
+		      FROM series_state
+		     WHERE last_time > now() - $1::interval
+		     ORDER BY agent_id, target_id, probe_type, last_time DESC
 		)
-		SELECT ss.name, ds.name, nw.name, l.probe_type, l.status, l.time,
-		       l.latency_us, l.latency_source, l.loss_pct
+		SELECT ss.name, ds.name, nw.name, l.probe_type, l.last_status, l.last_time,
+		       l.last_latency_us, COALESCE(l.last_latency_source, ''), l.last_loss_pct
 		  FROM latest l
 		  JOIN agents sa ON sa.id = l.agent_id
 		  JOIN sites  ss ON ss.id = sa.site_id
@@ -716,7 +723,7 @@ func (s *Store) MatrixLatest(ctx context.Context, horizon time.Duration, network
 		  JOIN targets t ON t.id = l.target_id AND t.agent_id IS NOT NULL
 		  JOIN agents da ON da.id = t.agent_id
 		  JOIN sites  ds ON ds.id = da.site_id
-		 WHERE $2::uuid[] IS NULL OR sa.network_id = ANY($2)`, latencyExpr, latencySourceExpr),
+		 WHERE $2::uuid[] IS NULL OR sa.network_id = ANY($2)`,
 		horizon, networks)
 	if err != nil {
 		return nil, fmt.Errorf("matrix latest: %w", err)
@@ -1077,17 +1084,18 @@ func (s *Store) PairLatencySource(ctx context.Context, srcAgents, dstTargets []u
 }
 
 // DirectionLatest returns the latest row per (agent, target, probe type)
-// series for one direction within the horizon — the same shape the matrix
-// uses, so cell and pair-detail status agree.
+// series for one direction within the horizon — the same SOURCE the matrix
+// uses (series_state, migration 0023), so cell and pair-detail status
+// agree, including immediately after a config deletion removes a series.
 func (s *Store) DirectionLatest(ctx context.Context, srcAgents, dstTargets []uuid.UUID, horizon time.Duration) ([]MatrixRow, error) {
-	rows, err := s.pool.Query(ctx, fmt.Sprintf(
+	rows, err := s.pool.Query(ctx,
 		`SELECT DISTINCT ON (agent_id, target_id, probe_type)
-		        target_id, probe_type, status, time, %s AS latency_us, %s AS latency_source, loss_pct
-		   FROM probe_results
+		        target_id, probe_type, last_status, last_time,
+		        last_latency_us, COALESCE(last_latency_source, ''), last_loss_pct
+		   FROM series_state
 		  WHERE agent_id = ANY($1) AND target_id = ANY($2)
-		    AND time > now() - $3::interval
-		  ORDER BY agent_id, target_id, probe_type, time DESC`,
-		latencyExpr, latencySourceExpr),
+		    AND last_time > now() - $3::interval
+		  ORDER BY agent_id, target_id, probe_type, last_time DESC`,
 		srcAgents, dstTargets, horizon)
 	if err != nil {
 		return nil, fmt.Errorf("direction latest: %w", err)

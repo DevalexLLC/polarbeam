@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/devalexllc/polarbeam/internal/server/dbtest"
+	"github.com/devalexllc/polarbeam/internal/server/outage"
 	"github.com/devalexllc/polarbeam/internal/server/store"
 )
 
@@ -42,6 +43,29 @@ func insertResults(t *testing.T, ctx context.Context, s *store.Store, agentID uu
 	inserted, err := store.InsertResultsTx(ctx, tx, agentID, rows)
 	if err != nil {
 		t.Fatalf("InsertResultsTx: %v", err)
+	}
+	// Mirror the production ingest transaction: outage.Apply maintains
+	// series_state (hysteresis AND the matrix's last_* display columns),
+	// so reads that serve from series_state see these rows too.
+	folded := make([]outage.Result, len(inserted))
+	for i, r := range inserted {
+		var errText string
+		if r.Error != nil {
+			errText = *r.Error
+		}
+		folded[i] = outage.Result{
+			ProbeID: r.ProbeID, TargetID: r.TargetID, ProbeType: r.ProbeType,
+			Time: r.Time, OK: r.Status == 1, StatusCode: r.Status, Error: errText,
+			LossPct: r.LossPct,
+		}
+		if r.RttAvgUS != nil {
+			us := int64(*r.RttAvgUS)
+			src := "rtt"
+			folded[i].LatencyUS, folded[i].LatencySource = &us, &src
+		}
+	}
+	if _, err := outage.Apply(ctx, tx, agentID, folded); err != nil {
+		t.Fatalf("outage.Apply: %v", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatalf("commit: %v", err)

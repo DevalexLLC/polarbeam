@@ -4,6 +4,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	neturl "net/url"
 	"regexp"
 	"runtime"
@@ -27,6 +28,30 @@ type Store struct {
 	// the config stream's own ~30s convergence lag either way.
 	enabled       configCache[[]uuid.UUID]
 	expectedPairs configCache[map[string][]NetworkPair]
+}
+
+// noteConfigWrite is deferred by every write path that can alter probe
+// expansion: it drops the in-process caches AND bumps the config_version
+// row (migration 0024) so OTHER processes notice — the admin CLI writes
+// from its own process, and the serving process's config streams gate
+// their snapshot rebuilds on that row. The bump survives a cancelled
+// request context and is log-only on failure: the streams' periodic
+// forced rebuild bounds the damage of a missed bump.
+func (s *Store) noteConfigWrite(ctx context.Context) {
+	s.InvalidateConfigCaches()
+	if _, err := s.pool.Exec(context.WithoutCancel(ctx),
+		`UPDATE config_version SET version = version + 1`); err != nil {
+		slog.Error("config version bump failed", "err", err)
+	}
+}
+
+// ConfigDBVersion reads the cross-process config-write counter.
+func (s *Store) ConfigDBVersion(ctx context.Context) (int64, error) {
+	var v int64
+	if err := s.pool.QueryRow(ctx, `SELECT version FROM config_version`).Scan(&v); err != nil {
+		return 0, fmt.Errorf("config version: %w", err)
+	}
+	return v, nil
 }
 
 // configCacheTTL matches the dashboard poll and config-stream cadence.
@@ -81,9 +106,10 @@ func (c *configCache[T]) invalidate() {
 	c.expires = time.Time{}
 }
 
-// InvalidateConfigCaches drops the config-derived caches. Called by every
-// store write that can change probe expansion or expected pairs; exported
-// for tests that mutate configuration with raw SQL.
+// InvalidateConfigCaches drops the in-process config-derived caches (write
+// paths go through noteConfigWrite, which also bumps the cross-process
+// config_version row); exported for tests that mutate configuration with
+// raw SQL.
 func (s *Store) InvalidateConfigCaches() {
 	s.enabled.invalidate()
 	s.expectedPairs.invalidate()

@@ -117,6 +117,11 @@ func (s *Server) Enroll(ctx context.Context, req *pb.EnrollRequest) (*pb.EnrollR
 	}, nil
 }
 
+// forcedRebuildTicks bounds how long a config edit made behind the store's
+// back (manual SQL — nothing bumps the generation) can go unnoticed by a
+// connected agent: 10 ticks × 30s = 5 minutes.
+const forcedRebuildTicks = 10
+
 // StreamConfig registers the agent as connected and pushes config snapshots:
 // a full snapshot on connect (unless the agent already runs it), then a fresh
 // full snapshot whenever a rebuild on the liveness tick yields a new hash.
@@ -138,6 +143,16 @@ func (s *Server) StreamConfig(hello *pb.AgentHello, stream grpc.ServerStreamingS
 		return meshexpand.BuildSnapshot(in)
 	}
 
+	// The config version (a single-row DB counter every config write path
+	// bumps — the admin CLI writes from its own process, so the signal
+	// must live in the DB) is snapshotted BEFORE each build: a write that
+	// lands mid-build bumps it, so the next tick compares unequal and
+	// rebuilds again — a build can never mask the write it raced.
+	lastVer, err := s.store.ConfigDBVersion(ctx)
+	if err != nil {
+		slog.Error("config version read failed", "agent", id.AgentID, "err", err)
+		return status.Error(codes.Unavailable, "config unavailable")
+	}
 	snapshot, err := buildSnapshot()
 	if err != nil {
 		slog.Error("config snapshot build failed", "agent", id.AgentID, "err", err)
@@ -158,6 +173,7 @@ func (s *Server) StreamConfig(hello *pb.AgentHello, stream grpc.ServerStreamingS
 	// certificate so revocation cuts live streams within a minute.
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
+	sinceRebuild := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -177,18 +193,39 @@ func (s *Server) StreamConfig(hello *pb.AgentHello, stream grpc.ServerStreamingS
 				slog.Info("dropping stream for revoked certificate", "agent", id.AgentID)
 				return status.Error(codes.PermissionDenied, "certificate revoked")
 			}
-			// Config staleness must not kill the stream (liveness and
-			// revocation checking matter more): a failed rebuild keeps the
-			// last snapshot and retries next tick.
-			if fresh, err := buildSnapshot(); err != nil {
-				slog.Error("config snapshot rebuild failed", "agent", id.AgentID, "err", err)
-			} else if fresh.GetConfigHash() != snapshot.GetConfigHash() {
-				if err := stream.Send(fresh); err != nil {
-					return err
+			// Rebuild only when a config write happened since the last
+			// build: config_version covers every store write path that can
+			// change expansion — CLI processes included — so at steady
+			// state N connected agents cost N single-row point reads per
+			// tick instead of N four-query batches + snapshot hashes. A
+			// periodic forced rebuild backstops config edited behind the
+			// store's back (manual SQL) and version-read failures.
+			sinceRebuild++
+			ver, verErr := s.store.ConfigDBVersion(ctx)
+			if verErr != nil {
+				slog.Error("config version read failed", "agent", id.AgentID, "err", verErr)
+			}
+			if verErr == nil && ver != lastVer || sinceRebuild >= forcedRebuildTicks {
+				// Config staleness must not kill the stream (liveness and
+				// revocation checking matter more): a failed rebuild keeps
+				// the last snapshot, leaves lastVer/sinceRebuild untouched,
+				// and thereby retries next tick.
+				if fresh, err := buildSnapshot(); err != nil {
+					slog.Error("config snapshot rebuild failed", "agent", id.AgentID, "err", err)
+				} else {
+					if fresh.GetConfigHash() != snapshot.GetConfigHash() {
+						if err := stream.Send(fresh); err != nil {
+							return err
+						}
+						snapshot = fresh
+						slog.Info("config snapshot sent", "agent", id.AgentID,
+							"hash", snapshot.GetConfigHash(), "probes", len(snapshot.GetProbes()))
+					}
+					if verErr == nil {
+						lastVer = ver
+					}
+					sinceRebuild = 0
 				}
-				snapshot = fresh
-				slog.Info("config snapshot sent", "agent", id.AgentID,
-					"hash", snapshot.GetConfigHash(), "probes", len(snapshot.GetProbes()))
 			}
 			if err := s.store.TouchAgent(ctx, id.AgentID, hello.GetAgentVersion(), snapshot.GetConfigHash()); err != nil {
 				slog.Error("touch agent failed", "err", err)
