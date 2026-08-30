@@ -44,17 +44,6 @@ type ProbeConfigFilter struct {
 	Networks  []uuid.UUID
 }
 
-func inventoryDirection(order, what string) (string, error) {
-	switch order {
-	case "asc":
-		return " ASC", nil
-	case "desc":
-		return " DESC", nil
-	default:
-		return "", invalidf("%s order must be asc or desc", what)
-	}
-}
-
 var siteConfigSort = orderAllowlist{
 	name:    "site config",
 	tieExpr: "id",
@@ -276,23 +265,16 @@ func probeTypeLookup() ([]int16, []string) {
 	return ids, names
 }
 
-func probeConfigOrder(sortName, order string) (string, error) {
-	direction, err := inventoryDirection(order, "probe config")
-	if err != nil {
-		return "", err
-	}
-	columns := map[string]string{
-		"site":    "lower(site)",
-		"target":  "lower(assignment)",
-		"type":    "type_name",
-		"enabled": "enabled",
-		"updated": "updated_at",
-	}
-	column, ok := columns[sortName]
-	if !ok {
-		return "", invalidf("unknown probe config sort %q", sortName)
-	}
-	return column + direction + ", id" + direction, nil
+var probeConfigSort = orderAllowlist{
+	name:    "probe config",
+	tieExpr: "id",
+	columns: map[string]orderColumn{
+		"site":    {expr: "lower(site)"},
+		"target":  {expr: "lower(assignment)"},
+		"type":    {expr: "type_name"},
+		"enabled": {expr: "enabled"},
+		"updated": {expr: "updated_at"},
+	},
 }
 
 func scanProbeConfigInventory(row rowScanner, extra ...any) (ProbeConfigInfo, error) {
@@ -316,8 +298,8 @@ func scanProbeConfigInventory(row rowScanner, extra ...any) (ProbeConfigInfo, er
 
 // QueryProbeConfigs filters, sorts, and pages direct and mesh assignments.
 func (s *Store) QueryProbeConfigs(ctx context.Context, f ProbeConfigFilter) ([]ProbeConfigInfo, int64, error) {
-	if f.Limit < 1 || f.Limit > 100 || f.Offset < 0 {
-		return nil, 0, invalidf("invalid probe config page")
+	if err := pageBounds("probe config", f.Limit, f.Offset); err != nil {
+		return nil, 0, err
 	}
 	if f.Mode != "" && f.Mode != "direct" && f.Mode != "mesh" {
 		return nil, 0, invalidf("unknown probe config mode %q", f.Mode)
@@ -325,12 +307,11 @@ func (s *Store) QueryProbeConfigs(ctx context.Context, f ProbeConfigFilter) ([]P
 	if f.ProbeType < 0 {
 		return nil, 0, invalidf("unknown probe config type %d", f.ProbeType)
 	}
-	orderBy, err := probeConfigOrder(f.Sort, f.Order)
+	orderBy, err := probeConfigSort.clause(f.Sort, f.Order)
 	if err != nil {
 		return nil, 0, err
 	}
 	typeIDs, typeNames := probeTypeLookup()
-	args := []any{f.Networks, typeIDs, typeNames, escapeLike(strings.TrimSpace(f.Query)), f.Mode, f.Enabled, f.ProbeType}
 	cte := `WITH probe_rows AS MATERIALIZED (` + probeConfigRowsSQL + `),
 		filtered AS MATERIALIZED (
 			SELECT * FROM probe_rows
@@ -342,33 +323,26 @@ func (s *Store) QueryProbeConfigs(ctx context.Context, f ProbeConfigFilter) ([]P
 			   AND ($6::boolean IS NULL OR enabled = $6)
 			   AND ($7::smallint = 0 OR probe_type = $7)
 		)`
-	rows, err := s.pool.Query(ctx, cte+`
-		SELECT id, site, target, mesh, probe_type, interval_ms, timeout_ms,
-		       train_count, train_spacing_ms, params, enabled, created_at,
-		       updated_at, updated_by, network, mode, assignment, type_name,
-		       count(*) OVER ()
-		  FROM filtered ORDER BY `+orderBy+` LIMIT $8 OFFSET $9`,
-		append(args, f.Limit, f.Offset)...)
-	if err != nil {
-		return nil, 0, fmt.Errorf("query probe configs: %w", err)
-	}
-	defer rows.Close()
-	out := make([]ProbeConfigInfo, 0, f.Limit)
 	var total int64
-	for rows.Next() {
-		p, err := scanProbeConfigInventory(rows, &total)
-		if err != nil {
-			return nil, 0, fmt.Errorf("scan probe config: %w", err)
-		}
-		out = append(out, p)
-	}
-	if err := rows.Err(); err != nil {
+	out, err := runPaged(ctx, s.pool, f.Limit, f.Offset, pagedSpec[ProbeConfigInfo]{
+		queryErr:    "query probe configs",
+		scanErr:     "scan probe config",
+		fallbackErr: "count probe configs",
+		pageSQL: cte + `
+			SELECT id, site, target, mesh, probe_type, interval_ms, timeout_ms,
+			       train_count, train_spacing_ms, params, enabled, created_at,
+			       updated_at, updated_by, network, mode, assignment, type_name,
+			       count(*) OVER ()
+			  FROM filtered ORDER BY ` + orderBy + ` LIMIT $8 OFFSET $9`,
+		args: []any{f.Networks, typeIDs, typeNames, escapeLike(strings.TrimSpace(f.Query)), f.Mode, f.Enabled, f.ProbeType},
+		scan: func(row rowScanner) (ProbeConfigInfo, error) {
+			return scanProbeConfigInventory(row, &total)
+		},
+		fallbackSQL:  cte + ` SELECT count(*) FROM filtered`,
+		fallbackDest: []any{&total},
+	})
+	if err != nil {
 		return nil, 0, err
-	}
-	if len(out) == 0 && f.Offset > 0 {
-		if err := s.pool.QueryRow(ctx, cte+` SELECT count(*) FROM filtered`, args...).Scan(&total); err != nil {
-			return nil, 0, fmt.Errorf("count probe configs: %w", err)
-		}
 	}
 	return out, total, nil
 }

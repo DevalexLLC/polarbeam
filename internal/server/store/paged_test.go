@@ -30,6 +30,8 @@ func TestOrderAllowlistClause(t *testing.T) {
 		{siteConfigSort, "agents", "desc", "agent_count DESC, id DESC"},
 		{targetConfigSort, "network", "asc", "lower(network) ASC, id ASC"},
 		{targetConfigSort, "created", "desc", "created_at DESC, id DESC"},
+		{probeConfigSort, "target", "asc", "lower(assignment) ASC, id ASC"},
+		{probeConfigSort, "updated", "desc", "updated_at DESC, id DESC"},
 	}
 	for _, tc := range cases {
 		got, err := tc.list.clause(tc.sort, tc.order)
