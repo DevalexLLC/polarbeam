@@ -1,15 +1,14 @@
 import { useEffect, useState } from 'react'
-import { apiGet } from '../api'
 import DataTable, { type DataTableColumn } from '../components/DataTable'
 import PageError from '../components/PageError'
 import { fmtAgo, fmtTime } from '../format'
 import { useNetworkFilter } from '../networkFilter'
 import { inheritRouteNetwork, targetDetailHref, updateRouteParams } from '../routeState'
 import { useTimezone } from '../timezone'
+import { usePolledResource } from '../usePolledResource'
 import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
 import type { OperationalTarget, OperationalTargetsResponse } from '../types'
 
-const POLL_MS = 30_000
 const TARGET_PAGE = 25
 
 function StatusCell({ t }: { t: OperationalTarget }) {
@@ -32,9 +31,6 @@ function StatusCell({ t }: { t: OperationalTarget }) {
 
 export default function Targets({ onAuthError }: { onAuthError: (err: unknown) => void }) {
   useTimezone() // re-render fmtTime tooltips on UTC/local toggle
-  const [data, setData] = useState<OperationalTargetsResponse | null>(null)
-  const [error, setError] = useState<unknown>(null)
-  const [retryKey, setRetryKey] = useState(0)
   const [query, setQuery] = useRouteSearch()
   const [queryParam] = useRouteParam('q')
   const [kind] = useRouteParam('kind', 'all')
@@ -45,37 +41,20 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
   const [expandedRow, setExpandedRow] = useState<string | null>(null)
   const { network } = useNetworkFilter()
 
-  useEffect(() => {
-    let cancelled = false
-    const params = new URLSearchParams({
-      limit: String(TARGET_PAGE),
-      offset: String((page - 1) * TARGET_PAGE),
-      sort,
-      order,
-    })
-    if (network) params.set('network', network)
-    if (queryParam.trim()) params.set('q', queryParam.trim())
-    if (kind !== 'all') params.set('kind', kind)
-    if (status !== 'all') params.set('status', status === 'healthy' ? 'no_incidents' : status)
-    const load = () =>
-      apiGet<OperationalTargetsResponse>('/api/v1/targets?' + params.toString())
-        .then((response) => {
-          if (cancelled) return
-          setData(response)
-          setError(null)
-        })
-        .catch((err) => {
-          onAuthError(err)
-          console.error('targets request failed', err)
-          if (!cancelled) setError(err)
-        })
-    load()
-    const id = setInterval(load, POLL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [kind, network, onAuthError, order, page, queryParam, retryKey, sort, status])
+  const params = new URLSearchParams({
+    limit: String(TARGET_PAGE),
+    offset: String((page - 1) * TARGET_PAGE),
+    sort,
+    order,
+  })
+  if (network) params.set('network', network)
+  if (queryParam.trim()) params.set('q', queryParam.trim())
+  if (kind !== 'all') params.set('kind', kind)
+  if (status !== 'all') params.set('status', status === 'healthy' ? 'no_incidents' : status)
+  const { data, error, reload } = usePolledResource<OperationalTargetsResponse>(
+    '/api/v1/targets?' + params.toString(),
+    { onAuthError, logLabel: 'targets' },
+  )
 
   const pageCount = Math.max(1, Math.ceil((data?.page.total ?? 0) / TARGET_PAGE))
   useEffect(() => {
@@ -90,7 +69,7 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
         error={error}
         backHref={inheritRouteNetwork('#/')}
         backLabel="Back to Overview"
-        onRetry={() => setRetryKey((key) => key + 1)}
+        onRetry={() => void reload()}
       />
     )
   if (!data)
