@@ -530,3 +530,34 @@ func TestNotifyWakes(t *testing.T) {
 		t.Fatal("append did not signal")
 	}
 }
+
+// BenchmarkAppendDeepSpool measures Append against a spool holding many
+// sealed segments — the case where per-append bounds scans were O(segments).
+func BenchmarkAppendDeepSpool(b *testing.B) {
+	dir := b.TempDir()
+	s, err := Open(dir, 1<<30, time.Hour)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer s.Close()
+	res := &pb.ProbeResult{ProbeId: "bench-probe", JitterUs: -1}
+	for i := 0; i < 200; i++ {
+		for j := 0; j < 16; j++ {
+			if err := s.Append(res); err != nil {
+				b.Fatal(err)
+			}
+		}
+		s.mu.Lock()
+		if err := s.rotateLocked(); err != nil {
+			s.mu.Unlock()
+			b.Fatal(err)
+		}
+		s.mu.Unlock()
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := s.Append(res); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

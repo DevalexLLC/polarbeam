@@ -510,7 +510,7 @@ func (f *fakeDB) UpdateBannerSettings(_ context.Context, b store.BannerSettings)
 	f.banner = &b
 	return f.banner, nil
 }
-func (f *fakeDB) ListOutages(_ context.Context, _ time.Duration, networks []uuid.UUID, includeRoutes bool) ([]store.OutageInfo, error) {
+func (f *fakeDB) ListOutages(_ context.Context, _ time.Duration, networks []uuid.UUID, includeRoutes bool) ([]store.OutageInfo, bool, error) {
 	f.recordScope("ListOutages", networks)
 	f.lastOutageRoutes = includeRoutes
 	out := append([]store.OutageInfo(nil), f.outages...)
@@ -519,7 +519,7 @@ func (f *fakeDB) ListOutages(_ context.Context, _ time.Duration, networks []uuid
 			out[i].RelatedRoutes = nil
 		}
 	}
-	return out, nil
+	return out, false, nil
 }
 func (f *fakeDB) ListPathEvents(_ context.Context, _ time.Duration, networks []uuid.UUID) ([]store.PathEventInfo, error) {
 	f.recordScope("ListPathEvents", networks)

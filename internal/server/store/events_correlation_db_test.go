@@ -73,7 +73,7 @@ func TestListOutagesStableIdentitiesAndRelatedRoutes(t *testing.T) {
 	// agent+target identity.
 	insertPathQueryEvent(t, ctx, s, legacyRoute, base.Add(6*time.Hour+time.Minute), f.aDef, legacyRouteProbe, serviceTarget, `[]`, `[]`)
 
-	outages, err := s.ListOutages(ctx, 24*time.Hour, nil, true)
+	outages, _, err := s.ListOutages(ctx, 24*time.Hour, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestListOutagesStableIdentitiesAndRelatedRoutes(t *testing.T) {
 	if legacy.ProbeID != nil || !slices.Contains(pathEventIDs(legacy.RelatedRoutes), legacyRoute) {
 		t.Errorf("legacy missing-probe routes = %+v", legacy.RelatedRoutes)
 	}
-	withoutRoutes, err := s.ListOutages(ctx, 24*time.Hour, nil, false)
+	withoutRoutes, _, err := s.ListOutages(ctx, 24*time.Hour, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,5 +115,57 @@ func TestListOutagesStableIdentitiesAndRelatedRoutes(t *testing.T) {
 		if len(outage.RelatedRoutes) != 0 {
 			t.Errorf("opt-out outage %s unexpectedly has routes", outage.ID)
 		}
+	}
+}
+
+// TestListOutagesOpenBranchCap: the open branch carries a high safety cap so
+// a pathological incident cannot make the 30s-polled endpoint unbounded —
+// and the cut is reported, never silent.
+func TestListOutagesOpenBranchCap(t *testing.T) {
+	ctx, s := newStore(t)
+	f := buildNetFixture(t, ctx, s)
+
+	// 2001 open events (one past the cap), opened one second apart.
+	if _, err := s.Pool().Exec(ctx, `
+		INSERT INTO outage_events (id, kind, agent_id, probe_id, target_id,
+		                           probe_type, opened_at, closed_at, open_error)
+		SELECT gen_random_uuid(), 'probe_failing', $1, gen_random_uuid(), $2, 1,
+		       now() - make_interval(secs => i), NULL, 'flood'
+		FROM generate_series(1, 2001) AS i`, f.aDef, f.tBDef); err != nil {
+		t.Fatalf("seed outage flood: %v", err)
+	}
+
+	outages, truncated, err := s.ListOutages(ctx, 24*time.Hour, nil, false)
+	if err != nil {
+		t.Fatalf("ListOutages: %v", err)
+	}
+	if !truncated {
+		t.Error("2001 open events: truncated = false, want true")
+	}
+	if len(outages) != 2000 {
+		t.Fatalf("got %d events, want 2000 (cap)", len(outages))
+	}
+	for i := 1; i < len(outages); i++ {
+		if outages[i].OpenedAt.After(outages[i-1].OpenedAt) {
+			t.Fatalf("events not newest-first at index %d", i)
+		}
+	}
+
+	// Closing the oldest brings the open count to the cap exactly: nothing
+	// is cut, and the closed event still rides the closed branch.
+	if _, err := s.Pool().Exec(ctx, `
+		UPDATE outage_events SET closed_at = now()
+		WHERE opened_at = (SELECT min(opened_at) FROM outage_events)`); err != nil {
+		t.Fatalf("close oldest: %v", err)
+	}
+	outages, truncated, err = s.ListOutages(ctx, 24*time.Hour, nil, false)
+	if err != nil {
+		t.Fatalf("ListOutages after close: %v", err)
+	}
+	if truncated {
+		t.Error("2000 open events: truncated = true, want false")
+	}
+	if len(outages) != 2001 {
+		t.Errorf("got %d events, want 2001 (2000 open + 1 recently closed)", len(outages))
 	}
 }

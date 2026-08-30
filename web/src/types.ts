@@ -469,6 +469,10 @@ export interface OutagesResponse {
   // away from the server-evaluated window.
   now: string
   outages: OutageEvent[]
+  // True when the oldest OPEN events were cut by the server's safety cap
+  // (a pathological fleet-wide incident): the list is partial and views
+  // must say so instead of presenting it as complete.
+  truncated?: boolean
 }
 
 export interface Hop {

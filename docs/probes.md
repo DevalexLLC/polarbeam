@@ -239,11 +239,10 @@ historical series across the endpoint change. Create a target under a new name
 when measurements of the new endpoint must not be mixed with the old history.
 
 The agent runs one worker per assigned probe. Each worker deterministically
-staggers its first run by a per-probe offset of up to about four seconds, never
-exceeding the interval, so workers do not all start at the same instant after
-an agent restart or configuration update. Later runs keep that offset, so with
-long intervals the fleet's runs cluster near the start of each interval rather
-than spreading across it.
+staggers its first run by a per-probe offset spread across the full probe
+interval, so workers do not all start at the same instant after an agent
+restart or configuration update. Later runs keep that offset, spreading a
+site's probe load evenly across each interval.
 
 ## ICMP
 

@@ -49,7 +49,11 @@ fmt-check:
 	exit $$fail
 
 lint: vet fmt-check
-	@command -v staticcheck >/dev/null 2>&1 && staticcheck ./... || echo "staticcheck not installed; ran go vet only"
+	@if command -v staticcheck >/dev/null 2>&1; then \
+		staticcheck ./...; \
+	else \
+		echo "staticcheck not installed; ran go vet only"; \
+	fi
 
 # Production images for the local architecture (CI does multi-arch via
 # buildx). The agent MUST name --target release: the Dockerfile's default

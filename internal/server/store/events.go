@@ -34,15 +34,23 @@ type OutageInfo struct {
 
 const incidentRouteWindow = 15 * time.Minute
 
-// ListOutages returns open events (always, uncapped) plus up to 500
-// events closed within the window, newest first. The two disjoint
-// branches (open ∪ recently closed) replace a closed_at IS NULL OR
-// closed_at > cutoff predicate no index could serve against
-// forever-retained history: the open branch rides the partial open-event
-// indexes, the closed branch range-scans outage_events_closed_idx. The
-// LIMIT is parenthesized onto the closed branch only — attached to the
-// union it would drop the oldest open outages during a >500-event
-// incident, exactly when the dashboard must show them all.
+// openOutageCap bounds the open branch of ListOutages. Generous on purpose:
+// a real fleet-wide incident should still show whole (hundreds of open
+// events), but a pathological one must not turn a 30s-polled endpoint into
+// an unbounded multi-MB response. Truncation is reported, never silent.
+const openOutageCap = 2000
+
+// ListOutages returns open events plus up to 500 events closed within the
+// window, newest first. The two disjoint branches (open ∪ recently closed)
+// replace a closed_at IS NULL OR closed_at > cutoff predicate no index
+// could serve against forever-retained history: the open branch rides the
+// partial open-event indexes, the closed branch range-scans
+// outage_events_closed_idx. The closed branch's LIMIT is parenthesized onto
+// that branch only — attached to the union it would drop the oldest open
+// outages during a large incident, exactly when the dashboard must show
+// them. The open branch carries its own high safety cap (openOutageCap):
+// truncated=true reports that the oldest open events were cut, so the
+// caller can say so instead of presenting a silently partial incident.
 // networks is the caller's network scope (nil = unfiltered). Scoped callers
 // also lose events whose agent row is gone (plane unknowable): attribution
 // fails closed rather than leaking a possibly foreign event. The scope
@@ -50,18 +58,23 @@ const incidentRouteWindow = 15 * time.Minute
 // closed branch's LIMIT must count only in-scope events, or a noisy foreign
 // tenant's 500 newest closed outages would crowd a scoped tenant's own
 // history out of the response entirely.
-func (s *Store) ListOutages(ctx context.Context, window time.Duration, networks []uuid.UUID, includeRoutes bool) ([]OutageInfo, error) {
+func (s *Store) ListOutages(ctx context.Context, window time.Duration, networks []uuid.UUID, includeRoutes bool) (_ []OutageInfo, truncated bool, _ error) {
+	// The open branch fetches cap+1 newest-first so truncation is detected
+	// in the same round trip; the sentinel row (the oldest open event) is
+	// dropped below.
 	rows, err := s.pool.Query(ctx, `
 		SELECT oe.id, oe.kind, oe.agent_id, oe.probe_id, oe.target_id,
 			COALESCE(a.hostname, ''), COALESCE(n.name, ''),
 			COALESCE(src.name, ''),
 			dst.name, t.name, oe.probe_type, oe.opened_at, oe.closed_at, oe.open_error
 		FROM (
-			SELECT id, kind, agent_id, probe_id, target_id, probe_type, opened_at, closed_at, open_error
+			(SELECT id, kind, agent_id, probe_id, target_id, probe_type, opened_at, closed_at, open_error
 			FROM outage_events
 			WHERE closed_at IS NULL
 			  AND ($2::uuid[] IS NULL
 			       OR agent_id IN (SELECT id FROM agents WHERE network_id = ANY($2)))
+			ORDER BY opened_at DESC
+			LIMIT $3)
 			UNION ALL
 			(SELECT id, kind, agent_id, probe_id, target_id, probe_type, opened_at, closed_at, open_error
 			FROM outage_events
@@ -77,35 +90,50 @@ func (s *Store) ListOutages(ctx context.Context, window time.Duration, networks 
 		LEFT JOIN targets t ON t.id = oe.target_id
 		LEFT JOIN agents ta ON ta.id = t.agent_id
 		LEFT JOIN sites dst ON dst.id = ta.site_id
-		ORDER BY oe.opened_at DESC`, window, networks)
+		ORDER BY oe.opened_at DESC`, window, networks, openOutageCap+1)
 	if err != nil {
-		return nil, fmt.Errorf("list outages: %w", err)
+		return nil, false, fmt.Errorf("list outages: %w", err)
 	}
 	defer rows.Close()
 
 	var out []OutageInfo
+	open := 0
 	for rows.Next() {
 		var o OutageInfo
 		if err := rows.Scan(&o.ID, &o.Kind, &o.AgentID, &o.ProbeID, &o.TargetID,
 			&o.AgentHostname, &o.Network, &o.SrcSite,
 			&o.DstSite, &o.TargetName, &o.ProbeType, &o.OpenedAt, &o.ClosedAt, &o.Error); err != nil {
-			return nil, fmt.Errorf("scan outage: %w", err)
+			return nil, false, fmt.Errorf("scan outage: %w", err)
+		}
+		if o.ClosedAt == nil {
+			open++
 		}
 		out = append(out, o)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	rows.Close()
+	if open > openOutageCap {
+		// Drop the sentinel: the last open row in newest-first order is the
+		// oldest open event, the one the cap is defined to cut.
+		for i := len(out) - 1; i >= 0; i-- {
+			if out[i].ClosedAt == nil {
+				out = append(out[:i], out[i+1:]...)
+				break
+			}
+		}
+		truncated = true
+	}
 	if len(out) == 0 || !includeRoutes {
-		return out, nil
+		return out, truncated, nil
 	}
 	candidates, err := s.listIncidentRouteCandidates(ctx, window, networks)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	correlateIncidentRoutes(out, candidates)
-	return out, nil
+	return out, truncated, nil
 }
 
 // PathEventInfo is one path_events row joined with display names. Hops are

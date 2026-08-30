@@ -86,6 +86,15 @@ type Spool struct {
 	droppedAcked   uint64 // lifetime count the server has acknowledged, persisted to droppedStateFile
 	droppedUnacked uint64 // portion not yet acknowledged by the server, persisted to droppedFile
 
+	// Bounds-scan trigger state. totalBytes is an approximation that only
+	// ever OVERESTIMATES (appends add to it; ack-deletes and truncations
+	// don't subtract), so a max_bytes breach can never be missed — it only
+	// causes a scan that finds nothing to drop and resyncs the number.
+	// lastBoundsCheck paces the age check; both are refreshed by every full
+	// enforceBoundsLocked pass, which remains the sole authority on drops.
+	totalBytes      int64
+	lastBoundsCheck time.Time
+
 	notify chan struct{}
 }
 
@@ -243,13 +252,27 @@ func (s *Spool) Append(res *pb.ProbeResult) error {
 		return fmt.Errorf("spool: write: %w", err)
 	}
 	s.activeSize += int64(len(payload)) + recordOverhead
+	s.totalBytes += int64(len(payload)) + recordOverhead
 	s.pending++
 
-	if err := s.enforceBoundsLocked(); err != nil {
-		return err
+	// Bounds enforcement scans the directory; paying that on every append
+	// made a deep spool most expensive exactly when the agent was already
+	// stressed. Scan only when the overestimating byte count says max_bytes
+	// may be breached, or on a cadence comfortably inside max_age.
+	if s.totalBytes > s.maxBytes || s.now().Sub(s.lastBoundsCheck) >= s.boundsCheckEvery() {
+		if err := s.enforceBoundsLocked(); err != nil {
+			return err
+		}
 	}
 	s.wake()
 	return nil
+}
+
+// boundsCheckEvery is the age-check cadence: frequent enough that segments
+// never outlive max_age by a meaningful margin, cheap at the production
+// max_age scale (days -> one scan a minute).
+func (s *Spool) boundsCheckEvery() time.Duration {
+	return min(time.Minute, s.maxAge/2)
 }
 
 // dropUnspoolable counts a per-record fault as a drop. A non-nil return is a
@@ -488,12 +511,14 @@ func (s *Spool) enforceBoundsLocked() error {
 			total += seg.size
 		}
 		if len(segs) == 0 {
+			s.totalBytes, s.lastBoundsCheck = 0, s.now()
 			return nil
 		}
 		oldest := segs[0]
 		overSize := total > s.maxBytes
 		overAge := s.now().Sub(oldest.mod) > s.maxAge
 		if !overSize && !overAge {
+			s.totalBytes, s.lastBoundsCheck = total, s.now()
 			return nil
 		}
 		if oldest.seq == s.activeSeq && s.active != nil {

@@ -28,6 +28,15 @@ type Prober interface {
 // from the registry is reported UNSUPPORTED by the scheduler, never skipped.
 type Registry map[pb.ProbeType]Prober
 
+// Retirer is implemented by probers that keep per-series state across runs
+// (the ICMP jitter accumulator). The scheduler calls Retire after a probe's
+// worker exits so state for retired series is not carried forever — and so a
+// probe that is later re-assigned starts fresh instead of resuming a stale
+// accumulator from before the gap.
+type Retirer interface {
+	Retire(probeID string)
+}
+
 // DefaultRegistry returns the probers this agent build supports.
 func DefaultRegistry() Registry {
 	return Registry{

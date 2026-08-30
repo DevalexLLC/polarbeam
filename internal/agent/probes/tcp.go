@@ -23,6 +23,11 @@ func (TCP) Run(ctx context.Context, spec *pb.ProbeSpec) *pb.ProbeResult {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "tcp", addr)
 	elapsed := time.Since(start)
+	// Timings are recorded even on failure, matching TLS and HTTP; the
+	// aggregates only fold latency from OK rows, so a timed failure can
+	// never read as low latency.
+	res.Timings.TcpConnectUs = us(elapsed)
+	res.Timings.TotalUs = us(elapsed)
 	if err != nil {
 		return fail(res, err, pb.ProbeStatus_PROBE_STATUS_UNSPECIFIED)
 	}
@@ -30,7 +35,5 @@ func (TCP) Run(ctx context.Context, spec *pb.ProbeSpec) *pb.ProbeResult {
 
 	res.Received = 1
 	res.Status = pb.ProbeStatus_PROBE_STATUS_OK
-	res.Timings.TcpConnectUs = us(elapsed)
-	res.Timings.TotalUs = us(elapsed)
 	return res
 }

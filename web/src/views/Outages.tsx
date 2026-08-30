@@ -460,6 +460,7 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
               {data.outages.filter((o) => o.closed_at != null).length >= 500
                 ? ' · oldest resolved past 500 omitted'
                 : ''}
+              {data.truncated ? ' · oldest open incidents omitted (server cap)' : ''}
             </span>
           </div>
           <IncidentTimeline
