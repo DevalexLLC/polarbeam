@@ -77,7 +77,7 @@ Key messages: `ProbeSpec` (probe_id UUID, type, target, interval, timeout, train
 
 **Direction identity is unforgeable:** source = mTLS peer cert → agent → site; destination = `target_id` → (for mesh probes) peer agent → site. A→B and B→A are distinct series by construction.
 
-Config delivery: server streams **full snapshots** (not diffs); agent diffs locally against running workers. The stream doubles as liveness (`last_seen_at`).
+Config delivery: server streams **full snapshots** (not diffs); agent diffs locally against running workers. The stream doubles as liveness (`last_seen_at`). The agent persists the last applied snapshot beside the spool (`internal/agent/confcache`) and applies it at startup, so a restart during a control-plane outage keeps probing instead of going silent; the cached hash rides `AgentHello`, so a server that moved on re-sends immediately — the cache covers the server's absence, never overrides it.
 
 ## TimescaleDB schema
 
