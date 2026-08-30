@@ -133,6 +133,20 @@ test('reload after stop is inert', async () => {
   assert.equal(intervals.length, 1)
 })
 
+test('a failure after stop logs but never fires onAuthError', async () => {
+  const { fetcher, calls } = makeFetcher()
+  const { events, callbacks } = makeRecorder()
+  const { timers } = makeTimers()
+  const controller = startPolledResource(fetcher, POLL_MS, callbacks, timers)
+  controller.stop()
+  calls[0].reject(new Error('dead session'))
+  await settle()
+  assert.deepEqual(
+    events.filter(([kind]) => kind !== 'refreshing').map(([kind]) => kind),
+    ['log'],
+  )
+})
+
 test('onAuthError and logError fire even for superseded failures; onError only for fresh ones', async () => {
   const { fetcher, calls } = makeFetcher()
   const { events, callbacks } = makeRecorder()

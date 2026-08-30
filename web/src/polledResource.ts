@@ -14,9 +14,13 @@ export interface PolledResourceCallbacks<T> {
   // Fresh (non-superseded) results only.
   onData(data: T): void
   onError(err: unknown): void
-  // Every failure, even superseded ones: a 401 on a stale response must still
-  // log the session out, and diagnostics should never be dropped silently.
+  // Every failure while the controller is live, even superseded ones: a 401
+  // on a stale response must still log the session out. Silenced after
+  // stop() — the caller is gone, and a late 401 from a dead session must
+  // not log out a session established since (a live controller's own next
+  // request handles real session death).
   onAuthError?(err: unknown): void
+  // Every failure, even after stop: diagnostics are never dropped silently.
   logError?(err: unknown): void
   // true when a load starts; false once the LATEST generation settles.
   onRefreshing?(refreshing: boolean): void
@@ -54,7 +58,7 @@ export function startPolledResource<T>(
         callbacks.onData(data)
       })
       .catch((err) => {
-        callbacks.onAuthError?.(err)
+        if (!stopped) callbacks.onAuthError?.(err)
         callbacks.logError?.(err)
         if (gen !== generation) return
         callbacks.onError(err)
