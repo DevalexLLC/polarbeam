@@ -55,24 +55,17 @@ func inventoryDirection(order, what string) (string, error) {
 	}
 }
 
-func siteConfigOrder(sortName, order string) (string, error) {
-	direction, err := inventoryDirection(order, "site config")
-	if err != nil {
-		return "", err
-	}
-	columns := map[string]string{
-		"name":         "lower(name)",
-		"display_name": "lower(display_name)",
-		"created":      "created_at",
-		"agents":       "agent_count",
-		"meshes":       "mesh_count",
-		"probes":       "probe_count",
-	}
-	column, ok := columns[sortName]
-	if !ok {
-		return "", invalidf("unknown site config sort %q", sortName)
-	}
-	return column + direction + ", id" + direction, nil
+var siteConfigSort = orderAllowlist{
+	name:    "site config",
+	tieExpr: "id",
+	columns: map[string]orderColumn{
+		"name":         {expr: "lower(name)"},
+		"display_name": {expr: "lower(display_name)"},
+		"created":      {expr: "created_at"},
+		"agents":       {expr: "agent_count"},
+		"meshes":       {expr: "mesh_count"},
+		"probes":       {expr: "probe_count"},
+	},
 }
 
 var siteConfigRowsSQL = `
@@ -104,14 +97,13 @@ func scanSiteConfig(row rowScanner, extra ...any) (SiteAdminInfo, error) {
 // QuerySitesConfig filters, sorts, and pages the settings site inventory.
 // Tenant visibility and every reference count are scoped before search.
 func (s *Store) QuerySitesConfig(ctx context.Context, f SiteConfigFilter) ([]SiteAdminInfo, int64, error) {
-	if f.Limit < 1 || f.Limit > 100 || f.Offset < 0 {
-		return nil, 0, invalidf("invalid site config page")
+	if err := pageBounds("site config", f.Limit, f.Offset); err != nil {
+		return nil, 0, err
 	}
-	orderBy, err := siteConfigOrder(f.Sort, f.Order)
+	orderBy, err := siteConfigSort.clause(f.Sort, f.Order)
 	if err != nil {
 		return nil, 0, err
 	}
-	args := []any{f.Networks, escapeLike(strings.TrimSpace(f.Query))}
 	cte := `WITH site_rows AS MATERIALIZED (` + siteConfigRowsSQL + `),
 		filtered AS MATERIALIZED (
 			SELECT * FROM site_rows
@@ -120,31 +112,24 @@ func (s *Store) QuerySitesConfig(ctx context.Context, f SiteConfigFilter) ([]Sit
 			    OR display_name ILIKE '%' || $2 || '%'
 			    OR location ILIKE '%' || $2 || '%'
 		)`
-	rows, err := s.pool.Query(ctx, cte+`
-		SELECT id, name, display_name, location, latitude, longitude, created_at,
-		       agent_count, mesh_count, probe_count, count(*) OVER ()
-		  FROM filtered ORDER BY `+orderBy+` LIMIT $3 OFFSET $4`,
-		append(args, f.Limit, f.Offset)...)
-	if err != nil {
-		return nil, 0, fmt.Errorf("query sites config: %w", err)
-	}
-	defer rows.Close()
-	out := make([]SiteAdminInfo, 0, f.Limit)
 	var total int64
-	for rows.Next() {
-		si, err := scanSiteConfig(rows, &total)
-		if err != nil {
-			return nil, 0, fmt.Errorf("scan site config: %w", err)
-		}
-		out = append(out, si)
-	}
-	if err := rows.Err(); err != nil {
+	out, err := runPaged(ctx, s.pool, f.Limit, f.Offset, pagedSpec[SiteAdminInfo]{
+		queryErr:    "query sites config",
+		scanErr:     "scan site config",
+		fallbackErr: "count sites config",
+		pageSQL: cte + `
+			SELECT id, name, display_name, location, latitude, longitude, created_at,
+			       agent_count, mesh_count, probe_count, count(*) OVER ()
+			  FROM filtered ORDER BY ` + orderBy + ` LIMIT $3 OFFSET $4`,
+		args: []any{f.Networks, escapeLike(strings.TrimSpace(f.Query))},
+		scan: func(row rowScanner) (SiteAdminInfo, error) {
+			return scanSiteConfig(row, &total)
+		},
+		fallbackSQL:  cte + ` SELECT count(*) FROM filtered`,
+		fallbackDest: []any{&total},
+	})
+	if err != nil {
 		return nil, 0, err
-	}
-	if len(out) == 0 && f.Offset > 0 {
-		if err := s.pool.QueryRow(ctx, cte+` SELECT count(*) FROM filtered`, args...).Scan(&total); err != nil {
-			return nil, 0, fmt.Errorf("count sites config: %w", err)
-		}
 	}
 	return out, total, nil
 }

@@ -26,6 +26,8 @@ func TestOrderAllowlistClause(t *testing.T) {
 		{fixtureSort, "name", "asc", "lower(name) ASC, f.id ASC"},
 		{fixtureSort, "name", "desc", "lower(name) DESC, f.id DESC"},
 		{fixtureSort, "seen", "desc", "seen_at DESC NULLS LAST, f.id DESC"},
+		{siteConfigSort, "display_name", "asc", "lower(display_name) ASC, id ASC"},
+		{siteConfigSort, "agents", "desc", "agent_count DESC, id DESC"},
 	}
 	for _, tc := range cases {
 		got, err := tc.list.clause(tc.sort, tc.order)
