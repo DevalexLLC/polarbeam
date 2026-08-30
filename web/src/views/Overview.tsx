@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { apiGet } from '../api'
 import ConnectivityCard, { type ConnectivityMode } from '../components/ConnectivityCard'
 import FleetAgentsCard from '../components/FleetAgentsCard'
@@ -9,6 +9,7 @@ import { inheritRouteNetwork } from '../routeState'
 import { buildSiteTopology, topologyUrgentSites } from '../siteTopology'
 import { buildThresholdResolver, cellSeverity } from '../severity'
 import { resolveTopologyMode } from '../topologyMode'
+import { usePolledResource } from '../usePolledResource'
 import { useRouteParam } from '../useRouteState'
 import type {
   AgentHealthResponse,
@@ -20,7 +21,6 @@ import type {
   SettingsResponse,
 } from '../types'
 
-const POLL_MS = 30_000
 const NARROW_TOPOLOGY = '(max-width: 640px)'
 
 function useNarrowTopology(): boolean {
@@ -94,59 +94,35 @@ function ratioStatus(value: number, total: number): string {
 }
 
 export default function Overview({ onAuthError }: { onAuthError: (err: unknown) => void }) {
-  const [matrix, setMatrix] = useState<MatrixResponse | null>(null)
-  const [agents, setAgents] = useState<AgentsResponse | null>(null)
-  const [outages, setOutages] = useState<OutagesResponse | null>(null)
-  const [settings, setSettings] = useState<SettingsResponse | null>(null)
-  const [health, setHealth] = useState<AgentHealthResponse | null>(null)
   const [explicitTopology, setTopology] = useRouteParam('topology')
   const narrowTopology = useNarrowTopology()
   const connMode: ConnectivityMode = resolveTopologyMode(explicitTopology, narrowTopology)
   // The global top-bar filter; '' = all planes folded together — the
   // pre-networks view. Every stat tile and card on this page honors it.
   const { network: netFilter } = useNetworkFilter()
-  const [error, setError] = useState<unknown>(null)
-  const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
-  const [refreshing, setRefreshing] = useState(false)
 
-  const load = useCallback(() => {
-    setRefreshing(true)
-    return Promise.all([
-      apiGet<MatrixResponse>('/api/v1/matrix'),
-      apiGet<AgentsResponse>('/api/v1/agents'),
-      apiGet<OutagesResponse>('/api/v1/outages?window=24h'),
-      apiGet<SettingsResponse>('/api/v1/settings'),
-      apiGet<AgentHealthResponse>('/api/v1/agents/health?window=24h'),
-    ])
-      .then(([m, a, o, s, h]) => {
-        setMatrix(m)
-        setAgents(a)
-        setOutages(o)
-        setSettings(s)
-        setHealth(h)
-        setUpdatedAt(new Date())
-        setError(null)
-      })
-      .catch((err) => {
-        onAuthError(err)
-        console.error('overview request failed', err)
-        setError(err)
-      })
-      .finally(() => setRefreshing(false))
-  }, [onAuthError])
-
-  useEffect(() => {
-    let cancelled = false
-    const run = () => {
-      if (!cancelled) void load()
-    }
-    run()
-    const id = setInterval(run, POLL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [load])
+  const {
+    data,
+    error,
+    refreshing,
+    lastLoadedAt: updatedAt,
+    reload,
+  } = usePolledResource(
+    () =>
+      Promise.all([
+        apiGet<MatrixResponse>('/api/v1/matrix'),
+        apiGet<AgentsResponse>('/api/v1/agents'),
+        apiGet<OutagesResponse>('/api/v1/outages?window=24h'),
+        apiGet<SettingsResponse>('/api/v1/settings'),
+        apiGet<AgentHealthResponse>('/api/v1/agents/health?window=24h'),
+      ]).then(([matrix, agents, outages, settings, health]) => ({ matrix, agents, outages, settings, health })),
+    { onAuthError, logLabel: 'overview' },
+  )
+  const matrix = data?.matrix ?? null
+  const agents = data?.agents ?? null
+  const outages = data?.outages ?? null
+  const settings = data?.settings ?? null
+  const health = data?.health ?? null
 
   const resolveThresholds = useMemo(() => buildThresholdResolver(settings), [settings])
   // With a plane selected, each cell narrows to its sub-cell (same fields,
@@ -213,7 +189,7 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
   }).length
 
   if (error && !matrix)
-    return <PageError title="Overview unavailable" subject="overview" error={error} onRetry={() => void load()} />
+    return <PageError title="Overview unavailable" subject="overview" error={error} onRetry={() => void reload()} />
   if (!matrix || !agents || !outages)
     return (
       <div className="state-panel" role="status">
@@ -232,7 +208,7 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
         </div>
         <div className="page-actions">
           <span className="freshness">Updated {fmtAgo(updatedAt?.toISOString() ?? null)}</span>
-          <button className="secondary-button" disabled={refreshing} onClick={() => void load()}>
+          <button className="secondary-button" disabled={refreshing} onClick={() => void reload()}>
             {refreshing ? 'Refreshing…' : 'Refresh'}
           </button>
         </div>
