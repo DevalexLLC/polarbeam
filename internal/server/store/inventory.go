@@ -41,34 +41,19 @@ type AgentInventorySummary struct {
 	DroppedResults int64
 }
 
-func agentInventoryOrder(sortName, order string) (string, error) {
-	if order != "asc" && order != "desc" {
-		return "", invalidf("agent inventory order must be asc or desc")
-	}
-	direction := " ASC"
-	if order == "desc" {
-		direction = " DESC"
-	}
-	var column string
-	switch sortName {
-	case "hostname":
-		column = "lower(hostname)" + direction
-	case "site":
-		column = "lower(site)" + direction
-	case "network":
-		column = "lower(network)" + direction
-	case "health":
-		column = `CASE health
+var agentInventorySort = orderAllowlist{
+	name:    "agent inventory",
+	tieExpr: "id",
+	columns: map[string]orderColumn{
+		"hostname": {expr: "lower(hostname)"},
+		"site":     {expr: "lower(site)"},
+		"network":  {expr: "lower(network)"},
+		"health": {expr: `CASE health
 			WHEN 'offline' THEN 0 WHEN 'degraded' THEN 1
-			WHEN 'no_data' THEN 2 ELSE 3 END` + direction
-	case "last_seen":
-		column = "last_seen_at" + direction + " NULLS LAST"
-	case "version":
-		column = "lower(version)" + direction
-	default:
-		return "", invalidf("unknown agent inventory sort %q", sortName)
-	}
-	return column + ", id" + direction, nil
+			WHEN 'no_data' THEN 2 ELSE 3 END`},
+		"last_seen": {expr: "last_seen_at", suffix: " NULLS LAST"},
+		"version":   {expr: "lower(version)"},
+	},
 }
 
 const agentInventoryCTE = `
@@ -138,15 +123,15 @@ const agentInventoryCTE = `
 // over the entire filtered set. It deliberately leaves ListAgents untouched
 // so an unqueried /agents request retains its established JSON contract.
 func (s *Store) QueryAgents(ctx context.Context, f AgentInventoryFilter) ([]AgentListInfo, AgentInventorySummary, error) {
-	if f.Limit < 1 || f.Limit > 100 || f.Offset < 0 {
-		return nil, AgentInventorySummary{}, invalidf("invalid agent inventory page")
+	if err := pageBounds("agent inventory", f.Limit, f.Offset); err != nil {
+		return nil, AgentInventorySummary{}, err
 	}
 	if f.Health != "" && f.Health != AgentHealthOffline && f.Health != AgentHealthDegraded &&
 		f.Health != AgentHealthHealthy && f.Health != AgentHealthNoData && f.Health != AgentHealthAttention &&
 		f.Health != AgentHealthClear {
 		return nil, AgentInventorySummary{}, invalidf("unknown agent health %q", f.Health)
 	}
-	orderBy, err := agentInventoryOrder(f.Sort, f.Order)
+	orderBy, err := agentInventorySort.clause(f.Sort, f.Order)
 	if err != nil {
 		return nil, AgentInventorySummary{}, err
 	}
@@ -154,45 +139,38 @@ func (s *Store) QueryAgents(ctx context.Context, f AgentInventoryFilter) ([]Agen
 	if err != nil {
 		return nil, AgentInventorySummary{}, fmt.Errorf("query agents: %w", err)
 	}
-	args := []any{enabled, f.Networks, escapeLike(strings.TrimSpace(f.Query)), f.Health}
 
 	var summary AgentInventorySummary
-	rows, err := s.pool.Query(ctx, agentInventoryCTE+`
-		SELECT id, site, network, hostname, probe_address, version, last_seen_at,
-		       created_at, current_config_hash, dropped_results, last_dropped_at,
-		       not_after, revoked_at, offline, probes_failing, probes_total, health,
-		       count(*) OVER (),
-		       count(*) FILTER (WHERE health = 'offline') OVER (),
-		       count(*) FILTER (WHERE health = 'degraded') OVER (),
-		       count(*) FILTER (WHERE health = 'healthy') OVER (),
-		       count(*) FILTER (WHERE health = 'no_data') OVER (),
-		       count(*) FILTER (WHERE needs_attention) OVER (),
-		       COALESCE(sum(dropped_results) OVER (), 0)::bigint
-		  FROM filtered
-		 ORDER BY `+orderBy+`
-		 LIMIT $5 OFFSET $6`, append(args, f.Limit, f.Offset)...)
-	if err != nil {
-		return nil, AgentInventorySummary{}, fmt.Errorf("query agents: %w", err)
-	}
-	defer rows.Close()
-	list := make([]AgentListInfo, 0, f.Limit)
-	for rows.Next() {
-		var a AgentListInfo
-		if err := rows.Scan(&a.ID, &a.Site, &a.Network, &a.Hostname, &a.ProbeAddress,
-			&a.Version, &a.LastSeenAt, &a.CreatedAt, &a.ConfigHash, &a.DroppedResults,
-			&a.LastDroppedAt, &a.CertNotAfter, &a.CertRevokedAt, &a.Offline,
-			&a.ProbesFailing, &a.ProbesTotal, &a.Health, &summary.Total,
-			&summary.Offline, &summary.Degraded, &summary.Healthy,
-			&summary.NoData, &summary.Attention, &summary.DroppedResults); err != nil {
-			return nil, AgentInventorySummary{}, fmt.Errorf("scan queried agent: %w", err)
-		}
-		list = append(list, a)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, AgentInventorySummary{}, err
-	}
-	if len(list) == 0 && f.Offset > 0 {
-		err := s.pool.QueryRow(ctx, agentInventoryCTE+`
+	list, err := runPaged(ctx, s.pool, f.Limit, f.Offset, pagedSpec[AgentListInfo]{
+		queryErr:    "query agents",
+		scanErr:     "scan queried agent",
+		fallbackErr: "summarize agents",
+		pageSQL: agentInventoryCTE + `
+			SELECT id, site, network, hostname, probe_address, version, last_seen_at,
+			       created_at, current_config_hash, dropped_results, last_dropped_at,
+			       not_after, revoked_at, offline, probes_failing, probes_total, health,
+			       count(*) OVER (),
+			       count(*) FILTER (WHERE health = 'offline') OVER (),
+			       count(*) FILTER (WHERE health = 'degraded') OVER (),
+			       count(*) FILTER (WHERE health = 'healthy') OVER (),
+			       count(*) FILTER (WHERE health = 'no_data') OVER (),
+			       count(*) FILTER (WHERE needs_attention) OVER (),
+			       COALESCE(sum(dropped_results) OVER (), 0)::bigint
+			  FROM filtered
+			 ORDER BY ` + orderBy + `
+			 LIMIT $5 OFFSET $6`,
+		args: []any{enabled, f.Networks, escapeLike(strings.TrimSpace(f.Query)), f.Health},
+		scan: func(row rowScanner) (AgentListInfo, error) {
+			var a AgentListInfo
+			err := row.Scan(&a.ID, &a.Site, &a.Network, &a.Hostname, &a.ProbeAddress,
+				&a.Version, &a.LastSeenAt, &a.CreatedAt, &a.ConfigHash, &a.DroppedResults,
+				&a.LastDroppedAt, &a.CertNotAfter, &a.CertRevokedAt, &a.Offline,
+				&a.ProbesFailing, &a.ProbesTotal, &a.Health, &summary.Total,
+				&summary.Offline, &summary.Degraded, &summary.Healthy,
+				&summary.NoData, &summary.Attention, &summary.DroppedResults)
+			return a, err
+		},
+		fallbackSQL: agentInventoryCTE + `
 			SELECT count(*),
 			       count(*) FILTER (WHERE health = 'offline'),
 			       count(*) FILTER (WHERE health = 'degraded'),
@@ -200,12 +178,12 @@ func (s *Store) QueryAgents(ctx context.Context, f AgentInventoryFilter) ([]Agen
 			       count(*) FILTER (WHERE health = 'no_data'),
 			       count(*) FILTER (WHERE needs_attention),
 			       COALESCE(sum(dropped_results), 0)::bigint
-			  FROM filtered`, args...).Scan(&summary.Total, &summary.Offline,
-			&summary.Degraded, &summary.Healthy, &summary.NoData,
-			&summary.Attention, &summary.DroppedResults)
-		if err != nil {
-			return nil, AgentInventorySummary{}, fmt.Errorf("summarize agents: %w", err)
-		}
+			  FROM filtered`,
+		fallbackDest: []any{&summary.Total, &summary.Offline, &summary.Degraded,
+			&summary.Healthy, &summary.NoData, &summary.Attention, &summary.DroppedResults},
+	})
+	if err != nil {
+		return nil, AgentInventorySummary{}, err
 	}
 	return list, summary, nil
 }
