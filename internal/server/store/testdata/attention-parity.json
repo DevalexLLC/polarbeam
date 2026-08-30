@@ -1,0 +1,5 @@
+{
+  "_comment": "Agent-attention thresholds mirrored between the server's needs_attention predicate (inventory.go, SQL intervals) and the SPA's attentionReason (Overview.tsx / Agents.tsx constants). The SPA compares floor(days-left) <= cert_warn_days, which equals the SQL's absolute window of cert_warn_days+1 days — the Go test encodes that (+1) equivalence. Read by store/attention_parity_test.go and web/test/attention-parity.test.mjs.",
+  "cert_warn_days": 7,
+  "drop_attention_hours": 24
+}

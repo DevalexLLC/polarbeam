@@ -1,0 +1,5 @@
+{
+  "_comment": "The canonical latency COALESCE ladder: purest measurement first. This fixture fences three implementations that must agree — store's latencyExpr/latencySourceExpr/latencySourcePriority (dashboard.go), grpcapi's rowLatencyUS (ingest.go, ingest-time degraded grading), and the SERVING hourly-cagg SQL (the latest migration defining latency_source; 0002 today). Shipped migrations are immutable, so changing the ladder means updating this file, the Go sides, AND adding a new cagg migration in one change — a partial change fails tests instead of silently disagreeing across windows.",
+  "columns": ["rtt_avg_us", "tcp_connect_us", "tls_handshake_us", "ttfb_us", "total_us"],
+  "sources": ["rtt", "tcp_connect", "tls_handshake", "ttfb", "total"]
+}
