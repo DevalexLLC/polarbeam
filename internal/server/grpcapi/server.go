@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"log/slog"
+	"math/big"
 	"net"
 	"time"
 
@@ -33,6 +34,12 @@ type Server struct {
 	store       *store.Store
 	ca          *ca.CA
 	assignments assignmentCache
+	certs       certCache
+
+	// fetchCertValid is the test seam behind certValidCached; nil means
+	// s.store.CertValid. The stream sweep bypasses it (and the cache) on
+	// purpose — see certCache.
+	fetchCertValid func(ctx context.Context, serial *big.Int, agentID uuid.UUID) (bool, error)
 }
 
 func New(st *store.Store, authority *ca.CA) *Server {
@@ -321,6 +328,18 @@ func (s *Server) RenewCert(ctx context.Context, req *pb.RenewCertRequest) (*pb.R
 	id, err := s.authenticateAgent(ctx)
 	if err != nil {
 		return nil, err
+	}
+	// Renewal mints a FRESH unrevoked certificate, so a 30s-stale cached
+	// auth is not good enough here: a just-revoked serial could otherwise
+	// convert its cache window into a brand-new credential and escape
+	// revocation entirely. Re-check uncached immediately before issuance.
+	valid, err := s.store.CertValid(ctx, id.Cert.SerialNumber, id.AgentID)
+	if err != nil {
+		slog.Error("renewal revocation re-check failed", "err", err)
+		return nil, status.Error(codes.Internal, "certificate check failed")
+	}
+	if !valid {
+		return nil, status.Error(codes.PermissionDenied, "certificate revoked or unknown")
 	}
 	certDER, serial, notAfter, err := s.ca.SignAgentCSR(req.GetCsrDer(), id.AgentID, id.Cert.Subject.CommonName)
 	if err != nil {

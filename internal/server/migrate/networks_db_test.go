@@ -108,7 +108,7 @@ func TestNetworksMigrationUpgrade(t *testing.T) {
 	// semantics, computed independently here. Spec-set identity plus the
 	// untouched hash function (pinned by meshexpand's own tests) is what
 	// keeps config_hash from moving on upgrade.
-	s, err := store.Connect(ctx, url, 10*time.Second)
+	s, err := store.Connect(ctx, url, 10*time.Second, 0)
 	if err != nil {
 		t.Fatalf("store.Connect: %v", err)
 	}

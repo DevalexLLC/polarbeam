@@ -17,6 +17,12 @@ listen:
 db:
   # In the compose stack the hostname is the service name.
   url: postgres://polarbeam:CHANGE_ME@timescaledb:5432/polarbeam
+  # max_conns caps the connection pool. Unset (0) sizes it automatically —
+  # max(16, min(4*CPUs, 64)) — which suits the bundled single-host stack.
+  # Raise it for large fleets only alongside the database's own
+  # max_connections; every agent config stream and dashboard poll draws
+  # from this pool.
+  # max_conns: 32
 
 tls:
   # Dashboard certificate (browser-facing listener only; the gRPC listener's

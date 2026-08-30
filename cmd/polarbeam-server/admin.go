@@ -49,7 +49,7 @@ func (p paramsFlag) Set(kv string) error {
 // adminStore opens the store the way cmdToken does.
 func adminStore(cfg config.Config) (*store.Store, context.Context, context.CancelFunc, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	st, err := store.Connect(ctx, cfg.DB.URL, cfg.DB.ConnectTimeout)
+	st, err := store.Connect(ctx, cfg.DB.URL, cfg.DB.ConnectTimeout, cfg.DB.MaxConns)
 	if err != nil {
 		cancel()
 		return nil, nil, nil, err
