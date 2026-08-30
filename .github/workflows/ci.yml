@@ -70,6 +70,31 @@ jobs:
             exit 1
           fi
 
+  # Race-detector pass over the whole tree. Deliberately a separate job:
+  # the shipped binaries are CGO_ENABLED=0 (offline-build proves that), but
+  # the race detector requires cgo, so this job — and only this job —
+  # builds tests with it. Test-only; no release artifact comes from here,
+  # so the air-gap invariant is untouched. Not in the branch ruleset's
+  # required checks (adding it there is a ruleset change, not a repo
+  # change); it still reports on every PR. The agent is the most
+  # concurrent code in the repo (worker-per-probe scheduler, raw-socket
+  # reader goroutines, spool mutex with an escaping ack closure, uplink
+  # connection recycle) and was previously never race-checked.
+  race-test:
+    runs-on: ubuntu-latest
+    env:
+      GOFLAGS: -mod=vendor
+      GOPROXY: "off"
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Test with the race detector
+        run: CGO_ENABLED=1 go test -race -count=1 ./...
+
   # DB-backed store/migrate tests against the same TimescaleDB image the
   # compose stack ships. Deliberately a separate job: offline-build proves
   # the air-gap property and must stay network-free, while this one needs
