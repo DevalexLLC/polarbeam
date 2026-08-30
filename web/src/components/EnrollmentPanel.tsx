@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import type { Caps } from '../caps'
 import type { PlaneChoice } from '../plane'
 import { initialPlane, networkField, planeReady } from '../plane'
@@ -49,30 +49,21 @@ export default function EnrollmentPanel({
 
   // Like the OIDC panel, this GET is admin-only (join tokens are enrollment
   // credentials), so viewers get a static explanation instead of a doomed
-  // fetch. Sites feed the site picker only: a sites failure keeps the last
-  // list and stays out of the panel error — tokens are the panel's subject.
-  const siteNamesRef = useRef<string[]>([])
-  const {
-    data: snapshot,
-    error,
-    reload,
-  } = usePolledResource(
-    () => {
-      const sitesRequest = apiGet<SitesConfigResponse>('/api/v1/config/sites')
-        .then((res) => res.sites.map((s) => s.name))
-        .catch((err) => {
-          onAuthError(err)
-          return siteNamesRef.current
-        })
-      return Promise.all([apiGet<TokensResponse>('/api/v1/config/tokens'), sitesRequest]).then(
-        ([tokens, siteNames]) => ({ tokens, siteNames }),
-      )
-    },
-    { enabled: canWrite, onAuthError, logLabel: 'enrollment settings' },
+  // fetch.
+  const { data, error, reload } = usePolledResource<TokensResponse>('/api/v1/config/tokens', {
+    enabled: canWrite,
+    onAuthError,
+    logLabel: 'enrollment settings',
+  })
+  // Sites feed the site picker only, so they poll independently of the
+  // token list: a failure keeps the last list, stays out of the panel
+  // error, and never blocks tokens from committing — while a 401 still
+  // logs the session out through the controller.
+  const { data: siteNamesData, reload: reloadSites } = usePolledResource(
+    () => apiGet<SitesConfigResponse>('/api/v1/config/sites').then((res) => res.sites.map((s) => s.name)),
+    { enabled: canWrite, onAuthError },
   )
-  const data = snapshot?.tokens ?? null
-  const siteNames = snapshot?.siteNames ?? []
-  siteNamesRef.current = siteNames
+  const siteNames = siteNamesData ?? []
 
   const [actionError, setActionError] = useState('')
   // Token deletion reuses actionError's render slot but must not describe
@@ -116,7 +107,10 @@ export default function EnrollmentPanel({
         title="Enrollment tokens unavailable"
         subject="enrollment tokens"
         error={error}
-        onRetry={() => void reload()}
+        onRetry={() => {
+          void reload()
+          void reloadSites()
+        }}
       />
     )
   }
