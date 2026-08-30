@@ -7,11 +7,10 @@ import { useErrorSummary } from '../formErrors'
 import { useConcurrentSettingsDraft, useSettingsDraft, useSettingsMutation } from '../settingsMutation'
 import { useTimezone } from '../timezone'
 import type { LoginMonth, Role, UserAccount, UserCreateResponse, UsersResponse } from '../types'
+import { usePolledResource } from '../usePolledResource'
 import ConfirmButton from './ConfirmButton'
 import RoleWall from './RoleWall'
 import SettingsPageError from './SettingsPageError'
-
-const POLL_MS = 30_000
 
 function orderedNetworks(values: string[]): string[] {
   // ES2023 toSorted is outside this project's browser target. The spread
@@ -253,17 +252,30 @@ export default function UsersPanel({
   onAuthError: (err: unknown) => void
 }) {
   useTimezone() // re-render fmtTime renders on UTC/local toggle
-  const [data, setData] = useState<UsersResponse | null>(null)
-  const [error, setError] = useState<unknown>(null)
-  const [retryKey, setRetryKey] = useState(0)
   const [query, setQuery] = useState('') // raw input
   const [q, setQ] = useState('') // debounced, applied to the fetch
   const [role, setRole] = useState<RoleFilter>('')
   const [status, setStatus] = useState<StatusFilter>('')
   const [source, setSource] = useState<SourceFilter>('')
   const [offset, setOffset] = useState(0)
-  const [refresh, setRefresh] = useState(0) // bumped after any mutation
   const [actionError, setActionError] = useState('') // row disable/delete failures
+
+  const listParams = new URLSearchParams()
+  if (q) listParams.set('q', q)
+  if (role) listParams.set('role', role)
+  if (status) listParams.set('status', status)
+  if (source) listParams.set('source', source)
+  listParams.set('limit', String(PAGE_SIZE))
+  if (offset > 0) listParams.set('offset', String(offset))
+  // Like the token list, this GET is admin-only (usernames, roles, and
+  // sign-in history), so viewers get a static explanation instead of a
+  // doomed fetch.
+  const { data, error, reload } = usePolledResource<UsersResponse>('/api/v1/users?' + listParams.toString(), {
+    enabled: canWrite,
+    onAuthError,
+    logLabel: 'user settings',
+  })
+
   const [createError, setCreateError] = useState('') // shown inside the dialog
   const createSummary = useErrorSummary(Boolean(createError))
   const [newUsername, setNewUsername] = useState('')
@@ -354,43 +366,6 @@ export default function UsersPanel({
     }
   }, [data, offset])
 
-  // Like the token list, this GET is admin-only (usernames, roles, and
-  // sign-in history), so viewers get a static explanation instead of a
-  // doomed fetch.
-  useEffect(() => {
-    if (!canWrite) return
-    let cancelled = false
-    const params = new URLSearchParams()
-    if (q) params.set('q', q)
-    if (role) params.set('role', role)
-    if (status) params.set('status', status)
-    if (source) params.set('source', source)
-    params.set('limit', String(PAGE_SIZE))
-    if (offset > 0) params.set('offset', String(offset))
-    const url = '/api/v1/users?' + params.toString()
-    const load = () => {
-      apiGet<UsersResponse>(url)
-        .then((res) => {
-          if (!cancelled) {
-            setData(res)
-            setError(null)
-          }
-        })
-        .catch((err) => {
-          if (cancelled) return
-          onAuthError(err)
-          console.error('user settings request failed', err)
-          setError(err)
-        })
-    }
-    load()
-    const id = setInterval(load, POLL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [canWrite, onAuthError, q, role, status, source, offset, refresh, retryKey])
-
   // Only a local, scoped account has an editable scope: the server refuses
   // the field for a global role, and a federated account's networks are
   // re-derived from the IdP mapping on every login.
@@ -411,7 +386,7 @@ export default function UsersPanel({
       await apiPut('/api/v1/users/' + encodeURIComponent(u.id), { networks: next })
       setScopeEdit(null)
       feedback.success(`Network access for ${u.username} saved.`)
-      setRefresh((r) => r + 1)
+      void reload()
     } catch (err) {
       onAuthError(err)
       const message = err instanceof Error ? err.message : String(err)
@@ -445,7 +420,7 @@ export default function UsersPanel({
       setNewUsername('')
       setNewRole('viewer')
       setNewNetworks([])
-      setRefresh((r) => r + 1)
+      void reload()
       feedback.success(`User ${res.username} created.`)
     } catch (err) {
       onAuthError(err)
@@ -469,7 +444,7 @@ export default function UsersPanel({
     try {
       await apiPut('/api/v1/users/' + encodeURIComponent(u.id), { disabled })
       feedback.success(`User ${u.username} ${disabled ? 'disabled' : 'enabled'}.`)
-      setRefresh((r) => r + 1)
+      void reload()
     } catch (err) {
       onAuthError(err)
       const message = err instanceof Error ? err.message : String(err)
@@ -483,7 +458,7 @@ export default function UsersPanel({
     try {
       await apiDelete('/api/v1/users/' + encodeURIComponent(u.id))
       feedback.success(`User ${u.username} deleted.`)
-      setRefresh((r) => r + 1)
+      void reload()
     } catch (err) {
       onAuthError(err)
       const message = err instanceof Error ? err.message : String(err)
@@ -501,7 +476,7 @@ export default function UsersPanel({
       const res = await apiPost<UserCreateResponse>('/api/v1/users/' + encodeURIComponent(u.id) + '/reset-password')
       setMinted({ kind: 'reset', res })
       feedback.success(`Password for ${u.username} reset.`)
-      setRefresh((r) => r + 1)
+      void reload()
       dialogRef.current?.showModal()
     } catch (err) {
       onAuthError(err)
@@ -530,7 +505,7 @@ export default function UsersPanel({
         title="User accounts unavailable"
         subject="user accounts"
         error={error}
-        onRetry={() => setRetryKey((key) => key + 1)}
+        onRetry={() => void reload()}
       />
     )
   }
