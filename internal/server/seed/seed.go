@@ -209,6 +209,17 @@ func Run(ctx context.Context, pool *pgxpool.Pool, days int, out io.Writer) error
 		agentIDs, probeIDs); err != nil {
 		return fmt.Errorf("seed: delete prior seed rows: %w", err)
 	}
+	// Mirror the raw cleanup for series_state: a rerun can pick a different
+	// source agent for the same deterministic probe ID (enrollment order),
+	// and the prior agent's state row would otherwise linger as a phantom
+	// matrix check until it ages past the horizon.
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM series_state ss
+		USING unnest($1::uuid[], $2::uuid[]) AS u(agent_id, probe_id)
+		WHERE ss.agent_id = u.agent_id AND ss.probe_id = u.probe_id`,
+		agentIDs, probeIDs); err != nil {
+		return fmt.Errorf("seed: delete prior seed state: %w", err)
+	}
 
 	type summary struct {
 		p             pair
@@ -227,6 +238,37 @@ func Run(ctx context.Context, pool *pgxpool.Pool, days int, out io.Writer) error
 		}
 		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"probe_results"}, cols, pgx.CopyFromRows(src)); err != nil {
 			return fmt.Errorf("seed: copy %s→%s: %w", p.src, p.dst, err)
+		}
+		// The matrix serves "latest per series" from series_state (0023),
+		// which production ingest maintains — seeded history must land
+		// there too or a freshly seeded dashboard shows an empty matrix
+		// until live agents report. Only the newest row matters; live
+		// ingest that has already advanced past it wins via the last_time
+		// guard.
+		last := rows[len(rows)-1]
+		var lastLatency *int64
+		var lastSource *string
+		if last.RTTAvgUS != nil {
+			us := int64(*last.RTTAvgUS)
+			family := "rtt"
+			lastLatency, lastSource = &us, &family
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO series_state (agent_id, probe_id, target_id, probe_type,
+				last_status, last_time, last_loss_pct, last_latency_us, last_latency_source)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			ON CONFLICT (agent_id, probe_id) DO UPDATE SET
+				target_id = EXCLUDED.target_id,
+				probe_type = EXCLUDED.probe_type,
+				last_status = EXCLUDED.last_status,
+				last_time = EXCLUDED.last_time,
+				last_loss_pct = EXCLUDED.last_loss_pct,
+				last_latency_us = EXCLUDED.last_latency_us,
+				last_latency_source = EXCLUDED.last_latency_source
+			WHERE EXCLUDED.last_time > series_state.last_time`,
+			p.agentID, p.probeID, p.targetID, probeTypeICMP,
+			last.Status, last.Time, last.LossPct, lastLatency, lastSource); err != nil {
+			return fmt.Errorf("seed: series_state %s→%s: %w", p.src, p.dst, err)
 		}
 		p50, p95, p99 := Percentiles(rows)
 		summaries = append(summaries, summary{p, len(rows), p50, p95, p99})

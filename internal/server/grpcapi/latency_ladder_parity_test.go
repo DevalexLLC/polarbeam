@@ -21,6 +21,7 @@ func TestRowLatencyFollowsFixtureLadder(t *testing.T) {
 	}
 	var f struct {
 		Columns []string `json:"columns"`
+		Sources []string `json:"sources"`
 	}
 	if err := json.Unmarshal(b, &f); err != nil {
 		t.Fatalf("parse fixture: %v", err)
@@ -37,7 +38,10 @@ func TestRowLatencyFollowsFixtureLadder(t *testing.T) {
 		t.Fatalf("fixture has %d columns, this test knows %d — extend the setter table", len(f.Columns), len(set))
 	}
 
-	// With columns[i:] all measured, the winner must be columns[i].
+	// With columns[i:] all measured, the winner must be columns[i] and the
+	// reported family label must be the fixture's sources[i] — the label
+	// is persisted to series_state and must speak the same vocabulary as
+	// the SQL latencySourceExpr.
 	for i, col := range f.Columns {
 		if _, ok := set[col]; !ok {
 			t.Fatalf("fixture column %q unknown to the setter table", col)
@@ -46,14 +50,17 @@ func TestRowLatencyFollowsFixtureLadder(t *testing.T) {
 		for j := i; j < len(f.Columns); j++ {
 			set[f.Columns[j]](&row, int32(1000+j))
 		}
-		got := rowLatencyUS(row)
+		got, source := rowLatency(row)
 		if got == nil || *got != int64(1000+i) {
-			t.Errorf("row with %v measured: rowLatencyUS picked %v, want %s's value %d",
+			t.Errorf("row with %v measured: rowLatency picked %v, want %s's value %d",
 				f.Columns[i:], got, col, 1000+i)
+		}
+		if source == nil || *source != f.Sources[i] {
+			t.Errorf("row with %v measured: source = %v, want %q", f.Columns[i:], source, f.Sources[i])
 		}
 	}
 
-	if got := rowLatencyUS(store.ResultRow{}); got != nil {
-		t.Errorf("empty row: rowLatencyUS = %v, want nil", *got)
+	if got, source := rowLatency(store.ResultRow{}); got != nil || source != nil {
+		t.Errorf("empty row: rowLatency = (%v, %v), want (nil, nil)", got, source)
 	}
 }

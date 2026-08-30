@@ -424,6 +424,7 @@ func toOutageResults(rows []store.ResultRow, assigned map[uuid.UUID]probeAssignm
 		if r.Error != nil {
 			errText = *r.Error
 		}
+		latency, source := rowLatency(r)
 		res := outage.Result{
 			ProbeID:    r.ProbeID,
 			TargetID:   r.TargetID,
@@ -432,6 +433,12 @@ func toOutageResults(rows []store.ResultRow, assigned map[uuid.UUID]probeAssignm
 			OK:         r.Status == int16(pb.ProbeStatus_PROBE_STATUS_OK),
 			StatusCode: r.Status,
 			Error:      errText,
+			// Display mirrors for series_state: every row, failures
+			// included, matching the raw latest-row query the matrix
+			// used to run.
+			LossPct:       r.LossPct,
+			LatencyUS:     latency,
+			LatencySource: source,
 		}
 		if res.OK {
 			if a, ok := assigned[r.ProbeID]; ok {
@@ -448,18 +455,34 @@ func toOutageResults(rows []store.ResultRow, assigned map[uuid.UUID]probeAssignm
 	return out
 }
 
-// rowLatencyUS collapses a row's timing families to one headline latency:
-// the first measured value in purity order, mirroring the read side's
-// latencyExpr COALESCE ladder (store/dashboard.go) so grading and display
-// judge the same number.
-func rowLatencyUS(r store.ResultRow) *int64 {
-	for _, v := range []*int32{r.RttAvgUS, r.TCPConnectUS, r.TLSHandshakeUS, r.TTFBUS, r.TotalUS} {
-		if v != nil {
-			us := int64(*v)
-			return &us
+// rowLatency collapses a row's timing families to one headline latency and
+// its family label: the first measured value in purity order, mirroring the
+// read side's latencyExpr/latencySourceExpr COALESCE ladder
+// (store/dashboard.go) so grading and display judge the same number.
+// Fenced against store/testdata/latency-ladder.json by the parity test.
+func rowLatency(r store.ResultRow) (*int64, *string) {
+	for _, f := range []struct {
+		v      *int32
+		source string
+	}{
+		{r.RttAvgUS, "rtt"},
+		{r.TCPConnectUS, "tcp_connect"},
+		{r.TLSHandshakeUS, "tls_handshake"},
+		{r.TTFBUS, "ttfb"},
+		{r.TotalUS, "total"},
+	} {
+		if f.v != nil {
+			us := int64(*f.v)
+			source := f.source
+			return &us, &source
 		}
 	}
-	return nil
+	return nil, nil
+}
+
+func rowLatencyUS(r store.ResultRow) *int64 {
+	v, _ := rowLatency(r)
+	return v
 }
 
 // usColumn converts a wire microsecond value to a nullable column: negative

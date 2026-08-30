@@ -159,10 +159,14 @@ of one core. Two things scale CPU with fleet size:
 
 - Ingest: hundreds of small inserts per second at the large tier, which is
   light work for PostgreSQL on an SSD.
-- Config distribution: the server rebuilds each connected agent's full
-  assignment snapshot every 30 seconds to detect config changes. This is
-  linear in agents × assignments and is the reason the large tier recommends
-  more cores than ingest alone would justify.
+- Config distribution: each connected agent's stream ticks every 30
+  seconds, but a full snapshot rebuild happens only after a configuration
+  write (an in-process change counter short-circuits unchanged ticks, with
+  a forced rebuild every 5 minutes as a backstop for out-of-band SQL
+  edits). Steady state is a cheap liveness/revocation check per agent; the
+  rebuild burst after a config change is linear in agents × assignments,
+  which is the reason the large tier recommends more cores than ingest
+  alone would justify.
 
 ### Network
 

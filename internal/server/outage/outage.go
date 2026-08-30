@@ -79,6 +79,14 @@ type Result struct {
 	// the dashboard correlates incidents by this text.
 	Degraded       bool
 	DegradedDetail string
+	// LossPct/LatencyUS/LatencySource are the row's display measurements
+	// (the ingest-side COALESCE ladder), persisted as series_state.last_*
+	// so the matrix serves "latest per series" without scanning the
+	// hypertable. Set for every result — failures included — mirroring the
+	// raw latest-row query these columns replaced.
+	LossPct       *float32
+	LatencyUS     *int64
+	LatencySource *string
 }
 
 // Transition reports one event opened or closed by Apply, for logging.
@@ -106,8 +114,12 @@ type State struct {
 	FirstCleanAt    time.Time
 	LastStatus      int16
 	LastTime        time.Time
-	OpenEventID     *uuid.UUID
-	OpenKind        string
+	// Display mirrors of the newest result (see Result.LossPct et al.).
+	LastLossPct       *float32
+	LastLatencyUS     *int64
+	LastLatencySource *string
+	OpenEventID       *uuid.UUID
+	OpenKind          string
 }
 
 type action int
@@ -140,6 +152,9 @@ func step(st State, r Result) (State, []op) {
 	}
 	st.LastTime = r.Time
 	st.LastStatus = r.StatusCode
+	st.LastLossPct = r.LossPct
+	st.LastLatencyUS = r.LatencyUS
+	st.LastLatencySource = r.LatencySource
 	if !r.OK {
 		st.ConsecOKs = 0
 		st.FirstOKAt = time.Time{}
@@ -320,7 +335,9 @@ func lockStates(ctx context.Context, db DB, agentID uuid.UUID, probeIDs []uuid.U
 	rows, err := db.Query(ctx, `
 		SELECT ss.probe_id, ss.consec_fails, ss.consec_oks, ss.consec_degraded, ss.consec_clean,
 			ss.first_fail_at, ss.first_ok_at, ss.first_degraded_at, ss.first_clean_at,
-			ss.last_status, ss.last_time, ss.open_event_id, oe.kind
+			ss.last_status, ss.last_time,
+			ss.last_loss_pct, ss.last_latency_us, ss.last_latency_source,
+			ss.open_event_id, oe.kind
 		FROM series_state ss
 		LEFT JOIN outage_events oe ON oe.id = ss.open_event_id
 		WHERE ss.agent_id = $1 AND ss.probe_id = ANY($2)
@@ -341,7 +358,9 @@ func lockStates(ctx context.Context, db DB, agentID uuid.UUID, probeIDs []uuid.U
 		)
 		if err := rows.Scan(&probeID, &st.ConsecFails, &st.ConsecOKs, &st.ConsecDegraded, &st.ConsecClean,
 			&firstFail, &firstOK, &firstDegraded, &firstClean,
-			&st.LastStatus, &st.LastTime, &openEventID, &openKind); err != nil {
+			&st.LastStatus, &st.LastTime,
+			&st.LastLossPct, &st.LastLatencyUS, &st.LastLatencySource,
+			&openEventID, &openKind); err != nil {
 			return nil, fmt.Errorf("scan series_state: %w", err)
 		}
 		if firstFail != nil {
@@ -444,6 +463,9 @@ func bulkUpsertStates(ctx context.Context, db DB, agentID uuid.UUID, finals []fi
 	firstCleans := make([]time.Time, n)
 	lastStatuses := make([]int16, n)
 	lastTimes := make([]time.Time, n)
+	lastLossPcts := make([]*float32, n)
+	lastLatencies := make([]*int64, n)
+	lastSources := make([]*string, n)
 	openEventIDs := make([]uuid.UUID, n)
 	for i, f := range finals {
 		probeIDs[i] = f.probeID
@@ -459,6 +481,9 @@ func bulkUpsertStates(ctx context.Context, db DB, agentID uuid.UUID, finals []fi
 		firstCleans[i] = zeroToEpoch(f.st.FirstCleanAt)
 		lastStatuses[i] = f.st.LastStatus
 		lastTimes[i] = f.st.LastTime
+		lastLossPcts[i] = f.st.LastLossPct
+		lastLatencies[i] = f.st.LastLatencyUS
+		lastSources[i] = f.st.LastLatencySource
 		if f.st.OpenEventID != nil {
 			openEventIDs[i] = *f.st.OpenEventID
 		}
@@ -467,7 +492,8 @@ func bulkUpsertStates(ctx context.Context, db DB, agentID uuid.UUID, finals []fi
 		INSERT INTO series_state (agent_id, probe_id, target_id, probe_type,
 			consec_fails, consec_oks, consec_degraded, consec_clean,
 			first_fail_at, first_ok_at, first_degraded_at, first_clean_at,
-			last_status, last_time, open_event_id)
+			last_status, last_time,
+			last_loss_pct, last_latency_us, last_latency_source, open_event_id)
 		SELECT $1, u.probe_id, u.target_id, u.probe_type,
 			u.consec_fails, u.consec_oks, u.consec_degraded, u.consec_clean,
 			NULLIF(u.first_fail_at, 'epoch'::timestamptz),
@@ -475,13 +501,14 @@ func bulkUpsertStates(ctx context.Context, db DB, agentID uuid.UUID, finals []fi
 			NULLIF(u.first_degraded_at, 'epoch'::timestamptz),
 			NULLIF(u.first_clean_at, 'epoch'::timestamptz),
 			u.last_status, u.last_time,
+			u.last_loss_pct, u.last_latency_us, u.last_latency_source,
 			NULLIF(u.open_event_id, '00000000-0000-0000-0000-000000000000'::uuid)
 		FROM unnest($2::uuid[], $3::uuid[], $4::smallint[], $5::int[], $6::int[], $7::int[], $8::int[],
 			$9::timestamptz[], $10::timestamptz[], $11::timestamptz[], $12::timestamptz[],
-			$13::smallint[], $14::timestamptz[], $15::uuid[])
+			$13::smallint[], $14::timestamptz[], $15::real[], $16::bigint[], $17::text[], $18::uuid[])
 			AS u(probe_id, target_id, probe_type, consec_fails, consec_oks, consec_degraded, consec_clean,
 				first_fail_at, first_ok_at, first_degraded_at, first_clean_at,
-				last_status, last_time, open_event_id)
+				last_status, last_time, last_loss_pct, last_latency_us, last_latency_source, open_event_id)
 		ON CONFLICT (agent_id, probe_id) DO UPDATE SET
 			target_id = EXCLUDED.target_id,
 			probe_type = EXCLUDED.probe_type,
@@ -495,9 +522,13 @@ func bulkUpsertStates(ctx context.Context, db DB, agentID uuid.UUID, finals []fi
 			first_clean_at = EXCLUDED.first_clean_at,
 			last_status = EXCLUDED.last_status,
 			last_time = EXCLUDED.last_time,
+			last_loss_pct = EXCLUDED.last_loss_pct,
+			last_latency_us = EXCLUDED.last_latency_us,
+			last_latency_source = EXCLUDED.last_latency_source,
 			open_event_id = EXCLUDED.open_event_id`,
 		agentID, probeIDs, targetIDs, probeTypes, consecFails, consecOKs, consecDegraded, consecClean,
-		firstFails, firstOKs, firstDegradeds, firstCleans, lastStatuses, lastTimes, openEventIDs)
+		firstFails, firstOKs, firstDegradeds, firstCleans, lastStatuses, lastTimes,
+		lastLossPcts, lastLatencies, lastSources, openEventIDs)
 	if err != nil {
 		return fmt.Errorf("upsert series_state: %w", err)
 	}

@@ -147,7 +147,7 @@ type ProbeSettings struct {
 // different network than the stored row conflicts.
 func (s *Store) UpsertExternalTarget(ctx context.Context, name, address string, port int32, url string, networkID *uuid.UUID, scope []uuid.UUID) (uuid.UUID, error) {
 	// Any change here can alter probe expansion or expected pairs.
-	defer s.InvalidateConfigCaches()
+	defer s.noteConfigWrite(ctx)
 	// One statement, so a concurrent create of the same name resolves in the
 	// index rather than between a SELECT and an INSERT. The DO UPDATE's WHERE
 	// carries the three rules an update must satisfy; when it rejects the
@@ -275,7 +275,7 @@ func (s *Store) ListTargets(ctx context.Context, networks []uuid.UUID) ([]Target
 // ErrNotFound, indistinguishable from a name that never existed.
 func (s *Store) DeleteTarget(ctx context.Context, name string, scope []uuid.UUID) error {
 	// Any change here can alter probe expansion or expected pairs.
-	defer s.InvalidateConfigCaches()
+	defer s.noteConfigWrite(ctx)
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("delete target %q: %w", name, err)
@@ -322,7 +322,7 @@ func (s *Store) DeleteTarget(ctx context.Context, name string, scope []uuid.UUID
 // series), so the mesh must be deleted and re-created to change planes.
 func (s *Store) UpsertMeshGroup(ctx context.Context, name string, networkID *uuid.UUID) (uuid.UUID, error) {
 	// Any change here can alter probe expansion or expected pairs.
-	defer s.InvalidateConfigCaches()
+	defer s.noteConfigWrite(ctx)
 	netID := networkID
 	if netID == nil {
 		id, err := s.NetworkIDByName(ctx, "default")
@@ -426,7 +426,7 @@ func lockMesh(ctx context.Context, tx pgx.Tx, meshID uuid.UUID, name string, sco
 // AddMeshMember adds a site to a mesh group. Idempotent.
 func (s *Store) AddMeshMember(ctx context.Context, meshName, siteName string, scope []uuid.UUID) error {
 	// Any change here can alter probe expansion or expected pairs.
-	defer s.InvalidateConfigCaches()
+	defer s.noteConfigWrite(ctx)
 	meshID, err := s.meshIDByName(ctx, meshName)
 	if err != nil {
 		return err
@@ -463,7 +463,7 @@ func (s *Store) AddMeshMember(ctx context.Context, meshName, siteName string, sc
 // would otherwise stay active forever.
 func (s *Store) RemoveMeshMember(ctx context.Context, meshName, siteName string, scope []uuid.UUID) error {
 	// Any change here can alter probe expansion or expected pairs.
-	defer s.InvalidateConfigCaches()
+	defer s.noteConfigWrite(ctx)
 	meshID, err := s.meshIDByName(ctx, meshName)
 	if err != nil {
 		return err
@@ -568,7 +568,7 @@ func (s *Store) ListMeshGroups(ctx context.Context, networks []uuid.UUID) ([]Mes
 // the mesh so callers can surface the blast radius.
 func (s *Store) DeleteMeshGroup(ctx context.Context, name string, scope []uuid.UUID) (int64, error) {
 	// Any change here can alter probe expansion or expected pairs.
-	defer s.InvalidateConfigCaches()
+	defer s.noteConfigWrite(ctx)
 	meshID, err := s.meshIDByName(ctx, name)
 	if err != nil {
 		return 0, err
@@ -628,7 +628,7 @@ func (s *Store) DeleteMeshGroup(ctx context.Context, name string, scope []uuid.U
 // one tenant pinning another's target undeletable, with no way to see why.
 func (s *Store) AddDirectProbe(ctx context.Context, siteName, targetName string, networkID uuid.UUID, ps ProbeSettings, enabled bool, updatedBy string, scope []uuid.UUID) (uuid.UUID, error) {
 	// Any change here can alter probe expansion or expected pairs.
-	defer s.InvalidateConfigCaches()
+	defer s.noteConfigWrite(ctx)
 	siteID, err := s.SiteIDByName(ctx, siteName)
 	if err != nil {
 		return uuid.Nil, err
@@ -680,7 +680,7 @@ func (s *Store) AddDirectProbe(ctx context.Context, siteName, targetName string,
 // same-type templates.
 func (s *Store) AddMeshProbe(ctx context.Context, meshName string, ps ProbeSettings, enabled bool, updatedBy string, scope []uuid.UUID) (uuid.UUID, error) {
 	// Any change here can alter probe expansion or expected pairs.
-	defer s.InvalidateConfigCaches()
+	defer s.noteConfigWrite(ctx)
 	meshID, err := s.meshIDByName(ctx, meshName)
 	if err != nil {
 		return uuid.Nil, err
@@ -796,7 +796,7 @@ func (s *Store) GetProbeConfig(ctx context.Context, id uuid.UUID) (*ProbeConfigI
 // probe stops producing the results that would ever close them.
 func (s *Store) UpdateProbeConfig(ctx context.Context, id uuid.UUID, ps ProbeSettings, enabled bool, updatedBy string) error {
 	// Any change here can alter probe expansion or expected pairs.
-	defer s.InvalidateConfigCaches()
+	defer s.noteConfigWrite(ctx)
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("update probe config: %w", err)
@@ -844,7 +844,7 @@ func (s *Store) UpdateProbeConfig(ctx context.Context, id uuid.UUID, ps ProbeSet
 // series first (open incidents close; series/traceroute state is deleted).
 func (s *Store) DeleteProbeConfig(ctx context.Context, id uuid.UUID) error {
 	// Any change here can alter probe expansion or expected pairs.
-	defer s.InvalidateConfigCaches()
+	defer s.noteConfigWrite(ctx)
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("delete probe config: %w", err)

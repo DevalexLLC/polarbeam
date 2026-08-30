@@ -85,7 +85,7 @@ type IssuedCert struct {
 func (s *Store) EnrollAgent(ctx context.Context, token, hostname, probeAddress, version string, csrHash []byte,
 	issue func(agentID uuid.UUID) (IssuedCert, error)) (agentID, siteID uuid.UUID, err error) {
 	// A new agent brings a new agent-kind target, changing mesh expansion.
-	defer s.InvalidateConfigCaches()
+	defer s.noteConfigWrite(ctx)
 	tokenID, secret, ok := splitToken(token)
 	if !ok {
 		return uuid.Nil, uuid.Nil, ErrTokenInvalid
