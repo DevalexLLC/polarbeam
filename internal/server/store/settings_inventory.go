@@ -44,10 +44,6 @@ type ProbeConfigFilter struct {
 	Networks  []uuid.UUID
 }
 
-type rowScanner interface {
-	Scan(dest ...any) error
-}
-
 func inventoryDirection(order, what string) (string, error) {
 	switch order {
 	case "asc":
