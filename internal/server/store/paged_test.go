@@ -35,6 +35,8 @@ func TestOrderAllowlistClause(t *testing.T) {
 		{agentInventorySort, "hostname", "asc", "lower(hostname) ASC, id ASC"},
 		{agentInventorySort, "last_seen", "desc", "last_seen_at DESC NULLS LAST, id DESC"},
 		{agentInventorySort, "health", "asc", "CASE health\n\t\t\tWHEN 'offline' THEN 0 WHEN 'degraded' THEN 1\n\t\t\tWHEN 'no_data' THEN 2 ELSE 3 END ASC, id ASC"},
+		{targetInventorySort, "name", "asc", "lower(name) ASC, id ASC"},
+		{targetInventorySort, "status", "desc", "CASE status WHEN 'incident' THEN 0 WHEN 'unprobed' THEN 1 ELSE 2 END DESC, id DESC"},
 	}
 	for _, tc := range cases {
 		got, err := tc.list.clause(tc.sort, tc.order)
