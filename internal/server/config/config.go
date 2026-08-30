@@ -45,6 +45,13 @@ type DB struct {
 	URL string `yaml:"url"`
 	// ConnectTimeout bounds startup preflight connection attempts.
 	ConnectTimeout time.Duration `yaml:"connect_timeout"`
+	// MaxConns caps the connection pool. 0 (the default) sizes it
+	// automatically: every connected agent's config stream, the outage
+	// sweep, and each dashboard poll consume pool slots, so the pgx
+	// default of max(4, NumCPU) starves a small control-plane host under
+	// fleet load. A pool_max_conns URL parameter, when present, wins over
+	// the automatic default but not over an explicit max_conns.
+	MaxConns int `yaml:"max_conns"`
 }
 
 type TLS struct {
@@ -101,6 +108,9 @@ func (c Config) validate() error {
 	var errs []error
 	if c.DB.URL == "" {
 		errs = append(errs, errors.New("db.url is required"))
+	}
+	if c.DB.MaxConns < 0 {
+		errs = append(errs, errors.New("db.max_conns must be positive (or 0 for automatic sizing)"))
 	}
 	if c.TLS.CertFile == "" {
 		errs = append(errs, errors.New("tls.cert_file is required"))

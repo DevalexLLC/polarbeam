@@ -198,7 +198,7 @@ Dispositions are four: open (no session), any-session reads (scope-filtered serv
 - Agent certs: 30-day lifetime, identity in URI SAN `polarbeam://agent/<uuid>`; server signs CSRs — private keys never leave the agent.
 - Enrollment: `polarbeam-server token create --site nyc --network corp --ttl 24h` prints `<id>.<secret>` once (DB stores sha256, single-use; `--network` optional, default `default`, must already exist — networks are never auto-created) → `polarbeam-agent enroll --server host:443 --token …` writes cert + CA bundle. The agent inherits the token's network and never chooses it — no wire change, and the assignment is unforgeable by the enrollee.
 - Rotation: renew at 2/3 lifetime via `RenewCert` on the existing mTLS channel, retry daily; fully expired (dark >30 d) → re-enroll with fresh token, by design.
-- Revocation: DB-backed — every RPC re-checks the presented cert's serial against `certificates` (an uncached point lookup in `grpcapi.authenticateAgent`; fail-closed when the DB cannot confirm); no CRL/OCSP since the control plane is the sole verifier. Live streams re-check on their 30 s tick and are dropped for revoked serials.
+- Revocation: DB-backed — every RPC re-checks the presented cert's serial against `certificates` through a 30 s TTL cache (`grpcapi.certCache`; DB errors are never cached, so fail-closed stays fail-closed); no CRL/OCSP since the control plane is the sole verifier. Live streams re-check UNCACHED on their 30 s tick and are dropped for revoked serials — the sweep remains the enforcement path, the cache only bounds the ~5 s push cadence's point-lookup load.
 
 ## Deployment topology & port strategy
 

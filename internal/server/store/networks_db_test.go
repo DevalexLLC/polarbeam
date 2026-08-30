@@ -151,6 +151,9 @@ func moveMeshToNetwork(t *testing.T, ctx context.Context, s *store.Store, meshNa
 		`UPDATE mesh_groups SET network_id = $2 WHERE name = $1`, meshName, network); err != nil {
 		t.Fatalf("move mesh %q: %v", meshName, err)
 	}
+	// Raw SQL bypasses the store's write paths, so drop the config caches
+	// the way a real mesh update would.
+	s.InvalidateConfigCaches()
 }
 
 func snapshotProbeIDs(t *testing.T, ctx context.Context, s *store.Store, agentID uuid.UUID) map[string]bool {

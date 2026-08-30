@@ -43,7 +43,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 			"agent_cert_lifetime", cfg.CA.AgentCertLifetime)
 	}
 
-	st, err := store.Connect(ctx, cfg.DB.URL, cfg.DB.ConnectTimeout)
+	st, err := store.Connect(ctx, cfg.DB.URL, cfg.DB.ConnectTimeout, cfg.DB.MaxConns)
 	if err != nil {
 		return fmt.Errorf("preflight: %w", err)
 	}

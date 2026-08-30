@@ -24,7 +24,7 @@ func newStore(t *testing.T) (context.Context, *store.Store) {
 	url := dbtest.Migrated(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	t.Cleanup(cancel)
-	s, err := store.Connect(ctx, url, 10*time.Second)
+	s, err := store.Connect(ctx, url, 10*time.Second, 0)
 	if err != nil {
 		t.Fatalf("store.Connect: %v", err)
 	}

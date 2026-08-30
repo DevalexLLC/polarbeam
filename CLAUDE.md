@@ -41,8 +41,9 @@ Full design + milestone plan: `docs/architecture.md`.
 - Agent identity = mTLS client cert URI SAN `polarbeam://agent/<uuid>`,
   never message fields. Direction (site A→B vs B→A) derives from cert + the
   server-side target row; it is unforgeable by construction.
-- The DB is the sole certificate revocation authority (checked per-RPC +
-  30 s stream sweep). No CRL/OCSP.
+- The DB is the sole certificate revocation authority (per-RPC check
+  through a 30 s TTL cache — DB errors never cached — plus an UNCACHED
+  30 s stream sweep as the enforcement path). No CRL/OCSP.
 - Enrollment trust is explicit: `--ca-cert` or `--fingerprint` — no TOFU.
 - The built-in CA signs agent client certs AND the auto-issued gRPC server
   cert (`listen.grpc_hostname` SAN). Operator TLS (`tls.*`) covers only the

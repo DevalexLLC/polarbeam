@@ -3,6 +3,9 @@ package store
 import (
 	"context"
 	"fmt"
+	"slices"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -322,7 +325,26 @@ func (s *Store) ListSites(ctx context.Context, networks []uuid.UUID) ([]SiteInfo
 // templates expanded over source sites × destination agent targets — the
 // same derivation meshexpand ships to agents, so the set matches their
 // working config exactly.
+//
+// Cached (configCacheTTL, invalidated by config writes): the uncached
+// derivation is four full-table scans plus an O(templates × members² ×
+// targets) expansion, and it runs on every /api/v1/agents poll AND every
+// outage sweep tick. Callers treat the returned slice as read-only.
 func (s *Store) enabledProbeIDs(ctx context.Context) ([]uuid.UUID, error) {
+	now := time.Now()
+	if ids, ok := s.enabled.get(now); ok {
+		return ids, nil
+	}
+	gen := s.enabled.generation()
+	ids, err := s.enabledProbeIDsUncached(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.enabled.setIfCurrent(ids, now, gen)
+	return ids, nil
+}
+
+func (s *Store) enabledProbeIDsUncached(ctx context.Context) ([]uuid.UUID, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, mesh_id FROM probe_configs WHERE enabled`)
 	if err != nil {
@@ -725,7 +747,79 @@ func (s *Store) MatrixLatest(ctx context.Context, horizon time.Duration, network
 //
 // networks is the caller's network scope (nil = unfiltered), applied to the
 // pair's plane.
+//
+// Cached per scope (configCacheTTL, invalidated by config writes): the
+// answer changes only on configuration changes, yet the mesh cross-product
+// with four correlated EXISTS subqueries ran on every matrix poll. Entries
+// are keyed by the caller's exact scope so one tenant's cache can never
+// answer another's request; a fresh copy is returned per call because
+// handlers may reorder it.
 func (s *Store) ExpectedPairs(ctx context.Context, networks []uuid.UUID) ([]NetworkPair, error) {
+	key := scopeCacheKey(networks)
+	now := time.Now()
+	if pairs, ok := s.expectedPairsLookup(key, now); ok {
+		return pairs, nil
+	}
+	gen := s.expectedPairs.generation()
+	pairs, err := s.expectedPairsUncached(ctx, networks)
+	if err != nil {
+		return nil, err
+	}
+	s.expectedPairsStore(key, pairs, now, gen)
+	return slices.Clone(pairs), nil
+}
+
+// expectedPairsLookup reads one scope's entry — lookup AND clone under the
+// cache mutex, because concurrent requests for new scopes mutate the same
+// map under that mutex.
+func (s *Store) expectedPairsLookup(key string, now time.Time) ([]NetworkPair, bool) {
+	c := &s.expectedPairs
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if now.After(c.expires) || c.value == nil {
+		return nil, false
+	}
+	pairs, ok := c.value[key]
+	if !ok {
+		return nil, false
+	}
+	return slices.Clone(pairs), true
+}
+
+// expectedPairsStore publishes one scope's fill unless an invalidation
+// raced it (same generation rule as configCache.setIfCurrent).
+func (s *Store) expectedPairsStore(key string, pairs []NetworkPair, now time.Time, gen uint64) {
+	c := &s.expectedPairs
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.gen != gen {
+		return
+	}
+	if c.value == nil || now.After(c.expires) {
+		// Fresh window: drop scopes cached in the previous one so they
+		// cannot linger indefinitely on a busy map.
+		c.value = map[string][]NetworkPair{}
+		c.expires = now.Add(configCacheTTL)
+	}
+	c.value[key] = pairs
+}
+
+// scopeCacheKey canonicalizes a network scope for cache keying: nil (the
+// unfiltered admin view) is distinct from any explicit scope, and order
+// within a scope does not matter.
+func scopeCacheKey(networks []uuid.UUID) string {
+	if networks == nil {
+		return "all"
+	}
+	ids := make([]string, len(networks))
+	for i, id := range networks {
+		ids[i] = id.String()
+	}
+	sort.Strings(ids)
+	return "scoped:" + strings.Join(ids, ",")
+}
+
+func (s *Store) expectedPairsUncached(ctx context.Context, networks []uuid.UUID) ([]NetworkPair, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT DISTINCT s1.name, s2.name, n.name
 		   FROM probe_configs pc

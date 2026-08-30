@@ -199,7 +199,7 @@ func cmdToken(args []string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	st, err := store.Connect(ctx, cfg.DB.URL, cfg.DB.ConnectTimeout)
+	st, err := store.Connect(ctx, cfg.DB.URL, cfg.DB.ConnectTimeout, cfg.DB.MaxConns)
 	if err != nil {
 		return err
 	}
@@ -274,7 +274,7 @@ func cmdSeed(args []string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	st, err := store.Connect(ctx, cfg.DB.URL, cfg.DB.ConnectTimeout)
+	st, err := store.Connect(ctx, cfg.DB.URL, cfg.DB.ConnectTimeout, cfg.DB.MaxConns)
 	if err != nil {
 		return err
 	}

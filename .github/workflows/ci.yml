@@ -226,3 +226,10 @@ jobs:
           file: ${{ matrix.file }}
           target: ${{ matrix.target }}
           push: false
+          # Layer cache in the GitHub Actions cache service, scoped per
+          # image so the three legs never evict each other. Without it
+          # every PR recompiled the full Go tree three times over. Cache
+          # misses fall back to a cold build, so release.yml (which pushes
+          # real artifacts) stays cache-free on purpose.
+          cache-from: type=gha,scope=docker-build-${{ matrix.name }}
+          cache-to: type=gha,scope=docker-build-${{ matrix.name }},mode=max
