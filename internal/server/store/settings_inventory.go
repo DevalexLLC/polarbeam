@@ -151,23 +151,16 @@ func (s *Store) GetSiteConfig(ctx context.Context, name string, networks []uuid.
 	return &si, nil
 }
 
-func targetConfigOrder(sortName, order string) (string, error) {
-	direction, err := inventoryDirection(order, "target config")
-	if err != nil {
-		return "", err
-	}
-	columns := map[string]string{
-		"name":    "lower(name)",
-		"kind":    "kind",
-		"network": "lower(network)",
-		"probes":  "probe_count",
-		"created": "created_at",
-	}
-	column, ok := columns[sortName]
-	if !ok {
-		return "", invalidf("unknown target config sort %q", sortName)
-	}
-	return column + direction + ", id" + direction, nil
+var targetConfigSort = orderAllowlist{
+	name:    "target config",
+	tieExpr: "id",
+	columns: map[string]orderColumn{
+		"name":    {expr: "lower(name)"},
+		"kind":    {expr: "kind"},
+		"network": {expr: "lower(network)"},
+		"probes":  {expr: "probe_count"},
+		"created": {expr: "created_at"},
+	},
 }
 
 const targetConfigRowsSQL = `
@@ -196,17 +189,16 @@ func scanTargetConfig(row rowScanner, extra ...any) (TargetInfo, error) {
 
 // QueryTargetsConfig filters, sorts, and pages the settings target inventory.
 func (s *Store) QueryTargetsConfig(ctx context.Context, f TargetConfigFilter) ([]TargetInfo, int64, error) {
-	if f.Limit < 1 || f.Limit > 100 || f.Offset < 0 {
-		return nil, 0, invalidf("invalid target config page")
+	if err := pageBounds("target config", f.Limit, f.Offset); err != nil {
+		return nil, 0, err
 	}
 	if f.Kind != "" && f.Kind != "agent" && f.Kind != "external" {
 		return nil, 0, invalidf("unknown target config kind %q", f.Kind)
 	}
-	orderBy, err := targetConfigOrder(f.Sort, f.Order)
+	orderBy, err := targetConfigSort.clause(f.Sort, f.Order)
 	if err != nil {
 		return nil, 0, err
 	}
-	args := []any{f.Networks, escapeLike(strings.TrimSpace(f.Query)), f.Kind}
 	cte := `WITH target_rows AS MATERIALIZED (` + targetConfigRowsSQL + `),
 		filtered AS MATERIALIZED (
 			SELECT * FROM target_rows
@@ -217,31 +209,24 @@ func (s *Store) QueryTargetsConfig(ctx context.Context, f TargetConfigFilter) ([
 			        OR url ILIKE '%' || $2 || '%')
 			   AND ($3 = '' OR kind = $3)
 		)`
-	rows, err := s.pool.Query(ctx, cte+`
-		SELECT id, kind, name, agent_id, address, port, url, created_at,
-		       network, probe_count, count(*) OVER ()
-		  FROM filtered ORDER BY `+orderBy+` LIMIT $4 OFFSET $5`,
-		append(args, f.Limit, f.Offset)...)
-	if err != nil {
-		return nil, 0, fmt.Errorf("query targets config: %w", err)
-	}
-	defer rows.Close()
-	out := make([]TargetInfo, 0, f.Limit)
 	var total int64
-	for rows.Next() {
-		t, err := scanTargetConfig(rows, &total)
-		if err != nil {
-			return nil, 0, fmt.Errorf("scan target config: %w", err)
-		}
-		out = append(out, t)
-	}
-	if err := rows.Err(); err != nil {
+	out, err := runPaged(ctx, s.pool, f.Limit, f.Offset, pagedSpec[TargetInfo]{
+		queryErr:    "query targets config",
+		scanErr:     "scan target config",
+		fallbackErr: "count targets config",
+		pageSQL: cte + `
+			SELECT id, kind, name, agent_id, address, port, url, created_at,
+			       network, probe_count, count(*) OVER ()
+			  FROM filtered ORDER BY ` + orderBy + ` LIMIT $4 OFFSET $5`,
+		args: []any{f.Networks, escapeLike(strings.TrimSpace(f.Query)), f.Kind},
+		scan: func(row rowScanner) (TargetInfo, error) {
+			return scanTargetConfig(row, &total)
+		},
+		fallbackSQL:  cte + ` SELECT count(*) FROM filtered`,
+		fallbackDest: []any{&total},
+	})
+	if err != nil {
 		return nil, 0, err
-	}
-	if len(out) == 0 && f.Offset > 0 {
-		if err := s.pool.QueryRow(ctx, cte+` SELECT count(*) FROM filtered`, args...).Scan(&total); err != nil {
-			return nil, 0, fmt.Errorf("count targets config: %w", err)
-		}
 	}
 	return out, total, nil
 }
