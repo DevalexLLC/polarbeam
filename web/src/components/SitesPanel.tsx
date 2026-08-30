@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, apiDelete, apiGet, apiPost, apiPut } from '../api'
 import { updateRouteParams } from '../routeState'
+import { usePolledResource } from '../usePolledResource'
 import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
 import { fmtAgo } from '../format'
 import { useConcurrentSettingsDraft, useSettingsMutation } from '../settingsMutation'
@@ -10,7 +11,6 @@ import ConfirmButton from './ConfirmButton'
 import DataTable, { type DataTableColumn } from './DataTable'
 import SettingsPageError from './SettingsPageError'
 
-const POLL_MS = 30_000
 const SITE_PAGE = 25
 
 interface Draft {
@@ -77,10 +77,6 @@ export default function SitesPanel({
   onSelectedSite: (site: string, mode?: 'push' | 'replace') => void
   onAuthError: (err: unknown) => void
 }) {
-  const [data, setData] = useState<SitesConfigResponse | null>(null)
-  const [loadedRequestURL, setLoadedRequestURL] = useState('')
-  const [error, setError] = useState<unknown>(null)
-  const [retryKey, setRetryKey] = useState(0)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [editing, setEditing] = useState(false) // draft edits an existing site (name locked)
   const [formErrors, setFormErrors] = useState<string[]>([])
@@ -96,6 +92,36 @@ export default function SitesPanel({
   const scrolledSite = useRef<string | null>(null)
   const pinnedSite = useRef<string | null>(selectedSite)
   const feedback = useSettingsMutation()
+
+  // The pin decision reads the PREVIOUS render's snapshot (the hook's data
+  // is only available after the URL it fetches is built). That is the same
+  // snapshot the old state-based code saw at every selection change; the pin
+  // is sticky afterwards, so the two only diverge if a poll commit itself
+  // removes the selected site from the page — and the next render re-pins.
+  const lastData = useRef<SitesConfigResponse | null>(null)
+  if (!selectedSite) pinnedSite.current = null
+  else if (pinnedSite.current !== selectedSite) {
+    pinnedSite.current = lastData.current?.sites.some((site) => site.id === selectedSite) ? null : selectedSite
+  }
+  const pinnedSiteID = pinnedSite.current === selectedSite ? selectedSite : null
+
+  const params = new URLSearchParams({
+    limit: String(SITE_PAGE),
+    offset: String(pinnedSiteID ? 0 : (page - 1) * SITE_PAGE),
+    sort,
+    order,
+  })
+  if (pinnedSiteID) params.set('q', pinnedSiteID)
+  else if (queryParam.trim()) params.set('q', queryParam.trim())
+  const requestURL = '/api/v1/config/sites?' + params.toString()
+
+  const { data, error, loadedKey, reload } = usePolledResource<SitesConfigResponse>(requestURL, {
+    onAuthError,
+    logLabel: 'site settings',
+  })
+  lastData.current = data
+  const loadedRequestURL = typeof loadedKey === 'string' ? loadedKey : ''
+
   const loadedSite = editing && draft ? data?.sites.find((site) => site.name === draft.name) : undefined
   const loadedDraft = loadedSite ? draftFrom(loadedSite) : emptyDraft
   const guard = useConcurrentSettingsDraft({
@@ -114,56 +140,6 @@ export default function SitesPanel({
       if (!latest.name) setEditing(false)
     },
   })
-
-  if (!selectedSite) pinnedSite.current = null
-  else if (pinnedSite.current !== selectedSite) {
-    pinnedSite.current = data?.sites.some((site) => site.id === selectedSite) ? null : selectedSite
-  }
-  const pinnedSiteID = pinnedSite.current === selectedSite ? selectedSite : null
-
-  const params = new URLSearchParams({
-    limit: String(SITE_PAGE),
-    offset: String(pinnedSiteID ? 0 : (page - 1) * SITE_PAGE),
-    sort,
-    order,
-  })
-  if (pinnedSiteID) params.set('q', pinnedSiteID)
-  else if (queryParam.trim()) params.set('q', queryParam.trim())
-  const requestURL = '/api/v1/config/sites?' + params.toString()
-
-  useEffect(() => {
-    let cancelled = false
-    const load = () => {
-      apiGet<SitesConfigResponse>(requestURL)
-        .then((res) => {
-          if (!cancelled) {
-            setData(res)
-            setLoadedRequestURL(requestURL)
-            setError(null)
-          }
-        })
-        .catch((err) => {
-          if (cancelled) return
-          onAuthError(err)
-          console.error('site settings request failed', err)
-          setError(err)
-        })
-    }
-    load()
-    const id = setInterval(load, POLL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [onAuthError, requestURL, retryKey])
-
-  const reload = () =>
-    apiGet<SitesConfigResponse>(requestURL)
-      .then((res) => {
-        setData(res)
-        setLoadedRequestURL(requestURL)
-      })
-      .catch(onAuthError)
 
   const save = async () => {
     if (!draft) return
@@ -223,7 +199,6 @@ export default function SitesPanel({
     } catch (err) {
       onAuthError(err)
       console.error('site delete failed', err)
-      setError(err)
       feedback.error(`Site ${s.name} was not deleted: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
@@ -272,14 +247,7 @@ export default function SitesPanel({
   }, [page, pageCount, setPage])
 
   if (error && !data) {
-    return (
-      <SettingsPageError
-        title="Sites unavailable"
-        subject="sites"
-        error={error}
-        onRetry={() => setRetryKey((key) => key + 1)}
-      />
-    )
+    return <SettingsPageError title="Sites unavailable" subject="sites" error={error} onRetry={() => void reload()} />
   }
   if (!data) {
     return (
