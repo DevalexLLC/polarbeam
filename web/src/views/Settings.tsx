@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { apiGet } from '../api'
+import { useMemo } from 'react'
 import type { Caps } from '../caps'
 import { planeChoice } from '../plane'
 import { inheritRouteNetwork, navigateRouteHash } from '../routeState'
@@ -20,8 +19,7 @@ import TargetsPanel from '../components/TargetsPanel'
 import ThresholdSettingsPanel from '../components/ThresholdSettings'
 import UsersPanel from '../components/UsersPanel'
 import type { SettingsResponse, UIBanner } from '../types'
-
-const POLL_MS = 30_000
+import { usePolledResource } from '../usePolledResource'
 
 export default function Settings({
   tab,
@@ -40,8 +38,6 @@ export default function Settings({
   onAuthError: (err: unknown) => void
   onBannerSaved: (b: UIBanner) => void
 }) {
-  const [settings, setSettings] = useState<SettingsResponse | null>(null)
-  const [error, setError] = useState<unknown>(null)
   const [selectedSite, setSelectedSite] = useRouteParam('site')
   const [selectedProbe, setSelectedProbe] = useRouteParam('probe')
 
@@ -62,28 +58,17 @@ export default function Settings({
   // tick, and another admin's change converges here ≤30 s. The panel keeps
   // its own draft once edited, so a poll never clobbers in-progress input.
   // Only the thresholds tab needs /settings; the config tabs poll their own
-  // endpoints.
-  // Hoisted so the overrides panel can force an immediate refetch after a
-  // write instead of waiting out the poll interval.
-  const load = useCallback(() => {
-    apiGet<SettingsResponse>('/api/v1/settings')
-      .then((s) => {
-        setSettings(s)
-        setError(null)
-      })
-      .catch((err) => {
-        onAuthError(err)
-        console.error('settings request failed', err)
-        setError(err)
-      })
-  }, [onAuthError])
-
-  useEffect(() => {
-    if (tab !== 'thresholds') return
-    load()
-    const id = setInterval(load, POLL_MS)
-    return () => clearInterval(id)
-  }, [tab, load])
+  // endpoints. reload lets the overrides panel force an immediate refetch
+  // after a write instead of waiting out the poll interval.
+  const {
+    data: settings,
+    error,
+    reload,
+  } = usePolledResource<SettingsResponse>('/api/v1/settings', {
+    enabled: tab === 'thresholds',
+    onAuthError,
+    logLabel: 'settings',
+  })
 
   return (
     <>
@@ -190,7 +175,12 @@ export default function Settings({
               onAuthError={onAuthError}
             />
           ) : error && !settings ? (
-            <SettingsPageError title="Settings unavailable" subject="settings" error={error} onRetry={load} />
+            <SettingsPageError
+              title="Settings unavailable"
+              subject="settings"
+              error={error}
+              onRetry={() => void reload()}
+            />
           ) : !settings ? (
             <div className="state-panel" role="status">
               <span className="state-spinner" />
@@ -218,7 +208,7 @@ export default function Settings({
                 <ThresholdSettingsPanel
                   settings={settings}
                   canWrite={caps.adminWrite}
-                  onSaved={setSettings}
+                  onSaved={() => void reload()}
                   onAuthError={onAuthError}
                   variant="page"
                 />
@@ -231,7 +221,7 @@ export default function Settings({
                 caps={caps}
                 canWrite={caps.networkWrite}
                 plane={ownedPlane}
-                onChanged={load}
+                onChanged={() => void reload()}
                 onAuthError={onAuthError}
               />
               <PathThresholdsPanel
@@ -239,7 +229,7 @@ export default function Settings({
                 caps={caps}
                 canWrite={caps.networkWrite}
                 plane={ownedPlane}
-                onChanged={load}
+                onChanged={() => void reload()}
                 onAuthError={onAuthError}
               />
             </>
