@@ -123,7 +123,7 @@ test('full-state editors block their mutation when the preflight snapshot change
 })
 
 test('probe state toggles preflight the same full state they write', async () => {
-  const source = await readFile(new URL('../src/components/ProbesPanel.tsx', import.meta.url), 'utf8')
+  const source = await readFile(new URL('../src/components/ProbeRowActions.tsx', import.meta.url), 'utf8')
   const toggle = source.slice(source.indexOf('const setEnabled'), source.indexOf('const remove'))
   assert.match(toggle, /await apiGet<ProbeConfig>/)
   assert.match(toggle, /serverSnapshotChanged/)
