@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef } from 'react'
 import uPlot from 'uplot'
 import { apiGet } from '../api'
 import Chart from '../components/Chart'
@@ -8,6 +8,7 @@ import { useNetworkFilter } from '../networkFilter'
 import { inheritRouteNetwork } from '../routeState'
 import { useTheme } from '../theme'
 import { useTimezone } from '../timezone'
+import { usePolledResource } from '../usePolledResource'
 import { useRouteParam } from '../useRouteState'
 import {
   fmtAgo,
@@ -42,8 +43,6 @@ import type {
   Window,
 } from '../types'
 import { WINDOWS } from '../types'
-
-const POLL_MS = 30_000
 
 function DirectionCard({ title, s, dir }: { title: string; s: DirectionSummary; dir: 'a' | 'b' }) {
   const checks = s.checks ?? []
@@ -252,55 +251,38 @@ export default function PairDetail({
   // Also covers the fmtTime tooltips below; mode reaches the charts through
   // mkOptions so axis ticks and the live-legend readout follow the toggle.
   const { mode } = useTimezone()
-  const [pair, setPair] = useState<PairResponse | null>(null)
-  const [series, setSeries] = useState<SeriesResponse | null>(null)
-  const [paths, setPaths] = useState<TracerouteResponse | null>(null)
-  const [mtus, setMtus] = useState<PathMtuResponse | null>(null)
-  const [settings, setSettings] = useState<SettingsResponse | null>(null)
-  const [error, setError] = useState<unknown>(null)
-
   // Settings ride the same load as the series so a threshold change and
-  // the chart redraw land in one commit. The generation counter drops
-  // superseded responses: switching a slow 365d fetch to 24h must not let
-  // the older response land after the newer one and mislabel the charts.
-  const loadGen = useRef(0)
-  const load = useCallback(() => {
-    const gen = ++loadGen.current
-    // The network filter rides every pair endpoint so summaries, series,
-    // paths, and MTUs all describe the same plane.
-    const netQ = net === '' ? '' : `&network=${encodeURIComponent(net)}`
-    const netQOnly = net === '' ? '' : `?network=${encodeURIComponent(net)}`
-    return Promise.all([
-      apiGet<PairResponse>(`/api/v1/pairs/${encodeURIComponent(a)}/${encodeURIComponent(b)}?window=${win}${netQ}`),
-      apiGet<SeriesResponse>(
-        `/api/v1/pairs/${encodeURIComponent(a)}/${encodeURIComponent(b)}/series?metric=${metric}&window=${win}${netQ}`,
-      ),
-      apiGet<TracerouteResponse>(`/api/v1/traceroute/${encodeURIComponent(a)}/${encodeURIComponent(b)}${netQOnly}`),
-      apiGet<PathMtuResponse>(`/api/v1/path-mtu/${encodeURIComponent(a)}/${encodeURIComponent(b)}${netQOnly}`),
-      apiGet<SettingsResponse>('/api/v1/settings'),
-    ])
-      .then(([p, s, tr, pm, st]) => {
-        if (gen !== loadGen.current) return
-        setPair(p)
-        setSeries(s)
-        setPaths(tr)
-        setMtus(pm)
-        setSettings(st)
-        setError(null)
-      })
-      .catch((err) => {
-        onAuthError(err)
-        console.error('pair detail request failed', err)
-        if (gen !== loadGen.current) return
-        setError(err)
-      })
-  }, [a, b, win, metric, net, onAuthError])
-
-  useEffect(() => {
-    void load()
-    const id = setInterval(() => void load(), POLL_MS)
-    return () => clearInterval(id)
-  }, [load])
+  // the chart redraw land in one commit. The hook's generation counter
+  // drops superseded responses: switching a slow 365d fetch to 24h must not
+  // let the older response land after the newer one and mislabel the charts.
+  // The network filter rides every pair endpoint so summaries, series,
+  // paths, and MTUs all describe the same plane.
+  const netQ = net === '' ? '' : `&network=${encodeURIComponent(net)}`
+  const netQOnly = net === '' ? '' : `?network=${encodeURIComponent(net)}`
+  const { data, error, reload } = usePolledResource(
+    () =>
+      Promise.all([
+        apiGet<PairResponse>(`/api/v1/pairs/${encodeURIComponent(a)}/${encodeURIComponent(b)}?window=${win}${netQ}`),
+        apiGet<SeriesResponse>(
+          `/api/v1/pairs/${encodeURIComponent(a)}/${encodeURIComponent(b)}/series?metric=${metric}&window=${win}${netQ}`,
+        ),
+        apiGet<TracerouteResponse>(`/api/v1/traceroute/${encodeURIComponent(a)}/${encodeURIComponent(b)}${netQOnly}`),
+        apiGet<PathMtuResponse>(`/api/v1/path-mtu/${encodeURIComponent(a)}/${encodeURIComponent(b)}${netQOnly}`),
+        apiGet<SettingsResponse>('/api/v1/settings'),
+      ]).then(([pair, series, paths, mtus, settings]) => ({ pair, series, paths, mtus, settings })),
+    {
+      // NUL-joined: site names are unrestricted text (WorldMap's pairKey
+      // convention), so no printable separator is collision-free.
+      key: [a, b, win, metric, net].join('\u0000'),
+      onAuthError,
+      logLabel: 'pair detail',
+    },
+  )
+  const pair = data?.pair ?? null
+  const series = data?.series ?? null
+  const paths = data?.paths ?? null
+  const mtus = data?.mtus ?? null
+  const settings = data?.settings ?? null
 
   // Effective thresholds for this pair, resolved on the plane in view: the
   // top-bar filter when one is set, otherwise the pair's own plane when it
@@ -416,7 +398,7 @@ export default function PairDetail({
         error={error}
         backHref={inheritRouteNetwork('#/')}
         backLabel="Back to Overview"
-        onRetry={() => void load()}
+        onRetry={() => void reload()}
       />
     )
   if (!series || !pair)
