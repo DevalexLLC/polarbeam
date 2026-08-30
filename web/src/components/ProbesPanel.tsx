@@ -8,6 +8,7 @@ import { useConcurrentSettingsDraft, useSettingsMutation } from '../settingsMuta
 import { serverSnapshotChanged } from '../settingsSnapshot'
 import { usePolledResource } from '../usePolledResource'
 import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
+import { useStickyPin } from '../useStickyPin'
 import type {
   MeshesConfigResponse,
   ParamSpec,
@@ -274,7 +275,6 @@ export default function ProbesPanel({
     if (selectedProbe !== target) focusEditor.current = null
   }, [editID, editDraft, selectedProbe])
   const scrolledProbe = useRef<string | null>(null)
-  const pinnedProbe = useRef<string | null>(selectedProbe)
   const feedback = useSettingsMutation()
   const blankProbe = newDraft(initialPlane(plane))
   const createGuard = useConcurrentSettingsDraft({
@@ -289,15 +289,7 @@ export default function ProbesPanel({
     },
     reload: setDraft,
   })
-  // The pin decision reads the PREVIOUS render's snapshot through a ref
-  // (SitesPanel's usePolledResource ordering rule): the pin is sticky, so
-  // this matches the state-based code at every selection change.
-  const lastData = useRef<ProbesConfigResponse | null>(null)
-  if (!selectedProbe) pinnedProbe.current = null
-  else if (pinnedProbe.current !== selectedProbe) {
-    pinnedProbe.current = lastData.current?.probes.some((probe) => probe.id === selectedProbe) ? null : selectedProbe
-  }
-  const pinnedProbeID = pinnedProbe.current === selectedProbe ? selectedProbe : null
+  const { pinnedID: pinnedProbeID, reconcile: reconcilePin } = useStickyPin(selectedProbe)
 
   const probeParams = new URLSearchParams({
     limit: String(PROBE_PAGE),
@@ -331,7 +323,7 @@ export default function ProbesPanel({
     loadedKey,
     reload,
   } = usePolledResource<ProbesConfigResponse>(requestURL, { onAuthError, logLabel: 'probe settings' })
-  lastData.current = data
+  reconcilePin(Boolean(data?.probes.some((probe) => probe.id === selectedProbe)))
   const loadedRequestURL = typeof loadedKey === 'string' ? loadedKey : ''
 
   const {

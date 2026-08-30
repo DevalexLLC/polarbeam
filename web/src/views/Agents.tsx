@@ -10,6 +10,7 @@ import { inheritRouteNetwork, updateRouteParams } from '../routeState'
 import { useTimezone } from '../timezone'
 import { POLL_MS, usePolledResource } from '../usePolledResource'
 import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
+import { useStickyPin } from '../useStickyPin'
 import type {
   AgentBucketFailuresResponse,
   AgentInfo,
@@ -279,17 +280,7 @@ export default function Agents({
   // Agents link resets the hash — so deep links from the Overview fleet
   // card, refreshes, and Back all restore the expansion for free.
   const expanded = agent
-  const pinnedAgent = useRef<string | null>(expanded)
-
-  // The pin decision reads the PREVIOUS render's snapshot through a ref
-  // (SitesPanel's usePolledResource ordering rule): the pin is sticky, so
-  // this matches the state-based code at every expansion change.
-  const lastData = useRef<AgentsResponse | null>(null)
-  if (!expanded) pinnedAgent.current = null
-  else if (pinnedAgent.current !== expanded) {
-    pinnedAgent.current = lastData.current?.agents.some((row) => row.id === expanded) ? null : expanded
-  }
-  const pinnedAgentID = pinnedAgent.current === expanded ? expanded : null
+  const { pinnedID: pinnedAgentID, reconcile: reconcilePin } = useStickyPin(expanded)
 
   const params = new URLSearchParams({
     limit: String(AGENT_PAGE),
@@ -326,7 +317,7 @@ export default function Agents({
     { key: requestURL, onAuthError, logLabel: 'agents' },
   )
   const data = snapshot?.res ?? null
-  lastData.current = data
+  reconcilePin(Boolean(data?.agents.some((row) => row.id === expanded)))
   const scopeSummary = snapshot?.scopeSummary ?? null
   const loadedRequestURL = typeof loadedKey === 'string' ? loadedKey : ''
 

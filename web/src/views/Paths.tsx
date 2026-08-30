@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { apiGet } from '../api'
 import DataTable, { type DataTableColumn } from '../components/DataTable'
 import PageError from '../components/PageError'
@@ -9,6 +9,7 @@ import { inheritRouteNetwork, updateRouteParams } from '../routeState'
 import { useTimezone } from '../timezone'
 import { usePolledResource } from '../usePolledResource'
 import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
+import { useStickyPin } from '../useStickyPin'
 import type { Hop, PathEvent, PathEventsResponse, Window } from '../types'
 import { WINDOWS } from '../types'
 
@@ -130,17 +131,7 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
   const win = windowParam as Window
   const [query, setQuery] = useRouteSearch()
   const [queryParam] = useRouteParam('q')
-  const pinnedEvent = useRef<string | null>(expandedEvent)
-
-  // The pin decision reads the PREVIOUS render's snapshot through a ref
-  // (SitesPanel's usePolledResource ordering rule): the pin is sticky, so
-  // this matches the state-based code at every expansion change.
-  const lastData = useRef<PathEventsResponse | null>(null)
-  if (!expandedEvent) pinnedEvent.current = null
-  else if (pinnedEvent.current !== expandedEvent) {
-    pinnedEvent.current = lastData.current?.events.some((event) => event.id === expandedEvent) ? null : expandedEvent
-  }
-  const pinnedEventID = pinnedEvent.current === expandedEvent ? expandedEvent : null
+  const { pinnedID: pinnedEventID, reconcile: reconcilePin } = useStickyPin(expandedEvent)
 
   const params = new URLSearchParams({
     window: win,
@@ -180,7 +171,7 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
     { key: requestURL, onAuthError, logLabel: 'routes' },
   )
   const data = snapshot?.res ?? null
-  lastData.current = data
+  reconcilePin(Boolean(data?.events.some((event) => event.id === expandedEvent)))
   const scopeTotal = snapshot?.scopeTotal ?? 0
   const loadedRequestURL = typeof loadedKey === 'string' ? loadedKey : ''
 

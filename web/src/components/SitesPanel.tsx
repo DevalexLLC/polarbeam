@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ApiError, apiDelete, apiGet, apiPost, apiPut } from '../api'
 import { updateRouteParams } from '../routeState'
 import { usePolledResource } from '../usePolledResource'
+import { useStickyPin } from '../useStickyPin'
 import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
 import { fmtAgo } from '../format'
 import { useConcurrentSettingsDraft, useSettingsMutation } from '../settingsMutation'
@@ -90,20 +91,9 @@ export default function SitesPanel({
   const [expandedRow, setExpandedRow] = useState<string | null>(null)
   const [actionRow, setActionRow] = useState<string | null>(null)
   const scrolledSite = useRef<string | null>(null)
-  const pinnedSite = useRef<string | null>(selectedSite)
   const feedback = useSettingsMutation()
 
-  // The pin decision reads the PREVIOUS render's snapshot (the hook's data
-  // is only available after the URL it fetches is built). That is the same
-  // snapshot the old state-based code saw at every selection change; the pin
-  // is sticky afterwards, so the two only diverge if a poll commit itself
-  // removes the selected site from the page — and the next render re-pins.
-  const lastData = useRef<SitesConfigResponse | null>(null)
-  if (!selectedSite) pinnedSite.current = null
-  else if (pinnedSite.current !== selectedSite) {
-    pinnedSite.current = lastData.current?.sites.some((site) => site.id === selectedSite) ? null : selectedSite
-  }
-  const pinnedSiteID = pinnedSite.current === selectedSite ? selectedSite : null
+  const { pinnedID: pinnedSiteID, reconcile: reconcilePin } = useStickyPin(selectedSite)
 
   const params = new URLSearchParams({
     limit: String(SITE_PAGE),
@@ -119,7 +109,7 @@ export default function SitesPanel({
     onAuthError,
     logLabel: 'site settings',
   })
-  lastData.current = data
+  reconcilePin(Boolean(data?.sites.some((site) => site.id === selectedSite)))
   const loadedRequestURL = typeof loadedKey === 'string' ? loadedKey : ''
 
   const loadedSite = editing && draft ? data?.sites.find((site) => site.name === draft.name) : undefined
