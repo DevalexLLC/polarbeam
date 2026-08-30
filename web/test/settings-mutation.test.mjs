@@ -140,7 +140,7 @@ test('mesh create leaves duplicate-name classification to the server', async () 
 
 test('one-time secrets name their irreversible discard consequence', async () => {
   const enrollment = await readFile(new URL('../src/components/EnrollmentPanel.tsx', import.meta.url), 'utf8')
-  const users = await readFile(new URL('../src/components/UsersPanel.tsx', import.meta.url), 'utf8')
+  const users = await readFile(new URL('../src/components/UserCreateDialog.tsx', import.meta.url), 'utf8')
   assert.match(enrollment, /shown only once and cannot be recovered/)
   assert.match(enrollment, /issuing a replacement token/)
   assert.match(users, /shown only once and cannot be recovered/)
