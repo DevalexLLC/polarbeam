@@ -144,7 +144,7 @@ test('composite widgets keep their menu, group, and dialog semantics', () => {
   assert.match(drawer, /setAttribute\('inert', ''\)/)
   assert.match(drawer, /removeAttribute\('inert'\)/)
 
-  for (const file of ['../src/components/ChangePasswordDialog.tsx', '../src/components/UsersPanel.tsx']) {
+  for (const file of ['../src/components/ChangePasswordDialog.tsx', '../src/components/UserCreateDialog.tsx']) {
     const source = readFileSync(new URL(file, import.meta.url), 'utf8')
     assert.match(source, /<dialog[^>]*\n?[^>]*aria-labelledby=\{/, `${file} dialog is named by its heading`)
   }
@@ -184,7 +184,7 @@ test('charts, strips, and the map keep their keyboard access contract', () => {
   assert.match(map, /aria-describedby=\{hintId\}/)
   assert.match(map, /setTimeout\(\(\) => setAnnouncedZoom\(zoomPercent\), 500\)/)
 
-  const users = readFileSync(new URL('../src/components/UsersPanel.tsx', import.meta.url), 'utf8')
+  const users = readFileSync(new URL('../src/components/LoginBars.tsx', import.meta.url), 'utf8')
   assert.match(users, /Sign-ins by month: /)
 })
 

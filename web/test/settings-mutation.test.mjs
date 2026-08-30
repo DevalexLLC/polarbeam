@@ -123,7 +123,7 @@ test('full-state editors block their mutation when the preflight snapshot change
 })
 
 test('probe state toggles preflight the same full state they write', async () => {
-  const source = await readFile(new URL('../src/components/ProbesPanel.tsx', import.meta.url), 'utf8')
+  const source = await readFile(new URL('../src/components/ProbeRowActions.tsx', import.meta.url), 'utf8')
   const toggle = source.slice(source.indexOf('const setEnabled'), source.indexOf('const remove'))
   assert.match(toggle, /await apiGet<ProbeConfig>/)
   assert.match(toggle, /serverSnapshotChanged/)
@@ -140,7 +140,7 @@ test('mesh create leaves duplicate-name classification to the server', async () 
 
 test('one-time secrets name their irreversible discard consequence', async () => {
   const enrollment = await readFile(new URL('../src/components/EnrollmentPanel.tsx', import.meta.url), 'utf8')
-  const users = await readFile(new URL('../src/components/UsersPanel.tsx', import.meta.url), 'utf8')
+  const users = await readFile(new URL('../src/components/UserCreateDialog.tsx', import.meta.url), 'utf8')
   assert.match(enrollment, /shown only once and cannot be recovered/)
   assert.match(enrollment, /issuing a replacement token/)
   assert.match(users, /shown only once and cannot be recovered/)
