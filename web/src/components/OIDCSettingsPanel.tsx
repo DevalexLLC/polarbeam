@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import type { Caps } from '../caps'
 import RoleWall from './RoleWall'
 import SettingsPageError from './SettingsPageError'
@@ -7,8 +7,7 @@ import { fmtAgo } from '../format'
 import { useErrorSummary } from '../formErrors'
 import { useConcurrentSettingsDraft, useSettingsMutation } from '../settingsMutation'
 import type { OIDCDiscoveryInfo, OIDCRoleRule, OIDCSettings, OIDCSettingsPut, UnmatchedRole } from '../types'
-
-const POLL_MS = 30_000
+import { usePolledResource } from '../usePolledResource'
 const CALLBACK_PATH = '/api/v1/auth/oidc/callback'
 
 interface Draft {
@@ -150,9 +149,14 @@ export default function OIDCSettingsPanel({
   networks: string[]
   onAuthError: (err: unknown) => void
 }) {
-  const [data, setData] = useState<OIDCSettings | null>(null)
-  const [error, setError] = useState<unknown>(null)
-  const [retryKey, setRetryKey] = useState(0)
+  // Unlike the other config tabs this GET is admin-only (issuer and claim
+  // mapping are IdP topology), so viewers get a static explanation instead
+  // of a doomed fetch.
+  const { data, error, reload } = usePolledResource<OIDCSettings>('/api/v1/settings/oidc', {
+    enabled: canWrite,
+    onAuthError,
+    logLabel: 'authentication settings',
+  })
   const [draft, setDraft] = useState<Draft | null>(null)
   const [formErrors, setFormErrors] = useState<string[]>([])
   const formSummary = useErrorSummary(formErrors.length > 0)
@@ -178,35 +182,6 @@ export default function OIDCSettingsPanel({
     reload: setDraft,
   })
 
-  // Unlike the other config tabs this GET is admin-only (issuer and claim
-  // mapping are IdP topology), so viewers get a static explanation instead
-  // of a doomed fetch.
-  useEffect(() => {
-    if (!canWrite) return
-    let cancelled = false
-    const load = () => {
-      apiGet<OIDCSettings>('/api/v1/settings/oidc')
-        .then((res) => {
-          if (!cancelled) {
-            setData(res)
-            setError(null)
-          }
-        })
-        .catch((err) => {
-          if (cancelled) return
-          onAuthError(err)
-          console.error('authentication settings request failed', err)
-          setError(err)
-        })
-    }
-    load()
-    const id = setInterval(load, POLL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [canWrite, onAuthError, retryKey])
-
   if (!canWrite) {
     return <RoleWall need="adminWrite" what="Single sign-on settings" caps={caps} />
   }
@@ -216,7 +191,7 @@ export default function OIDCSettingsPanel({
         title="Authentication settings unavailable"
         subject="authentication settings"
         error={error}
-        onRetry={() => setRetryKey((key) => key + 1)}
+        onRetry={() => void reload()}
       />
     )
   }
@@ -260,7 +235,7 @@ export default function OIDCSettingsPanel({
       if (!currentServer) return
       const res = await apiPut<OIDCSettings>('/api/v1/settings/oidc', body)
       setWarnings(res.warnings ?? [])
-      setData(res)
+      await reload()
       // Clear the draft so the form resumes following server state (the
       // 30 s poll converges other admins' edits instead of shadowing them).
       setDraft(null)
