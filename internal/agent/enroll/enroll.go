@@ -280,6 +280,21 @@ func (p PKI) write(key crypto.Signer, resp *pb.EnrollResponse) error {
 	return nil
 }
 
+// AgentID extracts the enrolled identity from the certificate's URI SAN
+// (polarbeam://agent/<uuid>) — the same field the server trusts.
+func (p PKI) AgentID() (string, error) {
+	leaf, err := p.Leaf()
+	if err != nil {
+		return "", err
+	}
+	for _, u := range leaf.URIs {
+		if u.Scheme == "polarbeam" && u.Host == "agent" && len(u.Path) > 1 {
+			return strings.TrimPrefix(u.Path, "/"), nil
+		}
+	}
+	return "", errors.New("certificate has no polarbeam agent URI SAN")
+}
+
 // Leaf returns the current agent certificate.
 func (p PKI) Leaf() (*x509.Certificate, error) {
 	pemBytes, err := os.ReadFile(filepath.Join(p.Dir, certFile))

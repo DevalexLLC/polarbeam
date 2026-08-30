@@ -75,6 +75,13 @@ func dial(cfg config.Config, pki enroll.PKI) (*grpc.ClientConn, error) {
 	return conn, nil
 }
 
+// SetCachedConfigHash primes the hash AgentHello reports when a locally
+// cached snapshot was applied before connecting: a server whose current
+// snapshot matches skips the redundant initial send, and any difference
+// still triggers a full snapshot (the server always compares). Call before
+// Run — configHash is otherwise touched only from Run's goroutine.
+func (u *Uplink) SetCachedConfigHash(hash string) { u.configHash = hash }
+
 func (u *Uplink) getConn() *grpc.ClientConn {
 	u.mu.RLock()
 	defer u.mu.RUnlock()

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/devalexllc/polarbeam/internal/agent/confcache"
 	"github.com/devalexllc/polarbeam/internal/agent/config"
 	"github.com/devalexllc/polarbeam/internal/agent/enroll"
 	"github.com/devalexllc/polarbeam/internal/agent/probes"
@@ -159,7 +160,44 @@ func cmdRun(args []string) error {
 
 	sched := scheduler.New(probes.DefaultRegistry(), spoolSink(sp.Append, cancel))
 	defer sched.Stop()
-	up.OnSnapshot = sched.Apply
+	// The config cache is bound to the enrolled identity: re-enrollment
+	// (wiping only pki/) must never leave the OLD agent's schedule to
+	// drive the new one. uplink.New already proved we are enrolled, so an
+	// unreadable identity here is a genuine error — run without a cache.
+	agentID, err := enroll.NewPKI(cfg.StateDir).AgentID()
+	if err != nil {
+		slog.Error("agent identity unreadable; config cache disabled", "err", err)
+	}
+	// Apply first, persist second: the agent must run the new config even
+	// when the cache write fails. A FAILED persist clears the cache — a
+	// stale cache is worse than none, because the uplink already advertises
+	// the newer hash on reconnect, so the server would never re-send and a
+	// later restart would resurrect the old schedule.
+	up.OnSnapshot = func(snap *pb.ConfigSnapshot) {
+		sched.Apply(snap)
+		if agentID == "" {
+			return
+		}
+		if err := confcache.Store(cfg.StateDir, agentID, snap); err != nil {
+			slog.Error("config cache write failed; clearing stale cache", "err", err)
+			if err := confcache.Clear(cfg.StateDir, agentID); err != nil {
+				slog.Error("config cache clear failed", "err", err)
+			}
+		}
+	}
+	// A cached snapshot keeps the agent measuring through a control-plane
+	// outage that outlives a restart. The cache's hash rides AgentHello so
+	// a reachable server that has moved on re-sends immediately.
+	if agentID != "" {
+		if cached, err := confcache.Load(cfg.StateDir, agentID); err != nil {
+			slog.Error("config cache unreadable; waiting for the server", "err", err)
+		} else if cached != nil {
+			slog.Info("applying cached config snapshot",
+				"hash", cached.GetConfigHash(), "probes", len(cached.GetProbes()))
+			sched.Apply(cached)
+			up.SetCachedConfigHash(cached.GetConfigHash())
+		}
+	}
 
 	// Shutdown barrier. Declared last so it runs FIRST among the defers:
 	// the pusher and the renewer are joined before sched.Stop, sp.Close and
