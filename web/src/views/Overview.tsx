@@ -294,12 +294,14 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
           href={inheritRouteNetwork('#/incidents')}
         >
           <span className="stat-label">Active incident groups</span>
-          <strong>{activeGroups.length}</strong>
+          {/* The server caps the open-event list during pathological
+              incidents; a "+" marks every derived figure as a floor. */}
+          <strong>{outages.truncated ? `${activeGroups.length}+` : activeGroups.length}</strong>
           <span className="stat-context">
             <span className="stat-badge">{activeGroups.length > 0 ? 'Active' : 'Clear'}</span>
             {active.length === 0
               ? 'No active incidents'
-              : `${activeTargetCount} affected ${activeTargetCount === 1 ? 'target' : 'targets'}`}
+              : `${activeTargetCount}${outages.truncated ? '+' : ''} affected ${activeTargetCount === 1 ? 'target' : 'targets'}`}
           </span>
         </a>
         <a

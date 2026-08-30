@@ -67,7 +67,7 @@ func (a *api) handleOutages(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "include_routes must be true or false")
 		return
 	}
-	outages, err := a.db.ListOutages(r.Context(), spec.Window, scopeIDs(r.Context()), includeRoutes)
+	outages, truncated, err := a.db.ListOutages(r.Context(), spec.Window, scopeIDs(r.Context()), includeRoutes)
 	if err != nil {
 		internalError(w, "list outages", err)
 		return
@@ -103,6 +103,10 @@ func (a *api) handleOutages(w http.ResponseWriter, r *http.Request) {
 		// clock must not decide where "now" sits on the chart.
 		"now":     time.Now().UTC(),
 		"outages": out,
+		// True when the oldest OPEN events were cut by the store's safety
+		// cap — the dashboard should say the incident list is partial
+		// rather than present it as complete.
+		"truncated": truncated,
 	})
 }
 
