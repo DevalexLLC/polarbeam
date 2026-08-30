@@ -4,11 +4,10 @@ import { fmtAgo } from '../format'
 import { useConcurrentSettingsDraft, useSettingsMutation } from '../settingsMutation'
 import { useErrorSummary } from '../formErrors'
 import type { NetworksConfigResponse, NetworkConfig } from '../types'
+import { usePolledResource } from '../usePolledResource'
 import ConfirmButton from './ConfirmButton'
 import DataTable, { type DataTableColumn } from './DataTable'
 import SettingsPageError from './SettingsPageError'
-
-const POLL_MS = 30_000
 
 interface Draft {
   name: string
@@ -45,9 +44,10 @@ export default function NetworksPanel({
   canWrite: boolean
   onAuthError: (err: unknown) => void
 }) {
-  const [data, setData] = useState<NetworksConfigResponse | null>(null)
-  const [error, setError] = useState<unknown>(null)
-  const [retryKey, setRetryKey] = useState(0)
+  const { data, error, reload } = usePolledResource<NetworksConfigResponse>('/api/v1/config/networks', {
+    onAuthError,
+    logLabel: 'network settings',
+  })
   const [draft, setDraft] = useState<Draft | null>(null)
   const [editing, setEditing] = useState(false) // draft edits an existing network (name locked)
   const [formErrors, setFormErrors] = useState<string[]>([])
@@ -86,33 +86,6 @@ export default function NetworksPanel({
       if (!latest.name) setEditing(false)
     },
   })
-
-  useEffect(() => {
-    let cancelled = false
-    const load = () => {
-      apiGet<NetworksConfigResponse>('/api/v1/config/networks')
-        .then((res) => {
-          if (!cancelled) {
-            setData(res)
-            setError(null)
-          }
-        })
-        .catch((err) => {
-          if (cancelled) return
-          onAuthError(err)
-          console.error('network settings request failed', err)
-          setError(err)
-        })
-    }
-    load()
-    const id = setInterval(load, POLL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [onAuthError, retryKey])
-
-  const reload = () => apiGet<NetworksConfigResponse>('/api/v1/config/networks').then(setData).catch(onAuthError)
 
   const save = async () => {
     if (!draft) return
@@ -160,7 +133,6 @@ export default function NetworksPanel({
     } catch (err) {
       onAuthError(err)
       console.error('network delete failed', err)
-      setError(err)
       feedback.error(`Network ${n.name} was not deleted: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
@@ -173,12 +145,7 @@ export default function NetworksPanel({
 
   if (error && !data) {
     return (
-      <SettingsPageError
-        title="Networks unavailable"
-        subject="networks"
-        error={error}
-        onRetry={() => setRetryKey((key) => key + 1)}
-      />
+      <SettingsPageError title="Networks unavailable" subject="networks" error={error} onRetry={() => void reload()} />
     )
   }
   if (!data) {
