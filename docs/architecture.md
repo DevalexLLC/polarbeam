@@ -33,7 +33,7 @@ polarbeam/
 ├── cmd/polarbeam-agent/                # subcommands: run, enroll, selfcheck
 ├── internal/server/
 │   ├── config/      # strict YAML + preflight (fail-loud: unknown keys = fatal)
-│   ├── ca/          # built-in CA, CSR signing, revocation verify-callback
+│   ├── ca/          # built-in CA, CSR signing (revocation lives in store + grpcapi)
 │   ├── grpcapi/     # EnrollmentService + AgentService
 │   ├── httpapi/     # dashboard REST, sessions, CSRF
 │   ├── store/       # hand-written pgx queries
@@ -91,7 +91,7 @@ Continuous aggregates: `probe_results_hourly` (from raw: samples, ok_samples, su
 
 ## Agent probe engine
 
-- **Scheduler:** one worker per ProbeSpec; start offset `hash(probe_id) % interval` (splay; the uint32 hash is taken as nanoseconds, so the effective spread caps at ~4.3 s for longer intervals). New snapshot → diff by probe_id+spec-hash, stop/start/restart workers. Unknown probe type → log error + report `UNSUPPORTED` (never silently skip).
+- **Scheduler:** one worker per ProbeSpec; start offset `hash64(probe_id) % interval` (splay spread across the FULL interval so a site's probes never clump after a restart or config push). New snapshot → diff by probe_id+spec-hash, stop/start/restart workers. Unknown probe type → log error + report `UNSUPPORTED`; a spec without a usable cadence reports `ERROR` on a fallback cadence (never silently skip). Results from runs cut short by shutdown or a config change are suppressed — they would read as loss.
 - **Prober interface:** `Run(ctx, spec) *pb.ProbeResult`, registry keyed by ProbeType.
 - **ICMP:** unprivileged datagram ICMP first (`x/net/icmp` udp4, works when `net.ipv4.ping_group_range` covers the service group), fallback raw socket via `CAP_NET_RAW` (`--cap-add NET_RAW` on the container); `selfcheck` verifies at start. Trains of `train_count` (default 10) echoes spaced 200 ms → loss %, min/avg/max/stddev.
 - **Jitter:** RFC 3550 smoothing `J += (|RTTᵢ−RTTᵢ₋₁|−J)/16` across consecutive RTTs, carried per-series across runs.
@@ -198,7 +198,7 @@ Dispositions are four: open (no session), any-session reads (scope-filtered serv
 - Agent certs: 30-day lifetime, identity in URI SAN `polarbeam://agent/<uuid>`; server signs CSRs — private keys never leave the agent.
 - Enrollment: `polarbeam-server token create --site nyc --network corp --ttl 24h` prints `<id>.<secret>` once (DB stores sha256, single-use; `--network` optional, default `default`, must already exist — networks are never auto-created) → `polarbeam-agent enroll --server host:443 --token …` writes cert + CA bundle. The agent inherits the token's network and never chooses it — no wire change, and the assignment is unforgeable by the enrollee.
 - Rotation: renew at 2/3 lifetime via `RenewCert` on the existing mTLS channel, retry daily; fully expired (dark >30 d) → re-enroll with fresh token, by design.
-- Revocation: DB-backed — server's `VerifyPeerCertificate` checks serial against `certificates` (30 s cache); no CRL/OCSP since the control plane is the sole verifier. Live streams for revoked serials are dropped by the sweep.
+- Revocation: DB-backed — every RPC re-checks the presented cert's serial against `certificates` (an uncached point lookup in `grpcapi.authenticateAgent`; fail-closed when the DB cannot confirm); no CRL/OCSP since the control plane is the sole verifier. Live streams re-check on their 30 s tick and are dropped for revoked serials.
 
 ## Deployment topology & port strategy
 
@@ -252,10 +252,10 @@ browsers ──HTTPS────▶ │ nginx     │  SNI: lh.example ───
 
 ## Dev environment
 
-Dev compose = production compose (`deploy/compose/`: proxy + server + timescaledb) plus a dev overlay (`deploy/compose-dev/`): `agent-{nyc,lon,syd}` containers (a one-shot bootstrap service mints dev tokens and seeds a dashboard login `admin`/`polarbeam-dev`; `cap_add: NET_RAW`), optional netem profile (`delay 80ms loss 2%`) for realistic charts. Using the same base compose in dev exercises the SNI-passthrough path continuously. `make dev` runs the server locally + Vite proxy for SPA hot-reload; `make up` brings up the full containerized stack.
+Dev compose = production compose (`deploy/compose/`: proxy + server + timescaledb) plus a dev overlay (`deploy/compose-dev/`): `agent-{nyc,lon,syd}` containers (a one-shot bootstrap service mints dev tokens and seeds a dashboard login `admin`/`polarbeam-dev`; `cap_add: NET_RAW`), optional netem profile (`delay 80ms loss 2%`) for realistic charts. Using the same base compose in dev exercises the SNI-passthrough path continuously. For SPA hot-reload, run `pnpm run dev` in `web/` against the containerized stack (`make up`) — the Vite dev server proxies `/api` to the proxy on :9443 (see `web/vite.config.ts`).
 
 **Note:** `make up` must always include the dev overlay in dev environments — a prior lesson: restarting only the core compose silently drops overlay services (fake agents' tokens, monitoring). Makefile targets should be explicit about which files they compose.
 
 ## Verification (end-to-end)
 
-Each milestone has its own gate above; the standing harness is `deploy/docker-compose.yml` — three agents meshed across fake "sites" with netem-induced latency/loss, exercised after every change (`make up && make seed`, then check matrix, pair drill-down, outage injection via iptables, spool replay via server stop/start).
+Each milestone has its own gate above; the standing harness is the dev compose stack (`deploy/compose/docker-compose.yml` + `deploy/compose-dev/docker-compose.dev.yml`, always composed together via `make up`) — three agents meshed across fake "sites" with netem-induced latency/loss, exercised after every change (`make up && make seed`, then check matrix, pair drill-down, outage injection via iptables, spool replay via server stop/start).
