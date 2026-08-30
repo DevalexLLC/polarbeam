@@ -15,6 +15,7 @@ import { SETTINGS_TABS, canOpenSettings, resolveTab, settingsTabDef } from './se
 import { useSettingsMutation } from './settingsMutation'
 import type { SettingsTab } from './settingsTabs'
 import type { AuthProviders, LoginResponse, NetworksConfigResponse, UIBanner, User } from './types'
+import { usePolledResource } from './usePolledResource'
 import BannerFrame from './components/BannerFrame'
 import ChangePasswordDialog from './components/ChangePasswordDialog'
 import LogoMark from './components/LogoMark'
@@ -124,10 +125,6 @@ export default function App() {
   const [sso, setSso] = useState(false)
   const [banner, setBanner] = useState<UIBanner | null>(null)
   const [changingPassword, setChangingPassword] = useState(false)
-  // null until this session's /config/networks has succeeded — deliberately
-  // distinct from [], which means "this caller sees no networks". Plane
-  // pickers must not read "not loaded yet" as "single-network install".
-  const [networks, setNetworks] = useState<string[] | null>(null)
   const [route, setRoute] = useState<Route>(() => parseHash(location.hash))
   const routeKey = JSON.stringify(route)
   const pageKey = routePageKey(route)
@@ -224,66 +221,61 @@ export default function App() {
   // The banner is open (the sign-in screen renders it too): fetch at boot,
   // refetch on login/logout, and poll so another admin's edit converges
   // everywhere within 30s. A failure keeps the last known value — the
-  // banner must never block login or blank the app.
+  // banner must never block login or blank the app. The hook's snapshot
+  // syncs into banner state so an admin's own save (onBannerSaved) still
+  // lands instantly between polls.
+  const { data: polledBanner } = usePolledResource<UIBanner>('/api/v1/ui-banner', {
+    key: user,
+    logError: (err) => console.warn('ui banner unavailable; keeping last known', err),
+  })
   useEffect(() => {
-    let cancelled = false
-    const load = () =>
-      apiGet<UIBanner>('/api/v1/ui-banner')
-        .then((b) => {
-          if (!cancelled) setBanner(b)
-        })
-        .catch((err) => console.warn('ui banner unavailable; keeping last known', err))
-    load()
-    const id = setInterval(load, 30_000)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [user])
+    if (polledBanner) setBanner(polledBanner)
+  }, [polledBanner])
 
   // The network list decides whether the top-bar filter renders at all
   // (single-network installs never see it). Fetch on login and poll so an
   // admin adding or deleting a plane converges everywhere within 30s; each
   // fetch also reconciles a URL filter that may have gone stale. A
   // failure keeps the last known list — filtering must never block the app.
+  // resetOnChange drops the previous session's list when `user` changes:
+  // the names are another tenant's topology to a scoped user, and "keep
+  // the last known on failure" — right within a session — would otherwise
+  // show them across a logout, or indefinitely if the new fetch fails.
+  const { data: networksSnapshot } = usePolledResource(
+    async () => {
+      const res = await apiGet<NetworksConfigResponse>('/api/v1/config/networks')
+      const names = res.networks.map((n) => n.name)
+      // A scoped session that started with no networks is looking at the
+      // "no networks assigned" wall. The server applies a scope change
+      // live, so the moment this poll returns a plane, the session
+      // identity is stale — re-read it rather than making the user reload
+      // to escape a wall an admin has already cleared.
+      let refreshedUser: User | null = null
+      if (user && user.networks !== null && user.networks.length === 0 && names.length > 0) {
+        try {
+          refreshedUser = (await apiGet<LoginResponse>('/api/v1/auth/me')).user
+        } catch {
+          /* keep the wall; the next poll tries again */
+        }
+      }
+      return { names, refreshedUser }
+    },
+    {
+      key: user,
+      enabled: user !== null,
+      resetOnChange: true,
+      logError: (err) => console.warn('networks unavailable; keeping last known', err),
+    },
+  )
+  // null until this session's /config/networks has succeeded — deliberately
+  // distinct from [], which means "this caller sees no networks". Plane
+  // pickers must not read "not loaded yet" as "single-network install".
+  const networks = networksSnapshot?.names ?? null
   useEffect(() => {
-    // Drop the previous session's list before fetching this one's. The
-    // names are another tenant's topology to a scoped user, and "keep the
-    // last known on failure" — right within a session — would otherwise
-    // show them across a logout, or indefinitely if the new fetch fails.
-    setNetworks(null)
-    if (!user) return
-    let cancelled = false
-    const load = () =>
-      apiGet<NetworksConfigResponse>('/api/v1/config/networks')
-        .then((res) => {
-          if (cancelled) return
-          const names = res.networks.map((n) => n.name)
-          setNetworks(names)
-          reconcileNetworkFilter(names)
-          // A scoped session that started with no networks is looking at
-          // the "no networks assigned" wall. The server applies a scope
-          // change live, so the moment this poll returns a plane, the
-          // session identity is stale — re-read it rather than making the
-          // user reload to escape a wall an admin has already cleared.
-          if (user.networks !== null && user.networks.length === 0 && names.length > 0) {
-            apiGet<LoginResponse>('/api/v1/auth/me')
-              .then((me) => {
-                if (!cancelled) setUser(me.user)
-              })
-              .catch(() => {
-                /* keep the wall; the next poll tries again */
-              })
-          }
-        })
-        .catch((err) => console.warn('networks unavailable; keeping last known', err))
-    load()
-    const id = setInterval(load, 30_000)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [user])
+    if (!networksSnapshot) return
+    reconcileNetworkFilter(networksSnapshot.names)
+    if (networksSnapshot.refreshedUser) setUser(networksSnapshot.refreshedUser)
+  }, [networksSnapshot])
 
   // Capabilities are derived from the session, not stored: they change
   // exactly once per session (at login/logout), and App re-renders its whole

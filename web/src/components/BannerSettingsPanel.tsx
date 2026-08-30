@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import type { Caps } from '../caps'
 import RoleWall from './RoleWall'
 import SettingsPageError from './SettingsPageError'
@@ -7,8 +7,8 @@ import { fmtAgo } from '../format'
 import { useConcurrentSettingsDraft, useSettingsMutation } from '../settingsMutation'
 import { useErrorSummary } from '../formErrors'
 import type { BannerSettings, BannerSettingsPut, UIBanner } from '../types'
+import { usePolledResource } from '../usePolledResource'
 
-const POLL_MS = 30_000
 const MAX_TEXT_CHARS = 300
 
 interface Draft {
@@ -42,9 +42,13 @@ export default function BannerSettingsPanel({
   onAuthError: (err: unknown) => void
   onSaved: (b: UIBanner) => void
 }) {
-  const [data, setData] = useState<BannerSettings | null>(null)
-  const [error, setError] = useState<unknown>(null)
-  const [retryKey, setRetryKey] = useState(0)
+  // Admin-only GET (updated_by usernames), so viewers get a static
+  // explanation instead of a doomed fetch.
+  const { data, error, reload } = usePolledResource<BannerSettings>('/api/v1/settings/ui-banner', {
+    enabled: canWrite,
+    onAuthError,
+    logLabel: 'banner settings',
+  })
   const [draft, setDraft] = useState<Draft | null>(null)
   const [formErrors, setFormErrors] = useState<string[]>([])
   const summary = useErrorSummary(formErrors.length > 0)
@@ -65,34 +69,6 @@ export default function BannerSettingsPanel({
     reload: setDraft,
   })
 
-  // Admin-only GET (updated_by usernames), so viewers get a static
-  // explanation instead of a doomed fetch.
-  useEffect(() => {
-    if (!canWrite) return
-    let cancelled = false
-    const load = () => {
-      apiGet<BannerSettings>('/api/v1/settings/ui-banner')
-        .then((res) => {
-          if (!cancelled) {
-            setData(res)
-            setError(null)
-          }
-        })
-        .catch((err) => {
-          if (cancelled) return
-          onAuthError(err)
-          console.error('banner settings request failed', err)
-          setError(err)
-        })
-    }
-    load()
-    const id = setInterval(load, POLL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [canWrite, onAuthError, retryKey])
-
   if (!canWrite) {
     return <RoleWall need="adminWrite" what="Banner settings" caps={caps} />
   }
@@ -102,7 +78,7 @@ export default function BannerSettingsPanel({
         title="Banner settings unavailable"
         subject="banner settings"
         error={error}
-        onRetry={() => setRetryKey((key) => key + 1)}
+        onRetry={() => void reload()}
       />
     )
   }
@@ -135,7 +111,7 @@ export default function BannerSettingsPanel({
       )
       if (!currentServer) return
       const res = await apiPut<BannerSettings>('/api/v1/settings/ui-banner', body)
-      setData(res)
+      await reload()
       // Clear the draft so the form resumes following server state (the
       // 30 s poll converges other admins' edits instead of shadowing them).
       setDraft(null)

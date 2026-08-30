@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect } from 'react'
 import { apiGet } from '../api'
 import DataTable, { type DataTableColumn } from '../components/DataTable'
 import PageError from '../components/PageError'
@@ -7,11 +7,12 @@ import { fmtAgo, fmtTime } from '../format'
 import { useNetworkFilter } from '../networkFilter'
 import { inheritRouteNetwork, updateRouteParams } from '../routeState'
 import { useTimezone } from '../timezone'
+import { usePolledResource } from '../usePolledResource'
 import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
+import { useStickyPin } from '../useStickyPin'
 import type { Hop, PathEvent, PathEventsResponse, Window } from '../types'
 import { WINDOWS } from '../types'
 
-const POLL_MS = 30_000
 const ROUTE_PAGE = 25
 
 export function hopLabel(h: Hop | undefined): string {
@@ -128,20 +129,9 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
   const [page, setPage] = useRouteNumber('page', 1)
   const [expandedEvent, setExpandedEvent] = useRouteParam('event')
   const win = windowParam as Window
-  const [data, setData] = useState<PathEventsResponse | null>(null)
-  const [scopeTotal, setScopeTotal] = useState(0)
-  const [loadedRequestURL, setLoadedRequestURL] = useState('')
-  const [error, setError] = useState<unknown>(null)
-  const [retryKey, setRetryKey] = useState(0)
   const [query, setQuery] = useRouteSearch()
   const [queryParam] = useRouteParam('q')
-  const pinnedEvent = useRef<string | null>(expandedEvent)
-
-  if (!expandedEvent) pinnedEvent.current = null
-  else if (pinnedEvent.current !== expandedEvent) {
-    pinnedEvent.current = data?.events.some((event) => event.id === expandedEvent) ? null : expandedEvent
-  }
-  const pinnedEventID = pinnedEvent.current === expandedEvent ? expandedEvent : null
+  const { pinnedID: pinnedEventID, reconcile: reconcilePin } = useStickyPin(expandedEvent)
 
   const params = new URLSearchParams({
     window: win,
@@ -162,33 +152,28 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
   const scopeURL = '/api/v1/path-events?' + scopeParams.toString()
   const needsScopeRequest = Boolean(pinnedEventID || queryParam.trim())
 
-  useEffect(() => {
-    let cancelled = false
-    const load = () => {
+  // scopeURL and needsScopeRequest derive from inputs already encoded in
+  // requestURL (window, network, q), so the request URL alone is the key.
+  const {
+    data: snapshot,
+    error,
+    loadedKey,
+    reload,
+  } = usePolledResource(
+    () => {
       const inventoryRequest = apiGet<PathEventsResponse>(requestURL)
       const scopeRequest = needsScopeRequest ? apiGet<PathEventsResponse>(scopeURL) : inventoryRequest
-      Promise.all([inventoryRequest, scopeRequest])
-        .then(([res, scope]) => {
-          if (!cancelled) {
-            setData(res)
-            setScopeTotal(scope.page?.total ?? scope.events.length)
-            setLoadedRequestURL(requestURL)
-            setError(null)
-          }
-        })
-        .catch((err) => {
-          onAuthError(err)
-          console.error('routes request failed', err)
-          if (!cancelled) setError(err)
-        })
-    }
-    load()
-    const id = setInterval(load, POLL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [needsScopeRequest, onAuthError, requestURL, retryKey, scopeURL])
+      return Promise.all([inventoryRequest, scopeRequest]).then(([res, scope]) => ({
+        res,
+        scopeTotal: scope.page?.total ?? scope.events.length,
+      }))
+    },
+    { key: requestURL, onAuthError, logLabel: 'routes' },
+  )
+  const data = snapshot?.res ?? null
+  reconcilePin(Boolean(data?.events.some((event) => event.id === expandedEvent)))
+  const scopeTotal = snapshot?.scopeTotal ?? 0
+  const loadedRequestURL = typeof loadedKey === 'string' ? loadedKey : ''
 
   const events = data?.events ?? []
   const pageMeta = data?.page ?? { limit: ROUTE_PAGE, offset: 0, total: events.length, has_more: false }
@@ -255,7 +240,7 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
         error={error}
         backHref={inheritRouteNetwork('#/')}
         backLabel="Back to Overview"
-        onRetry={() => setRetryKey((key) => key + 1)}
+        onRetry={() => void reload()}
       />
     )
   if (!data)

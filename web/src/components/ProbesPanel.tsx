@@ -6,7 +6,9 @@ import { useNetworkFilter } from '../networkFilter'
 import { updateRouteParams } from '../routeState'
 import { useConcurrentSettingsDraft, useSettingsMutation } from '../settingsMutation'
 import { serverSnapshotChanged } from '../settingsSnapshot'
+import { usePolledResource } from '../usePolledResource'
 import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
+import { useStickyPin } from '../useStickyPin'
 import type {
   MeshesConfigResponse,
   ParamSpec,
@@ -23,7 +25,6 @@ import DataTable, { type DataTableColumn } from './DataTable'
 import PlaneField from './PlaneField'
 import SettingsPageError from './SettingsPageError'
 
-const POLL_MS = 30_000
 const PROBE_PAGE = 25
 
 // DataTable keeps both surfaces mounted; CSS shows exactly one (the same
@@ -227,15 +228,6 @@ export default function ProbesPanel({
   onSelectedProbe: (probe: string, mode?: 'push' | 'replace') => void
   onAuthError: (err: unknown) => void
 }) {
-  const [data, setData] = useState<ProbesConfigResponse | null>(null)
-  const [loadedRequestURL, setLoadedRequestURL] = useState('')
-  const [registry, setRegistry] = useState<ProbeTypesResponse | null>(null)
-  const [registryError, setRegistryError] = useState<unknown>(null)
-  const [meshes, setMeshes] = useState<string[]>([])
-  const [sites, setSites] = useState<string[]>([])
-  const [targets, setTargets] = useState<string[]>([])
-  const [error, setError] = useState<unknown>(null)
-  const [retryKey, setRetryKey] = useState(0)
   const [rowError, setRowError] = useState('')
   const [busy, setBusy] = useState(false)
   const [query, setQuery] = useRouteSearch()
@@ -283,7 +275,6 @@ export default function ProbesPanel({
     if (selectedProbe !== target) focusEditor.current = null
   }, [editID, editDraft, selectedProbe])
   const scrolledProbe = useRef<string | null>(null)
-  const pinnedProbe = useRef<string | null>(selectedProbe)
   const feedback = useSettingsMutation()
   const blankProbe = newDraft(initialPlane(plane))
   const createGuard = useConcurrentSettingsDraft({
@@ -298,6 +289,70 @@ export default function ProbesPanel({
     },
     reload: setDraft,
   })
+  const { pinnedID: pinnedProbeID, reconcile: reconcilePin } = useStickyPin(selectedProbe)
+
+  const probeParams = new URLSearchParams({
+    limit: String(PROBE_PAGE),
+    offset: String(pinnedProbeID ? 0 : (page - 1) * PROBE_PAGE),
+    sort,
+    order,
+  })
+  if (pinnedProbeID) probeParams.set('q', pinnedProbeID)
+  else if (queryParam.trim()) probeParams.set('q', queryParam.trim())
+  if (mode !== 'all') probeParams.set('mode', mode)
+  if (enabled !== 'all') probeParams.set('enabled', enabled)
+  if (typeFilter !== 'all') probeParams.set('type', typeFilter)
+  if (network) probeParams.set('network', network)
+  const requestURL = '/api/v1/config/probes?' + probeParams.toString()
+
+  // Static per server version: fetch once on entry (and on an explicit
+  // retry), independently from the 30-second configuration poll.
+  const {
+    data: registry,
+    error: registryError,
+    reload: reloadRegistry,
+  } = usePolledResource<ProbeTypesResponse>('/api/v1/config/probe-types', {
+    pollMs: null,
+    onAuthError,
+    logLabel: 'probe type registry',
+  })
+
+  const {
+    data,
+    error: listError,
+    loadedKey,
+    reload,
+  } = usePolledResource<ProbesConfigResponse>(requestURL, { onAuthError, logLabel: 'probe settings' })
+  reconcilePin(Boolean(data?.probes.some((probe) => probe.id === selectedProbe)))
+  const loadedRequestURL = typeof loadedKey === 'string' ? loadedKey : ''
+
+  const {
+    data: formOptions,
+    error: optionsError,
+    reload: reloadOptions,
+  } = usePolledResource(
+    () =>
+      Promise.all([
+        apiGet<MeshesConfigResponse>('/api/v1/config/meshes'),
+        apiGet<SitesResponse>('/api/v1/sites'),
+        apiGet<TargetsConfigResponse>('/api/v1/config/targets'),
+      ]).then(([meshRes, sitesRes, targetsRes]) => ({
+        meshes: meshRes.meshes.map((m) => m.name),
+        sites: sitesRes.sites.map((s) => s.name),
+        // Agent-kind targets are excluded: they carry no address/port/URL
+        // (mesh expansion resolves peers), so the server rejects direct
+        // probes against them.
+        targets: targetsRes.targets.filter((t) => t.kind === 'external').map((t) => t.name),
+      })),
+    { onAuthError, logLabel: 'probe form options' },
+  )
+  const meshes = formOptions?.meshes ?? []
+  const sites = formOptions?.sites ?? []
+  const targets = formOptions?.targets ?? []
+  // The list and options pollers used to race on one error slot; they keep
+  // sharing one render slot, with the list's failure taking precedence.
+  const error = listError ?? optionsError
+
   const loadedEditProbe = editID ? data?.probes.find((probe) => probe.id === editID) : undefined
   const loadedEdit: ProbeEditSnapshot | null = loadedEditProbe
     ? { exists: true, draft: draftFrom(loadedEditProbe), enabled: loadedEditProbe.enabled }
@@ -323,113 +378,6 @@ export default function ProbesPanel({
       }
     },
   })
-
-  if (!selectedProbe) pinnedProbe.current = null
-  else if (pinnedProbe.current !== selectedProbe) {
-    pinnedProbe.current = data?.probes.some((probe) => probe.id === selectedProbe) ? null : selectedProbe
-  }
-  const pinnedProbeID = pinnedProbe.current === selectedProbe ? selectedProbe : null
-
-  const probeParams = new URLSearchParams({
-    limit: String(PROBE_PAGE),
-    offset: String(pinnedProbeID ? 0 : (page - 1) * PROBE_PAGE),
-    sort,
-    order,
-  })
-  if (pinnedProbeID) probeParams.set('q', pinnedProbeID)
-  else if (queryParam.trim()) probeParams.set('q', queryParam.trim())
-  if (mode !== 'all') probeParams.set('mode', mode)
-  if (enabled !== 'all') probeParams.set('enabled', enabled)
-  if (typeFilter !== 'all') probeParams.set('type', typeFilter)
-  if (network) probeParams.set('network', network)
-  const requestURL = '/api/v1/config/probes?' + probeParams.toString()
-
-  // Static per server version: fetch once on entry (and on an explicit
-  // retry), independently from the 30-second configuration poll.
-  useEffect(() => {
-    let cancelled = false
-    apiGet<ProbeTypesResponse>('/api/v1/config/probe-types')
-      .then((res) => {
-        if (!cancelled) {
-          setRegistry(res)
-          setRegistryError(null)
-        }
-      })
-      .catch((err) => {
-        if (cancelled) return
-        onAuthError(err)
-        console.error('probe type registry request failed', err)
-        setRegistryError(err)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [onAuthError, retryKey])
-
-  useEffect(() => {
-    let cancelled = false
-    const load = () => {
-      apiGet<ProbesConfigResponse>(requestURL)
-        .then((probes) => {
-          if (cancelled) return
-          setData(probes)
-          setLoadedRequestURL(requestURL)
-          setError(null)
-        })
-        .catch((err) => {
-          if (cancelled) return
-          onAuthError(err)
-          console.error('probe settings request failed', err)
-          setError(err)
-        })
-    }
-    load()
-    const id = setInterval(load, POLL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [onAuthError, requestURL, retryKey])
-
-  useEffect(() => {
-    let cancelled = false
-    const loadOptions = () => {
-      Promise.all([
-        apiGet<MeshesConfigResponse>('/api/v1/config/meshes'),
-        apiGet<SitesResponse>('/api/v1/sites'),
-        apiGet<TargetsConfigResponse>('/api/v1/config/targets'),
-      ])
-        .then(([meshRes, sitesRes, targetsRes]) => {
-          if (cancelled) return
-          setMeshes(meshRes.meshes.map((m) => m.name))
-          setSites(sitesRes.sites.map((s) => s.name))
-          // Agent-kind targets are excluded: they carry no address/port/URL
-          // (mesh expansion resolves peers), so the server rejects direct
-          // probes against them.
-          setTargets(targetsRes.targets.filter((t) => t.kind === 'external').map((t) => t.name))
-        })
-        .catch((err) => {
-          if (cancelled) return
-          onAuthError(err)
-          console.error('probe form options request failed', err)
-          setError(err)
-        })
-    }
-    loadOptions()
-    const id = setInterval(loadOptions, POLL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [onAuthError, retryKey])
-
-  const reload = () =>
-    apiGet<ProbesConfigResponse>(requestURL)
-      .then((probes) => {
-        setData(probes)
-        setLoadedRequestURL(requestURL)
-      })
-      .catch(onAuthError)
 
   const create = async () => {
     if (!draft) return
@@ -541,13 +489,7 @@ export default function ProbesPanel({
         throw requestError
       }
       if (serverSnapshotChanged(mutationSnapshot(p), mutationSnapshot(latest))) {
-        feedback.conflict(`Probe ${assignmentLabel(p)}`, () => {
-          setData((current) =>
-            current
-              ? { ...current, probes: current.probes.map((probe) => (probe.id === latest.id ? latest : probe)) }
-              : current,
-          )
-        })
+        feedback.conflict(`Probe ${assignmentLabel(p)}`, () => void reload())
         return
       }
       const res = await apiPut<{ warnings?: string[] }>('/api/v1/config/probes/' + p.id, {
@@ -639,7 +581,11 @@ export default function ProbesPanel({
         title="Probes unavailable"
         subject="probes"
         error={initialError}
-        onRetry={() => setRetryKey((key) => key + 1)}
+        onRetry={() => {
+          void reloadRegistry()
+          void reload()
+          void reloadOptions()
+        }}
       />
     )
   }

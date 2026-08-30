@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react'
-import { apiGet } from '../api'
 import IncidentTimeline, {
   bucketRangeLabel,
   gridWithYear,
@@ -20,11 +19,11 @@ import {
   updateRouteParams,
 } from '../routeState'
 import { useTimezone } from '../timezone'
+import { usePolledResource } from '../usePolledResource'
 import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
 import type { OutageEvent, OutagesResponse, Window } from '../types'
 import { WINDOWS } from '../types'
 
-const POLL_MS = 30_000
 const INCIDENT_DETAIL_PAGE = 10
 type IncidentFilter = 'active' | 'all' | 'resolved'
 
@@ -257,42 +256,22 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
   const [expandedIncident, setExpandedIncident] = useRouteParam('incident')
   const win = windowParam as Window
   const filter = statusParam as IncidentFilter
-  const [data, setData] = useState<OutagesResponse | null>(null)
-  const [error, setError] = useState<unknown>(null)
-  const [retryKey, setRetryKey] = useState(0)
+  const selectedBucket = selectedSlice || null
+  const { data, error, lastLoadedAt, reload } = usePolledResource<OutagesResponse>(
+    `/api/v1/outages?window=${win}&include_routes=true`,
+    { onAuthError, logLabel: 'incidents' },
+  )
+  const snapshotWin = data && (WINDOWS as readonly string[]).includes(data.window) ? (data.window as Window) : win
   // The timeline's "now" is fetch time, so its bucket grid only shifts on
   // the 30s poll, never on a re-render (hover, expand, timezone toggle).
-  const [fetchedAt, setFetchedAt] = useState(0)
-  const selectedBucket = selectedSlice || null
-  const snapshotWin = data && (WINDOWS as readonly string[]).includes(data.window) ? (data.window as Window) : win
-
-  useEffect(() => {
-    let cancelled = false
-    const load = () =>
-      apiGet<OutagesResponse>(`/api/v1/outages?window=${win}&include_routes=true`)
-        .then((res) => {
-          if (!cancelled) {
-            setData(res)
-            // Anchor the timeline at the server clock the window was
-            // evaluated against — a skewed browser clock would shift the
-            // grid and hide returned incidents off either edge.
-            const serverNow = Date.parse(res.now)
-            setFetchedAt(Number.isFinite(serverNow) ? serverNow : Date.now())
-            setError(null)
-          }
-        })
-        .catch((err) => {
-          onAuthError(err)
-          console.error('incidents request failed', err)
-          if (!cancelled) setError(err)
-        })
-    load()
-    const id = setInterval(load, POLL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [win, onAuthError, retryKey])
+  // Anchor it at the server clock the window was evaluated against — a
+  // skewed browser clock would shift the grid and hide returned incidents
+  // off either edge.
+  const fetchedAt = useMemo(() => {
+    if (!data) return 0
+    const serverNow = Date.parse(data.now)
+    return Number.isFinite(serverNow) ? serverNow : (lastLoadedAt?.getTime() ?? 0)
+  }, [data, lastLoadedAt])
 
   // The global top-bar network filter scopes everything on this view —
   // groups, timeline, chips, and button counts all derive from this subset.
@@ -361,7 +340,7 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
         error={error}
         backHref={inheritRouteNetwork('#/')}
         backLabel="Back to Overview"
-        onRetry={() => setRetryKey((key) => key + 1)}
+        onRetry={() => void reload()}
       />
     )
   if (!data)

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import uPlot from 'uplot'
 import { apiGet } from '../api'
 import Chart from '../components/Chart'
@@ -10,6 +10,7 @@ import { isTargetID } from '../pageState'
 import { inheritRouteNetwork, targetInventoryHref } from '../routeState'
 import { useTheme } from '../theme'
 import { useTimezone } from '../timezone'
+import { usePolledResource } from '../usePolledResource'
 import { useRouteParam } from '../useRouteState'
 import {
   fmtAgo,
@@ -47,8 +48,6 @@ import type {
   Window,
 } from '../types'
 import { WINDOWS } from '../types'
-
-const POLL_MS = 30_000
 
 // Stage lines get one categorical color each. tcp reuses the outbound
 // blue and tls the return magenta (slots 1 and 5); dns takes the accent
@@ -313,15 +312,43 @@ export default function TargetDetail({
   // (each already carries its network). The stages chart cannot follow — the
   // server folds it across planes — so it is annotated instead.
   const { network } = useNetworkFilter()
-  const [summary, setSummary] = useState<TargetSummaryResponse | null>(null)
-  const [series, setSeries] = useState<TargetSeriesResponse | null>(null)
-  const [stages, setStages] = useState<TargetStagesResponse | null>(null)
-  const [health, setHealth] = useState<TargetHealthResponse | null>(null)
-  const [paths, setPaths] = useState<TargetPathsResponse | null>(null)
-  const [settings, setSettings] = useState<SettingsResponse | null>(null)
-  const [error, setError] = useState<unknown>(null)
   const validID = isTargetID(id)
   const scrolledProbe = useRef<string | null>(null)
+
+  // Same load discipline as PairDetail: settings ride along so threshold
+  // changes and chart redraws land together, and the hook's generation
+  // counter drops superseded responses after a window/metric flip.
+  const base = `/api/v1/targets/${encodeURIComponent(id)}`
+  const { data, error, reload } = usePolledResource(
+    () =>
+      Promise.all([
+        apiGet<TargetSummaryResponse>(`${base}?window=${win}`),
+        apiGet<TargetSeriesResponse>(`${base}/series?metric=${metric}&window=${win}`),
+        apiGet<TargetStagesResponse>(`${base}/stages?window=${win}`),
+        apiGet<TargetHealthResponse>(`${base}/health`),
+        apiGet<TargetPathsResponse>(`${base}/paths`),
+        apiGet<SettingsResponse>('/api/v1/settings'),
+      ]).then(([summary, series, stages, health, paths, settings]) => ({
+        summary,
+        series,
+        stages,
+        health,
+        paths,
+        settings,
+      })),
+    {
+      key: [id, win, metric].join('\u0000'),
+      enabled: validID,
+      onAuthError,
+      logLabel: 'target detail',
+    },
+  )
+  const summary = data?.summary ?? null
+  const series = data?.series ?? null
+  const stages = data?.stages ?? null
+  const health = data?.health ?? null
+  const paths = data?.paths ?? null
+  const settings = data?.settings ?? null
 
   useEffect(() => {
     if (!selectedProbe) {
@@ -343,47 +370,6 @@ export default function TargetDetail({
     }
     setSelectedProbe('', 'replace')
   }, [health, network, selectedProbe, setSelectedProbe])
-
-  // Same load discipline as PairDetail: settings ride along so threshold
-  // changes and chart redraws land together, and the generation counter
-  // drops superseded responses after a window/metric flip.
-  const loadGen = useRef(0)
-  const load = useCallback(() => {
-    if (!validID) return Promise.resolve()
-    const gen = ++loadGen.current
-    const base = `/api/v1/targets/${encodeURIComponent(id)}`
-    return Promise.all([
-      apiGet<TargetSummaryResponse>(`${base}?window=${win}`),
-      apiGet<TargetSeriesResponse>(`${base}/series?metric=${metric}&window=${win}`),
-      apiGet<TargetStagesResponse>(`${base}/stages?window=${win}`),
-      apiGet<TargetHealthResponse>(`${base}/health`),
-      apiGet<TargetPathsResponse>(`${base}/paths`),
-      apiGet<SettingsResponse>('/api/v1/settings'),
-    ])
-      .then(([su, se, st, he, pa, cfg]) => {
-        if (gen !== loadGen.current) return
-        setSummary(su)
-        setSeries(se)
-        setStages(st)
-        setHealth(he)
-        setPaths(pa)
-        setSettings(cfg)
-        setError(null)
-      })
-      .catch((err) => {
-        onAuthError(err)
-        console.error('target detail request failed', err)
-        if (gen !== loadGen.current) return
-        setError(err)
-      })
-  }, [id, win, metric, onAuthError, validID])
-
-  useEffect(() => {
-    if (!validID) return
-    void load()
-    const pollId = setInterval(() => void load(), POLL_MS)
-    return () => clearInterval(pollId)
-  }, [load, validID])
 
   const loadedTitle = summary
     ? summary.target.kind === 'agent'
@@ -545,7 +531,7 @@ export default function TargetDetail({
         error={error}
         backHref={targetInventoryHref()}
         backLabel="Back to Targets"
-        onRetry={() => void load()}
+        onRetry={() => void reload()}
       />
     )
   if (!summary || !series)

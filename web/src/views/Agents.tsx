@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { apiGet } from '../api'
 import DataTable, { type DataTableColumn } from '../components/DataTable'
 import HealthStrip, { stripStats, UptimeValue } from '../components/HealthStrip'
@@ -8,17 +8,17 @@ import { useNetworkFilter } from '../networkFilter'
 import { pageFailure } from '../pageState'
 import { inheritRouteNetwork, updateRouteParams } from '../routeState'
 import { useTimezone } from '../timezone'
+import { POLL_MS, usePolledResource } from '../usePolledResource'
 import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
+import { useStickyPin } from '../useStickyPin'
 import type {
   AgentBucketFailuresResponse,
   AgentInfo,
-  AgentInventorySummary,
   AgentProbeHealth,
   AgentProbeHealthResponse,
   AgentsResponse,
 } from '../types'
 
-const POLL_MS = 30_000
 // Agents renew their cert at 2/3 lifetime (10 days left on the 30-day
 // cert), so the warn threshold must be BELOW the renewal point or every
 // healthy agent is flagged from issuance. 7 days = renewal has been
@@ -262,11 +262,6 @@ export default function Agents({
   onTitleChange: (title: string) => void
 }) {
   useTimezone() // re-render fmtTime tooltips on UTC/local toggle
-  const [data, setData] = useState<AgentsResponse | null>(null)
-  const [scopeSummary, setScopeSummary] = useState<AgentInventorySummary | null>(null)
-  const [loadedRequestURL, setLoadedRequestURL] = useState('')
-  const [error, setError] = useState<unknown>(null)
-  const [retryKey, setRetryKey] = useState(0)
   const [healthParam] = useRouteParam('health', 'all')
   const [query, setQuery] = useRouteSearch()
   const [queryParam] = useRouteParam('q')
@@ -285,15 +280,7 @@ export default function Agents({
   // Agents link resets the hash — so deep links from the Overview fleet
   // card, refreshes, and Back all restore the expansion for free.
   const expanded = agent
-  const pinnedAgent = useRef<string | null>(expanded)
-  const [detail, setDetail] = useState<AgentProbeHealthResponse | null>(null)
-  const [detailError, setDetailError] = useState<unknown>(null)
-
-  if (!expanded) pinnedAgent.current = null
-  else if (pinnedAgent.current !== expanded) {
-    pinnedAgent.current = data?.agents.some((row) => row.id === expanded) ? null : expanded
-  }
-  const pinnedAgentID = pinnedAgent.current === expanded ? expanded : null
+  const { pinnedID: pinnedAgentID, reconcile: reconcilePin } = useStickyPin(expanded)
 
   const params = new URLSearchParams({
     limit: String(AGENT_PAGE),
@@ -311,63 +298,36 @@ export default function Agents({
   const scopeURL = '/api/v1/agents?' + scopeParams.toString()
   const needsScopeRequest = Boolean(pinnedAgentID || queryParam.trim() || filter !== 'all')
 
-  useEffect(() => {
-    let cancelled = false
-    const load = () => {
+  // scopeURL and needsScopeRequest derive from inputs already encoded in
+  // requestURL (network, q, health), so the request URL alone is the key.
+  const {
+    data: snapshot,
+    error,
+    loadedKey,
+    reload,
+  } = usePolledResource(
+    () => {
       const inventoryRequest = apiGet<AgentsResponse>(requestURL)
       const scopeRequest = needsScopeRequest ? apiGet<AgentsResponse>(scopeURL) : inventoryRequest
-      Promise.all([inventoryRequest, scopeRequest])
-        .then(([res, scope]) => {
-          if (!cancelled) {
-            setData(res)
-            setScopeSummary(scope.summary ?? null)
-            setLoadedRequestURL(requestURL)
-            setError(null)
-          }
-        })
-        .catch((err) => {
-          onAuthError(err)
-          console.error('agents request failed', err)
-          if (!cancelled) setError(err)
-        })
-    }
-    load()
-    const id = setInterval(load, POLL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [needsScopeRequest, onAuthError, requestURL, retryKey, scopeURL])
+      return Promise.all([inventoryRequest, scopeRequest]).then(([res, scope]) => ({
+        res,
+        scopeSummary: scope.summary ?? null,
+      }))
+    },
+    { key: requestURL, onAuthError, logLabel: 'agents' },
+  )
+  const data = snapshot?.res ?? null
+  reconcilePin(Boolean(data?.agents.some((row) => row.id === expanded)))
+  const scopeSummary = snapshot?.scopeSummary ?? null
+  const loadedRequestURL = typeof loadedKey === 'string' ? loadedKey : ''
 
-  useEffect(() => {
-    if (!expanded) {
-      setDetail(null)
-      setDetailError(null)
-      return
-    }
-    let cancelled = false
-    setDetail(null)
-    setDetailError(null)
-    const load = () =>
-      apiGet<AgentProbeHealthResponse>(`/api/v1/agents/${expanded}/health?window=24h`)
-        .then((res) => {
-          if (!cancelled) {
-            setDetail(res)
-            setDetailError(null)
-          }
-        })
-        .catch((err) => {
-          onAuthError(err)
-          console.error('agent probe detail request failed', err)
-          if (!cancelled) setDetailError(err)
-        })
-    load()
-    const id = setInterval(load, POLL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [expanded, onAuthError])
+  // One agent's row expands to its per-probe detail: fetched lazily on
+  // expand, refreshed on the same cadence, and cleared on collapse or when
+  // switching agents (resetOnChange).
+  const { data: detail, error: detailError } = usePolledResource<AgentProbeHealthResponse>(
+    `/api/v1/agents/${expanded}/health?window=24h`,
+    { enabled: Boolean(expanded), resetOnChange: true, onAuthError, logLabel: 'agent probe detail' },
+  )
 
   const expandedAgent = data?.agents.find((row) => row.id === expanded)
   useEffect(() => {
@@ -435,7 +395,7 @@ export default function Agents({
         error={error}
         backHref={inheritRouteNetwork('#/')}
         backLabel="Back to Overview"
-        onRetry={() => setRetryKey((key) => key + 1)}
+        onRetry={() => void reload()}
       />
     )
   if (!data)

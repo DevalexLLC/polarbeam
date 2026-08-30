@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import type { Caps } from '../caps'
 import type { PlaneChoice } from '../plane'
 import { initialPlane, networkField, planeReady } from '../plane'
@@ -11,11 +11,10 @@ import { apiDelete, apiGet, apiPost } from '../api'
 import { fmtAgo, fmtTime } from '../format'
 import { useTimezone } from '../timezone'
 import type { JoinToken, SitesConfigResponse, TokenCreateResponse, TokensResponse } from '../types'
+import { usePolledResource } from '../usePolledResource'
 import ConfirmButton from './ConfirmButton'
 import DataTable, { type DataTableColumn } from './DataTable'
 import SettingsPageError from './SettingsPageError'
-
-const POLL_MS = 30_000
 
 const TTL_OPTIONS: Array<{ label: string; ms: number }> = [
   { label: '1 hour', ms: 3_600_000 },
@@ -47,10 +46,25 @@ export default function EnrollmentPanel({
   onAuthError: (err: unknown) => void
 }) {
   useTimezone() // re-render fmtTime renders on UTC/local toggle
-  const [data, setData] = useState<TokensResponse | null>(null)
-  const [siteNames, setSiteNames] = useState<string[]>([])
-  const [error, setError] = useState<unknown>(null)
-  const [retryKey, setRetryKey] = useState(0)
+
+  // Like the OIDC panel, this GET is admin-only (join tokens are enrollment
+  // credentials), so viewers get a static explanation instead of a doomed
+  // fetch.
+  const { data, error, reload } = usePolledResource<TokensResponse>('/api/v1/config/tokens', {
+    enabled: canWrite,
+    onAuthError,
+    logLabel: 'enrollment settings',
+  })
+  // Sites feed the site picker only, so they poll independently of the
+  // token list: a failure keeps the last list, stays out of the panel
+  // error, and never blocks tokens from committing — while a 401 still
+  // logs the session out through the controller.
+  const { data: siteNamesData, reload: reloadSites } = usePolledResource(
+    () => apiGet<SitesConfigResponse>('/api/v1/config/sites').then((res) => res.sites.map((s) => s.name)),
+    { enabled: canWrite, onAuthError },
+  )
+  const siteNames = siteNamesData ?? []
+
   const [actionError, setActionError] = useState('')
   // Token deletion reuses actionError's render slot but must not describe
   // the issue-token form's fields.
@@ -84,42 +98,6 @@ export default function EnrollmentPanel({
       : undefined,
   )
 
-  // Like the OIDC panel, this GET is admin-only (join tokens are enrollment
-  // credentials), so viewers get a static explanation instead of a doomed
-  // fetch.
-  useEffect(() => {
-    if (!canWrite) return
-    let cancelled = false
-    const load = () => {
-      apiGet<TokensResponse>('/api/v1/config/tokens')
-        .then((res) => {
-          if (!cancelled) {
-            setData(res)
-            setError(null)
-          }
-        })
-        .catch((err) => {
-          if (cancelled) return
-          onAuthError(err)
-          console.error('enrollment settings request failed', err)
-          setError(err)
-        })
-      apiGet<SitesConfigResponse>('/api/v1/config/sites')
-        .then((res) => {
-          if (!cancelled) setSiteNames(res.sites.map((s) => s.name))
-        })
-        .catch((err) => {
-          if (!cancelled) onAuthError(err)
-        })
-    }
-    load()
-    const id = setInterval(load, POLL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [canWrite, onAuthError, retryKey])
-
   if (!canWrite) {
     return <RoleWall need="networkWrite" what="Enrollment tokens" caps={caps} />
   }
@@ -129,7 +107,10 @@ export default function EnrollmentPanel({
         title="Enrollment tokens unavailable"
         subject="enrollment tokens"
         error={error}
-        onRetry={() => setRetryKey((key) => key + 1)}
+        onRetry={() => {
+          void reload()
+          void reloadSites()
+        }}
       />
     )
   }
@@ -141,8 +122,6 @@ export default function EnrollmentPanel({
       </div>
     )
   }
-
-  const reload = () => apiGet<TokensResponse>('/api/v1/config/tokens').then(setData).catch(onAuthError)
 
   const create = async () => {
     if (!site) return

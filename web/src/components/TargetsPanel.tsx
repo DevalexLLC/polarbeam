@@ -9,6 +9,7 @@ import { canWriteRow } from '../caps'
 import type { PlaneChoice } from '../plane'
 import { initialPlane, networkField, planeReady } from '../plane'
 import { inheritRouteNetwork, updateRouteParams } from '../routeState'
+import { usePolledResource } from '../usePolledResource'
 import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
 import type { TargetsConfigResponse, TargetConfig } from '../types'
 import ConfirmButton from './ConfirmButton'
@@ -16,7 +17,6 @@ import DataTable, { type DataTableColumn } from './DataTable'
 import PlaneField from './PlaneField'
 import SettingsPageError from './SettingsPageError'
 
-const POLL_MS = 30_000
 const TARGET_PAGE = 25
 
 interface Draft {
@@ -67,9 +67,6 @@ export default function TargetsPanel({
   plane: PlaneChoice
   onAuthError: (err: unknown) => void
 }) {
-  const [data, setData] = useState<TargetsConfigResponse | null>(null)
-  const [error, setError] = useState<unknown>(null)
-  const [retryKey, setRetryKey] = useState(0)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [editing, setEditing] = useState(false) // draft edits an existing target (name locked)
   const [formErrors, setFormErrors] = useState<string[]>([])
@@ -85,6 +82,23 @@ export default function TargetsPanel({
   const [actionRow, setActionRow] = useState<string | null>(null)
   const { network } = useNetworkFilter()
   const feedback = useSettingsMutation()
+
+  const params = new URLSearchParams({
+    limit: String(TARGET_PAGE),
+    offset: String((page - 1) * TARGET_PAGE),
+    sort,
+    order,
+  })
+  if (queryParam.trim()) params.set('q', queryParam.trim())
+  if (kind !== 'all') params.set('kind', kind)
+  if (network) params.set('network', network)
+  const requestURL = '/api/v1/config/targets?' + params.toString()
+
+  const { data, error, reload } = usePolledResource<TargetsConfigResponse>(requestURL, {
+    onAuthError,
+    logLabel: 'target settings',
+  })
+
   const blankDraft = (): Draft => ({ ...emptyDraft, network: initialPlane(plane) })
   const loadedTarget = editing && draft ? data?.targets.find((target) => target.name === draft.name) : undefined
   const loadedDraft = loadedTarget ? draftFrom(loadedTarget) : blankDraft()
@@ -104,44 +118,6 @@ export default function TargetsPanel({
       setEditing(latest.name !== '')
     },
   })
-
-  const params = new URLSearchParams({
-    limit: String(TARGET_PAGE),
-    offset: String((page - 1) * TARGET_PAGE),
-    sort,
-    order,
-  })
-  if (queryParam.trim()) params.set('q', queryParam.trim())
-  if (kind !== 'all') params.set('kind', kind)
-  if (network) params.set('network', network)
-  const requestURL = '/api/v1/config/targets?' + params.toString()
-
-  useEffect(() => {
-    let cancelled = false
-    const load = () => {
-      apiGet<TargetsConfigResponse>(requestURL)
-        .then((res) => {
-          if (!cancelled) {
-            setData(res)
-            setError(null)
-          }
-        })
-        .catch((err) => {
-          if (cancelled) return
-          onAuthError(err)
-          console.error('target settings request failed', err)
-          setError(err)
-        })
-    }
-    load()
-    const id = setInterval(load, POLL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [onAuthError, requestURL, retryKey])
-
-  const reload = () => apiGet<TargetsConfigResponse>(requestURL).then(setData).catch(onAuthError)
 
   const save = async () => {
     if (!draft) return
@@ -205,7 +181,6 @@ export default function TargetsPanel({
     } catch (err) {
       onAuthError(err)
       console.error('target delete failed', err)
-      setError(err)
       feedback.error(`Target ${t.name} was not deleted: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
@@ -224,12 +199,7 @@ export default function TargetsPanel({
 
   if (error && !data) {
     return (
-      <SettingsPageError
-        title="Targets unavailable"
-        subject="targets"
-        error={error}
-        onRetry={() => setRetryKey((key) => key + 1)}
-      />
+      <SettingsPageError title="Targets unavailable" subject="targets" error={error} onRetry={() => void reload()} />
     )
   }
   if (!data) {

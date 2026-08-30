@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { usePolledResource } from '../usePolledResource'
 import { useTimezone } from '../timezone'
 import type { AgentBucketFailureGroup, AgentBucketFailuresResponse, AgentHealthBucket } from '../types'
 
@@ -87,9 +88,22 @@ export default function HealthStrip({
   const utc = mode === 'utc'
   const [hover, setHover] = useState<{ i: number; x: number; y: number; below: boolean } | null>(null)
   const [pinned, setPinned] = useState<{ t: number; x: number; y: number; below: boolean } | null>(null)
-  const [detail, setDetail] = useState<{ t: number; data: AgentBucketFailuresResponse | null; error: string } | null>(
-    null,
+
+  // Load the pinned slot's breakdown; a re-pin mid-flight drops the stale
+  // response (resetOnChange also clears it, so the card shows loading). A
+  // failure renders in the card — fail loud, never a silent empty list.
+  const { data: detailData, error: detailError } = usePolledResource<AgentBucketFailuresResponse>(
+    () => fetchSlotDetail!(pinned!.t),
+    { key: pinned?.t, enabled: Boolean(pinned && fetchSlotDetail), pollMs: null, resetOnChange: true },
   )
+  const detail = pinned
+    ? {
+        t: pinned.t,
+        data: detailData,
+        error: detailError == null ? '' : detailError instanceof Error ? detailError.message : String(detailError),
+      }
+    : null
+
   const wrapRef = useRef<HTMLDivElement>(null)
   const cardRef = useRef<HTMLDivElement>(null)
   const [focusI, setFocusI] = useState(SLOTS - 1)
@@ -151,30 +165,6 @@ export default function HealthStrip({
     setFocusI(j)
     wrapRef.current?.querySelectorAll<HTMLButtonElement>('.fleet-strip-slot')[j]?.focus()
   }
-
-  // Load the pinned slot's breakdown; a re-pin mid-flight drops the stale
-  // response (same cancelled-flag pattern as the Agents detail fetch). A
-  // failure renders in the card — fail loud, never a silent empty list.
-  useEffect(() => {
-    if (!pinned || !fetchSlotDetail) {
-      setDetail(null)
-      return
-    }
-    let cancelled = false
-    const t = pinned.t
-    setDetail({ t, data: null, error: '' })
-    fetchSlotDetail(t)
-      .then((res) => {
-        if (!cancelled) setDetail({ t, data: res, error: '' })
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setDetail({ t, data: null, error: err instanceof Error ? err.message : String(err) })
-      })
-    return () => {
-      cancelled = true
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pinned?.t])
 
   // Dismissal: Escape, click outside strip+card, or any scroll — the card
   // is fixed at click-time coordinates and would visibly detach from its

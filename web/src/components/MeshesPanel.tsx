@@ -1,15 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { apiDelete, apiGet, apiPost } from '../api'
 import type { PlaneChoice } from '../plane'
 import { initialPlane, networkField, planeReady } from '../plane'
 import { useSettingsDraft, useSettingsMutation } from '../settingsMutation'
 import { useErrorSummary } from '../formErrors'
 import type { MeshesConfigResponse, MeshConfig, SitesResponse } from '../types'
+import { usePolledResource } from '../usePolledResource'
 import ConfirmButton from './ConfirmButton'
 import PlaneField from './PlaneField'
 import SettingsPageError from './SettingsPageError'
-
-const POLL_MS = 30_000
 
 export default function MeshesPanel({
   canWrite,
@@ -20,10 +19,19 @@ export default function MeshesPanel({
   plane: PlaneChoice
   onAuthError: (err: unknown) => void
 }) {
-  const [data, setData] = useState<MeshesConfigResponse | null>(null)
-  const [sites, setSites] = useState<string[]>([])
-  const [error, setError] = useState<unknown>(null)
-  const [retryKey, setRetryKey] = useState(0)
+  const {
+    data: snapshot,
+    error,
+    reload,
+  } = usePolledResource(
+    () =>
+      Promise.all([apiGet<MeshesConfigResponse>('/api/v1/config/meshes'), apiGet<SitesResponse>('/api/v1/sites')]).then(
+        ([meshes, sitesRes]) => ({ meshes, sites: sitesRes.sites.map((s) => s.name) }),
+      ),
+    { onAuthError, logLabel: 'mesh settings' },
+  )
+  const data = snapshot?.meshes ?? null
+  const sites = snapshot?.sites ?? []
   const [actionError, setActionError] = useState('')
   // Row actions (delete, add/remove member) share actionError's render slot
   // but must not describe the create form's fields.
@@ -47,34 +55,6 @@ export default function MeshesPanel({
     setActionError('')
   })
 
-  useEffect(() => {
-    let cancelled = false
-    const load = () => {
-      Promise.all([apiGet<MeshesConfigResponse>('/api/v1/config/meshes'), apiGet<SitesResponse>('/api/v1/sites')])
-        .then(([meshes, sitesRes]) => {
-          if (!cancelled) {
-            setData(meshes)
-            setSites(sitesRes.sites.map((s) => s.name))
-            setError(null)
-          }
-        })
-        .catch((err) => {
-          if (cancelled) return
-          onAuthError(err)
-          console.error('mesh settings request failed', err)
-          setError(err)
-        })
-    }
-    load()
-    const id = setInterval(load, POLL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [onAuthError, retryKey])
-
-  const reload = () => apiGet<MeshesConfigResponse>('/api/v1/config/meshes').then(setData).catch(onAuthError)
-
   const run = async (fn: () => Promise<unknown>, successMessage: string, scope: 'create' | 'row' = 'row') => {
     setBusy(true)
     setActionError('')
@@ -97,14 +77,7 @@ export default function MeshesPanel({
   }
 
   if (error && !data) {
-    return (
-      <SettingsPageError
-        title="Meshes unavailable"
-        subject="meshes"
-        error={error}
-        onRetry={() => setRetryKey((key) => key + 1)}
-      />
-    )
+    return <SettingsPageError title="Meshes unavailable" subject="meshes" error={error} onRetry={() => void reload()} />
   }
   if (!data) {
     return (
