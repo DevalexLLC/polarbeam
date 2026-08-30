@@ -217,6 +217,15 @@ func (p *ICMP) foldJitter(probeID string, rtts []int64) int64 {
 	return int64(st.j + 0.5)
 }
 
+// Retire drops the jitter accumulator for a retired series (probes.Retirer).
+// Called by the scheduler after the series' worker has exited, so it cannot
+// race that worker's own foldJitter.
+func (p *ICMP) Retire(probeID string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.state, probeID)
+}
+
 // rttStats returns min/avg/max/population-stddev of rtts in microseconds.
 // rtts must be non-empty.
 func rttStats(rtts []int64) (min, avg, max, stddev int64) {

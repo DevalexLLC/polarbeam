@@ -63,6 +63,9 @@ func (s *Scheduler) Apply(snap *pb.ConfigSnapshot) {
 	desired := make(map[string]*pb.ProbeSpec, len(snap.GetProbes()))
 	for _, spec := range snap.GetProbes() {
 		if spec.GetProbeId() == "" {
+			// Cannot be reported on the wire: results are keyed by probe_id,
+			// so there is no series to attribute an ERROR to. Local log is
+			// the loudest available channel.
 			slog.Error("ignoring probe spec without probe_id")
 			continue
 		}
@@ -106,16 +109,12 @@ func (s *Scheduler) Stop() {
 	s.wg.Wait()
 }
 
+// misconfiguredInterval is the fallback cadence for specs whose own interval
+// is unusable. A var so tests can shorten it.
+var misconfiguredInterval = time.Minute
+
 func (s *Scheduler) startWorkerLocked(id string, spec *pb.ProbeSpec) {
 	interval := spec.GetInterval().AsDuration()
-	if interval <= 0 {
-		// Fail loud, don't run: a probe without a cadence cannot be
-		// scheduled. Server-side validation makes this unreachable in
-		// practice.
-		slog.Error("ignoring probe spec with non-positive interval",
-			"probe", id, "interval", interval)
-		return
-	}
 
 	prober, ok := s.registry[spec.GetType()]
 	if !ok {
@@ -126,37 +125,77 @@ func (s *Scheduler) startWorkerLocked(id string, spec *pb.ProbeSpec) {
 		prober = unsupported{}
 	}
 
+	if interval <= 0 {
+		// Fail loud on the wire, not just locally: a probe without a usable
+		// cadence is reported as ERROR on a fallback cadence so the server
+		// sees the config problem instead of the series going silent.
+		// Server-side validation makes this unreachable in practice.
+		slog.Error("probe spec has non-positive interval: reporting ERROR",
+			"probe", id, "interval", interval)
+		prober = misconfigured{reason: fmt.Sprintf("non-positive interval %v", interval)}
+		interval = misconfiguredInterval
+	}
+
 	ctx, cancel := context.WithCancel(s.ctx)
 	s.workers[id] = &worker{specHash: specHash(spec), cancel: cancel}
 	s.wg.Add(1)
-	go s.runWorker(ctx, spec, prober)
+	go s.runWorker(ctx, spec, prober, interval)
 }
 
-func (s *Scheduler) runWorker(ctx context.Context, spec *pb.ProbeSpec, prober probes.Prober) {
-	defer s.wg.Done()
-	interval := spec.GetInterval().AsDuration()
+// retire drops per-series prober state after a worker exits — unless a
+// replacement worker already owns the probe_id (a changed spec restarted it
+// under the same ID before the old goroutine finished): retiring then would
+// delete the replacement's live state midstream.
+func (s *Scheduler) retire(id string, r probes.Retirer) {
+	s.mu.Lock()
+	_, replaced := s.workers[id]
+	s.mu.Unlock()
+	if !replaced {
+		r.Retire(id)
+	}
+}
 
-	// Splay: hash(probe_id) % interval offsets first runs so a site's
-	// probes don't fire in lockstep after a config push or restart.
-	h := fnv.New32a()
-	h.Write([]byte(spec.GetProbeId()))
-	splay := time.Duration(h.Sum32()) % interval
+func (s *Scheduler) runWorker(ctx context.Context, spec *pb.ProbeSpec, prober probes.Prober, interval time.Duration) {
+	defer s.wg.Done()
+	// Deferred so it runs after any in-flight run of THIS worker has folded.
+	if r, ok := prober.(probes.Retirer); ok {
+		defer s.retire(spec.GetProbeId(), r)
+	}
+
 	select {
 	case <-ctx.Done():
 		return
-	case <-time.After(splay):
+	case <-time.After(splayFor(spec.GetProbeId(), interval)):
 	}
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		s.sink(s.runOnce(ctx, spec, prober))
+		res := s.runOnce(ctx, spec, prober)
+		// A run cut short because the worker was cancelled (shutdown or a
+		// config change) yields a failure that reflects the cancellation,
+		// not the path — spooling it would pollute loss accounting. A
+		// measurement that completed OK despite racing the cancel is real
+		// and is kept.
+		if ctx.Err() == nil || res.GetStatus() == pb.ProbeStatus_PROBE_STATUS_OK {
+			s.sink(res)
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
 	}
+}
+
+// splayFor offsets a probe's first run so a site's probes don't fire in
+// lockstep after a config push or restart. A 64-bit hash spreads the offset
+// across the FULL interval; a 32-bit hash read as nanoseconds would cap the
+// spread at ~4.3s and re-clump every longer cadence.
+func splayFor(probeID string, interval time.Duration) time.Duration {
+	h := fnv.New64a()
+	h.Write([]byte(probeID))
+	return time.Duration(h.Sum64() % uint64(interval))
 }
 
 // runOnce executes a single probe run under the spec's timeout, converting a
@@ -198,6 +237,22 @@ func (unsupported) Run(_ context.Context, spec *pb.ProbeSpec) *pb.ProbeResult {
 		StartedAt: timestamppb.New(time.Now()),
 		Status:    pb.ProbeStatus_PROBE_STATUS_UNSUPPORTED,
 		Error:     fmt.Sprintf("probe type %s not supported by this agent", spec.GetType()),
+		JitterUs:  -1,
+	}
+}
+
+// misconfigured reports ERROR for specs the agent cannot schedule as sent
+// (same fail-loud shape as unsupported, with the defect in the message).
+type misconfigured struct{ reason string }
+
+func (m misconfigured) Run(_ context.Context, spec *pb.ProbeSpec) *pb.ProbeResult {
+	return &pb.ProbeResult{
+		ProbeId:   spec.GetProbeId(),
+		Type:      spec.GetType(),
+		TargetId:  spec.GetTarget().GetTargetId(),
+		StartedAt: timestamppb.New(time.Now()),
+		Status:    pb.ProbeStatus_PROBE_STATUS_ERROR,
+		Error:     fmt.Sprintf("misconfigured probe spec: %s", m.reason),
 		JitterUs:  -1,
 	}
 }

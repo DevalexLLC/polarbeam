@@ -54,6 +54,20 @@ func TestFoldJitterAcrossRuns(t *testing.T) {
 	}
 }
 
+// TestRetireDropsJitterState: a retired series must not resume its stale
+// accumulator if the probe is later re-assigned.
+func TestRetireDropsJitterState(t *testing.T) {
+	p := NewICMP()
+	p.foldJitter("x", []int64{100})
+	if j := p.foldJitter("x", []int64{116}); j == -1 {
+		t.Fatal("accumulator never primed")
+	}
+	p.Retire("x")
+	if j := p.foldJitter("x", []int64{100}); j != -1 {
+		t.Errorf("jitter after retire = %d, want -1 (fresh accumulator)", j)
+	}
+}
+
 func icmpSpec(address string, count int, spacing time.Duration) *pb.ProbeSpec {
 	return &pb.ProbeSpec{
 		ProbeId: "test-icmp",
