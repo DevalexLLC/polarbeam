@@ -35,7 +35,7 @@ const EnvURL = "POLARBEAM_TEST_DB_URL"
 // Empty creates a fresh, unmigrated database and returns a URL pointing at
 // it. The test skips when EnvURL is unset; the database is dropped on
 // cleanup.
-func Empty(t *testing.T) string {
+func Empty(t testing.TB) string {
 	t.Helper()
 	admin := os.Getenv(EnvURL)
 	if admin == "" {
@@ -82,7 +82,7 @@ func Empty(t *testing.T) string {
 
 // Migrated is Empty plus a full migrate.Apply, i.e. the schema a fresh
 // production database has after `polarbeam-server migrate`.
-func Migrated(t *testing.T) string {
+func Migrated(t testing.TB) string {
 	t.Helper()
 	url := Empty(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)

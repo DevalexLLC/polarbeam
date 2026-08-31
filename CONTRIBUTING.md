@@ -63,6 +63,7 @@ first PRs.
 
 ```
 make build test lint    # offline
+make bench              # DB-backed ingest benchmarks (needs POLARBEAM_TEST_DB_URL)
 make up                 # dev stack (compose base + dev overlay together)
 make web                # rebuild the SPA: lints, format-checks, then builds
 make web-fix            # apply oxlint autofixes and reformat

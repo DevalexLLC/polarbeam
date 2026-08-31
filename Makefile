@@ -19,7 +19,7 @@ COMPOSE      = docker compose -f $(COMPOSE_BASE) -f $(COMPOSE_DEV)
 # Published image registry/namespace (ghcr requires lowercase).
 REGISTRY ?= ghcr.io/devalexllc
 
-.PHONY: all build server agent test lint vet fmt-check proto web web-fix vendor notices up down reset logs ps seed clean images bundle
+.PHONY: all build server agent test bench lint vet fmt-check proto web web-fix vendor notices up down reset logs ps seed clean images bundle
 
 all: build
 
@@ -33,6 +33,14 @@ agent:
 
 test:
 	CGO_ENABLED=0 $(GO) test -mod=vendor ./...
+
+# DB-backed ingest benchmarks (manual, never a CI job). Gated on
+# POLARBEAM_TEST_DB_URL exactly like the DB tests (see
+# internal/server/dbtest) — unset, every benchmark skips.
+bench:
+	@if [ -z "$$POLARBEAM_TEST_DB_URL" ]; then \
+		echo "POLARBEAM_TEST_DB_URL unset: all benchmarks will skip (see internal/server/dbtest)"; fi
+	CGO_ENABLED=0 $(GO) test -mod=vendor -run '^$$' -bench . -benchmem ./internal/server/...
 
 vet:
 	$(GO) vet -mod=vendor ./...

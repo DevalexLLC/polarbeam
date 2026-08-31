@@ -19,7 +19,7 @@ import (
 	"github.com/devalexllc/polarbeam/internal/server/mtuwatch"
 )
 
-func newPool(t *testing.T) (context.Context, *pgxpool.Pool) {
+func newPool(t testing.TB) (context.Context, *pgxpool.Pool) {
 	t.Helper()
 	url := dbtest.Migrated(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)

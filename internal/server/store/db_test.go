@@ -20,7 +20,7 @@ import (
 	"github.com/devalexllc/polarbeam/internal/server/store"
 )
 
-func newStore(t *testing.T) (context.Context, *store.Store) {
+func newStore(t testing.TB) (context.Context, *store.Store) {
 	t.Helper()
 	url := dbtest.Migrated(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
