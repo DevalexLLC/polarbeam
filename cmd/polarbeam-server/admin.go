@@ -16,10 +16,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/devalexllc/polarbeam/internal/server/config"
+	"github.com/devalexllc/polarbeam/internal/server/configadmin"
 	"github.com/devalexllc/polarbeam/internal/server/probeadmin"
-	"github.com/devalexllc/polarbeam/internal/server/siteadmin"
 	"github.com/devalexllc/polarbeam/internal/server/store"
-	"github.com/devalexllc/polarbeam/internal/server/targetadmin"
 )
 
 // cliUpdatedBy is the audit identity recorded for CLI edits (the web UI
@@ -58,10 +57,10 @@ func adminStore(cfg config.Config) (*store.Store, context.Context, context.Cance
 }
 
 // cliSiteFields makes shared site validation errors name the CLI flags.
-var cliSiteFields = siteadmin.FieldNames{Name: "--name", Lat: "--lat", Lon: "--lon"}
+var cliSiteFields = configadmin.SiteFields{Name: "--name", Lat: "--lat", Lon: "--lon"}
 
 // cliTargetFields makes shared target validation errors name the CLI flags.
-var cliTargetFields = targetadmin.FieldNames{Name: "--name", Address: "--address", URL: "--url", Port: "--port"}
+var cliTargetFields = configadmin.TargetFields{Name: "--name", Address: "--address", URL: "--url", Port: "--port"}
 
 func cmdSite(args []string) error {
 	const use = "usage: polarbeam-server site list|set ..."
@@ -130,7 +129,7 @@ func cmdSite(args []string) error {
 		}
 		var up store.SiteUpdate
 		if set["lat"] {
-			if problems := siteadmin.ValidateCoords(*lat, *lon, cliSiteFields); len(problems) > 0 {
+			if problems := configadmin.ValidateSiteCoords(*lat, *lon, cliSiteFields); len(problems) > 0 {
 				return errors.New(strings.Join(problems, "; "))
 			}
 			up.Latitude, up.Longitude = lat, lon
@@ -174,7 +173,7 @@ func cmdTarget(args []string) error {
 		if err != nil {
 			return err
 		}
-		if problems := targetadmin.Validate(*name, *address, *url, int64(*port), cliTargetFields); len(problems) > 0 {
+		if problems := configadmin.ValidateTarget(*name, *address, *url, int64(*port), cliTargetFields); len(problems) > 0 {
 			return errors.New(strings.Join(problems, "; "))
 		}
 		st, ctx, cancel, err := adminStore(cfg)

@@ -16,7 +16,7 @@ interface Draft {
 
 const emptyDraft: Draft = { name: '', display_name: '' }
 
-// Mirrors the server's networkadmin validation (name required); server 400s
+// Mirrors the server's configadmin network validation (name required); server 400s
 // render verbatim as a backstop.
 function validate(d: Draft): string[] {
   return d.name.trim() === '' ? ['name is required'] : []
