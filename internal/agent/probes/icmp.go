@@ -2,8 +2,6 @@ package probes
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/binary"
 	"fmt"
 	"math"
 	"net"
@@ -57,10 +55,7 @@ func (p *ICMP) Run(ctx context.Context, spec *pb.ProbeSpec) *pb.ProbeResult {
 	if spacing <= 0 {
 		spacing = defaultTrainSpacing
 	}
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		deadline = start.Add(5 * time.Second)
-	}
+	deadline := runDeadline(ctx, start, 5*time.Second)
 
 	ip, err := resolveIP(ctx, spec.GetTarget().GetAddress())
 	if err != nil {
@@ -74,52 +69,19 @@ func (p *ICMP) Run(ctx context.Context, spec *pb.ProbeSpec) *pb.ProbeResult {
 		return res
 	}
 	defer conn.Close()
-	conn.SetReadDeadline(deadline)
 
 	// Random per-run token: under datagram ICMP the kernel rewrites the echo
 	// ID to the socket's local port, so replies are matched by seq + token,
 	// never by ID. In raw mode the socket sees every echo reply on the host,
-	// so the (random) ID is checked as well.
-	var token [8]byte
-	if _, err := rand.Read(token[:]); err != nil {
+	// so the (random) ID is checked as well (icmpEchoParser).
+	token, id, err := echoToken()
+	if err != nil {
 		res.Status = pb.ProbeStatus_PROBE_STATUS_ERROR
-		res.Error = fmt.Sprintf("random token: %v", err)
+		res.Error = err.Error()
 		return res
 	}
-	id := int(binary.BigEndian.Uint16(token[:2]))
 
-	type reply struct {
-		seq int
-		at  time.Time
-	}
-	replies := make(chan reply, count)
-	go func() {
-		buf := make([]byte, 1500)
-		for {
-			n, _, err := conn.ReadFrom(buf)
-			if err != nil {
-				return
-			}
-			msg, err := icmp.ParseMessage(mode.proto, buf[:n])
-			if err != nil || msg.Type != mode.echoReply {
-				continue
-			}
-			echo, ok := msg.Body.(*icmp.Echo)
-			if !ok || string(echo.Data) != string(token[:]) {
-				continue
-			}
-			if mode.raw && echo.ID != id {
-				continue
-			}
-			if echo.Seq < 1 || echo.Seq > count {
-				continue
-			}
-			select { // never block: the run may already be over
-			case replies <- reply{seq: echo.Seq, at: time.Now()}:
-			default:
-			}
-		}
-	}()
+	replies := icmpReadSession(conn, deadline, 1500, count, icmpEchoParser(mode, token, id, count))
 
 	sendTimes := make([]time.Time, count+1) // 1-based seq
 	sent := 0
