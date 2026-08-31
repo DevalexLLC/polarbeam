@@ -1,0 +1,193 @@
+/* PolarBEAM dashboard — night-watch instrument styling.
+   Data colors (series + status) come from the project data-viz palette and
+   are fixed; everything else derives from the token block below. Data
+   values render in tabular monospace; structure labels are wide-tracked
+   uppercase micro-type. */
+
+:root {
+  color-scheme: light;
+
+  --bg: #f7f7f8;
+  --surface: #ffffff;
+  --surface-2: #f4f4f5;
+  --border: #e4e4e7;
+  --border-strong: #d4d4d8;
+  /* Form-control boundaries need the 3:1 non-text bar (WCAG 1.4.11); the
+     decorative hairlines above deliberately stay lighter. */
+  --control-border: #8a8a93;
+  --ink: #18181b;
+  --ink-2: #52525b;
+  --ink-3: #6c6c74;
+  --accent: #4f46e5;
+  --accent-ink: #ffffff;
+  --focus: #6366f1;
+
+  /* Direction identity is categorical and must never borrow an alarm hue:
+     slot 2's orange sits on the crit/down ramp, so the return beam uses
+     slot 5's magenta. #d55181 passes CVD + contrast against blue on both
+     surfaces, so it is not stepped per scheme. */
+  --series-a: #2a78d6; /* outbound beam, categorical slot 1 */
+  --series-b: #d55181; /* return beam, categorical slot 5 */
+
+  /* Settings → Users sign-in chart: local wears the accent, SSO the slot-5
+     magenta. Validated as a categorical pair (CVD ΔE ≥ 17, ≥3:1 contrast)
+     on both surfaces. */
+  --chart-local: var(--accent);
+  --chart-oidc: var(--series-b);
+
+  /* Status colors double as text on light surfaces, so ok and stale run
+     darker here than in dark mode (which overrides them back to the
+     brighter originals). Every pair is measured in the contrast table in
+     docs/accessibility.md and enforced by web/test/a11y-source.test.mjs. */
+  --status-ok: #097509;
+  --status-degraded: #8a6100;
+  --status-down: #b4232d;
+  --status-stale: #6e6d64;
+
+  /* Map severity: warn shares the degraded amber; crit sits between amber
+     and the down red so all four stay distinguishable on one line. */
+  --status-warn: var(--status-degraded);
+  --status-crit: #cf4a10;
+
+  --status-ok-bg: color-mix(in srgb, #0ca30c 12%, var(--surface));
+  --status-degraded-bg: color-mix(in srgb, #fab219 16%, var(--surface));
+  --status-down-bg: color-mix(in srgb, #d03b3b 12%, var(--surface));
+  --status-stale-bg: var(--surface-2);
+
+  /* Fleet-strip "no data" fill: a meaningful mark, so it cannot reuse the
+     1.3:1 --border hairline — it holds its own 3:1 grey. */
+  --strip-nodata: #84848d;
+
+  --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', 'JetBrains Mono', Consolas, monospace;
+  --sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  --radius: 8px;
+  --radius-lg: 12px;
+
+  /* Shared interaction geometry. Controls are 40 px by default and grow to
+     44 px on narrow/coarse-pointer devices; even compact icon and row-action
+     controls retain a 24 px floor on their shorter axis. */
+  --control-target: 40px;
+  --minimum-target: 24px;
+
+  /* Cards get a whisper of elevation on light surfaces; dark relies on
+     borders alone (shadows read as mud on near-black). */
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.05);
+
+  /* Dot-matrix map (theme-aware, unlike the old forced-dark shell). */
+  --map-dot: #a1a1aa;
+}
+
+/* The resolved scheme is stamped on <html> by public/theme-init.js before
+   first paint and kept current by src/theme.ts (manual toggle + OS changes
+   in system mode). Exactly one dark token block — never reintroduce a
+   parallel prefers-color-scheme copy to drift out of lockstep. */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #0a0a0c;
+  --surface: #141417;
+  --surface-2: #1d1d21;
+  --border: #27272b;
+  --border-strong: #3b3b41;
+  --control-border: #6e6e77;
+  --ink: #f4f4f5;
+  --ink-2: #b6b6bf;
+  --ink-3: #a1a1aa;
+  --accent: #818cf8;
+  --accent-ink: #101024;
+  --focus: #818cf8;
+
+  --series-a: #3987e5;
+
+  /* The dark accent (#818cf8, OKLCH L 0.68) sits just above the chart-mark
+     lightness band, so the chart takes the nearest passing indigo step. */
+  --chart-local: #7b87f7;
+
+  /* Light darkens ok/stale to hold 4.5:1 on white; near-black surfaces
+     take the brighter originals (measured in docs/accessibility.md). */
+  --status-ok: #0ca30c;
+  --status-stale: #8a897f;
+  --status-degraded: #ffc247;
+  --status-down: #ff6b72;
+  --status-crit: #f0692e;
+
+  --status-ok-bg: color-mix(in srgb, #0ca30c 16%, var(--surface));
+  --status-degraded-bg: color-mix(in srgb, #fab219 14%, var(--surface));
+  --status-down-bg: color-mix(in srgb, #d03b3b 17%, var(--surface));
+  --status-stale-bg: var(--surface-2);
+
+  --strip-nodata: #6e6e77;
+
+  --shadow-card: none;
+  --map-dot: #3a3a42;
+}
+
+/* JetBrains Mono, vendored in web/public/fonts (OFL — license alongside).
+   Used by the operations map; nothing is fetched at runtime. */
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Light.woff2') format('woff2');
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  /* 15px at the browser default root, expressed in rem so a user's
+     font-size preference rescales the entire type ladder (WCAG 1.4.4). */
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Structure labels: the instrument's engraved text. */
+.eyebrow {
+  font-family: var(--sans);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}

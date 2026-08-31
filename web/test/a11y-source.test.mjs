@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import test from 'node:test'
+import { readStyles } from './util/styles.mjs'
 
 // Source-level accessibility gate (issue #102, epic #107). There is no DOM
 // in this test environment, so like the rest of the suite these tests read
@@ -193,7 +194,7 @@ test('global accessibility scaffolding stays in place', () => {
   assert.match(app, /className="skip-link"/)
   assert.match(app, /<main id="main-content" tabIndex=\{-1\}>/)
 
-  const styles = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
+  const styles = readStyles()
   assert.match(styles, /\.sr-only\s*\{/)
   assert.match(styles, /:focus-visible\s*\{[^}]*outline/)
   assert.match(styles, /@media \(prefers-reduced-motion/)
@@ -207,7 +208,7 @@ test('global accessibility scaffolding stays in place', () => {
 
 // ---- #106: measured contrast, type scaling, forced colors ----
 
-const stylesSource = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
+const stylesSource = readStyles()
 
 // The two top-level token blocks (light `:root`, dark override). The ^
 // anchor keeps the `:root` nested inside @media (prefers-contrast) from

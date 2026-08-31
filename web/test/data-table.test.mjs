@@ -8,9 +8,10 @@ import {
   dataTableResultRange,
   nextDataTableSort,
 } from '../src/dataTableState.ts'
+import { readStyles } from './util/styles.mjs'
 
 const component = readFileSync(new URL('../src/components/DataTable.tsx', import.meta.url), 'utf8')
-const styles = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
+const styles = readStyles()
 
 test('controlled sorting and paging have stable transitions and metadata', () => {
   assert.deepEqual(nextDataTableSort({ key: 'name', order: 'asc' }, 'name'), { key: 'name', order: 'desc' })

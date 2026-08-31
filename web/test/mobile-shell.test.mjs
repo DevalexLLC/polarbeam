@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { PRIMARY_NAVIGATION, SETTINGS_NAVIGATION, navigationItemIsCurrent, wrappedTabIndex } from '../src/navigation.ts'
+import { readStyles } from './util/styles.mjs'
 
 test('mobile navigation exposes every primary route in operational order', () => {
   assert.deepEqual(
@@ -31,7 +31,7 @@ test('drawer focus wraps in both directions and nowhere else', () => {
 })
 
 test('touch-target contract covers navigation, controls, disclosures, and row actions', () => {
-  const styles = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
+  const styles = readStyles()
   const required = [
     '.topnav a',
     '.mobile-nav-toggle',

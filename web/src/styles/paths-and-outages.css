@@ -1,0 +1,647 @@
+/* ---- M4: topbar nav, outages, path events, current paths ---- */
+
+.topnav {
+  display: flex;
+  gap: 0.2rem;
+  margin-left: 1.4rem;
+  margin-right: auto;
+}
+
+.topnav a {
+  color: var(--ink-2);
+  text-decoration: none;
+  font-size: 0.85rem;
+  padding: 0.3rem 0.65rem;
+  border-radius: var(--radius);
+}
+
+.topnav a:hover {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+
+.topnav a.active {
+  color: var(--ink);
+  background: var(--surface-2);
+  font-weight: 650;
+}
+
+/* Outage / event tables share the agents-table bones. */
+table.events {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+table.events th {
+  text-align: left;
+  padding: 0.45rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--ink-3);
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+table.events td {
+  padding: 0.5rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+table.events tbody tr:hover td {
+  background: var(--surface-2);
+}
+
+table.events tbody tr.selected-row td {
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+table.events tr:last-child td {
+  border-bottom: none;
+}
+
+tr.outage-open td {
+  background: var(--surface);
+}
+
+tr.outage-open td:first-child {
+  box-shadow: inset 3px 0 0 var(--status-down);
+}
+
+.kind-badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 650;
+  white-space: nowrap;
+  border: 1px solid var(--border-strong);
+  color: var(--ink-2);
+}
+
+.kind-badge.kind-probe_failing {
+  color: var(--status-down);
+  border-color: var(--status-down);
+}
+
+.kind-badge.kind-agent_offline {
+  color: var(--status-degraded);
+  border-color: var(--status-degraded);
+}
+
+/* Resolved outages are history, not alarms: quiet the badge and the row. */
+tr.outage-closed .kind-badge {
+  color: var(--ink-3);
+  border-color: var(--border-strong);
+}
+
+tr.outage-closed td {
+  color: var(--ink-2);
+}
+
+tr.outage-closed .outage-error {
+  color: var(--ink-3);
+}
+
+.outage-error {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  max-width: 34ch;
+  overflow-wrap: anywhere;
+}
+
+.outage-error details {
+  max-width: 38ch;
+}
+
+.outage-error summary {
+  color: var(--ink-2);
+  cursor: pointer;
+  font-family: var(--sans);
+  font-size: 0.82rem;
+}
+
+.outage-error details[open] summary {
+  margin-bottom: 0.35rem;
+}
+
+.outage-error code {
+  display: block;
+  color: var(--ink-2);
+  white-space: normal;
+}
+
+.hash-chip {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.path-event {
+  border-bottom: 1px solid var(--border);
+  padding: 0.35rem 0;
+}
+
+.path-event:last-child {
+  border-bottom: none;
+}
+
+.path-event-head {
+  display: grid;
+  align-items: center;
+  gap: 0.7rem;
+  grid-template-columns: minmax(8rem, max-content) max-content max-content 1fr;
+  justify-content: start;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--ink);
+  font: inherit;
+  padding: 0.45rem 0.3rem;
+  cursor: pointer;
+  text-align: left;
+  border-radius: var(--radius);
+}
+
+.path-event-head:hover {
+  background: var(--surface-2);
+}
+
+.path-summary {
+  color: var(--ink-2);
+  font-size: 0.82rem;
+}
+
+/* Text treatment comes from the shared .incident-toggle; this only parks
+   the toggle at the far right of the row, like Incidents/Agents. */
+.path-toggle {
+  justify-self: end;
+}
+
+table.hop-diff {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+  margin: 0.3rem 0 0.6rem;
+}
+
+table.hop-diff th,
+table.hop-diff td {
+  text-align: left;
+  padding: 0.3rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.change-badge {
+  display: inline-block;
+  min-width: 4.2rem;
+  padding: 0.08rem 0.4rem;
+  border: 1px solid var(--status-degraded);
+  border-radius: 999px;
+  color: var(--status-degraded);
+  font-size: 0.75rem;
+  font-weight: 650;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.hop-added .change-badge {
+  color: var(--status-ok);
+  border-color: var(--status-ok);
+}
+
+.hop-removed .change-badge {
+  color: var(--status-down);
+  border-color: var(--status-down);
+}
+
+.path-event-details {
+  padding: 0 0.3rem 0.4rem;
+}
+
+.path-hashes {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  margin: 0.2rem 0 0.5rem;
+}
+
+.path-hashes .hash-chip {
+  max-width: 24rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+tr.hop-changed td {
+  background: var(--status-degraded-bg);
+  font-weight: 650;
+}
+
+.path-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 1.2rem;
+}
+
+/* Grid items refuse to shrink below their content by default, which would
+   let a wide path graph blow the .path-pair tracks out of the card instead
+   of scrolling inside its cell. */
+.path-current {
+  min-width: 0;
+}
+
+/* Long paths (isWidePath) take the whole row: a multi-hop graph squeezed
+   into a shared cell could only ever show a few hops per scroll viewport. */
+.path-current-wide {
+  grid-column: 1 / -1;
+}
+
+.path-current h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+}
+
+.path-chain {
+  margin-bottom: 0.8rem;
+}
+
+.path-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.3rem;
+  font-size: 0.83rem;
+}
+
+.path-id {
+  margin: -0.1rem 0 0.35rem;
+  color: var(--ink-3);
+  font-size: 0.75rem;
+}
+
+.path-id summary {
+  cursor: pointer;
+}
+
+.path-id code {
+  display: block;
+  margin-top: 0.25rem;
+  overflow-wrap: anywhere;
+}
+
+/* Traceroute path graph (PathGraph.tsx): layered SVG DAG. Node/edge colors
+   ride the status tokens so light/dark stay in lockstep with the tables. */
+.path-graph {
+  padding: 0.2rem 0 0.5rem;
+  /* A graph past its scale floor scrolls sideways; make that legible
+     instead of looking clipped: a thin persistent scrollbar plus edge
+     shadows that only show on the side with more content (the cover
+     gradients scroll with the content and hide them at the ends). */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+  background:
+    linear-gradient(90deg, var(--surface) 40%, transparent) left/28px 100%,
+    linear-gradient(270deg, var(--surface) 40%, transparent) right/28px 100%,
+    radial-gradient(farthest-side at 0 50%, color-mix(in srgb, var(--ink) 22%, transparent), transparent) left/12px 100%,
+    radial-gradient(farthest-side at 100% 50%, color-mix(in srgb, var(--ink) 22%, transparent), transparent) right/12px
+      100%;
+  background-repeat: no-repeat;
+  background-attachment: local, local, scroll, scroll;
+}
+
+.path-graph svg {
+  display: block;
+  /* Scale down to fit the container (the inline style carries the natural
+     width as max-width, a legibility floor as min-width, and the
+     aspect-ratio); past the floor the scroll-x wrapper scrolls instead. */
+  width: 100%;
+  height: auto;
+}
+
+.path-graph text {
+  font-family: var(--mono);
+  text-anchor: middle;
+  dominant-baseline: middle;
+}
+
+.path-graph .pg-label {
+  font-size: 12px;
+  fill: var(--ink);
+}
+
+.path-graph .pg-sub {
+  font-size: 12px;
+  fill: var(--ink-3);
+}
+
+.path-graph .pg-node rect {
+  fill: var(--surface);
+  stroke: var(--border-strong);
+}
+
+.path-graph .pg-silent rect {
+  fill: var(--surface-2);
+  stroke: var(--border);
+  stroke-dasharray: 3 3;
+}
+
+.path-graph .pg-silent .pg-label {
+  fill: var(--ink-3);
+}
+
+.path-graph .pg-edge {
+  fill: none;
+  stroke: var(--border-strong);
+}
+
+.path-graph .pg-unreached {
+  stroke: var(--status-stale);
+  stroke-dasharray: 4 4;
+}
+
+.path-graph .pg-term rect {
+  fill: var(--surface-2);
+  stroke: var(--border-strong);
+}
+
+.path-graph .pg-dest-ok rect {
+  stroke: var(--status-ok);
+  fill: var(--status-ok-bg);
+}
+
+.path-graph .pg-dest-ok .pg-sub {
+  fill: var(--status-ok);
+}
+
+.path-graph .pg-dest-warn rect {
+  stroke: var(--status-degraded);
+  fill: var(--status-degraded-bg);
+}
+
+.path-graph .pg-dest-warn .pg-sub {
+  fill: var(--status-degraded);
+}
+
+/* Diff mode: elements only in the old path are removed (red, dashed),
+   only in the new are added (green) — the hop-diff badge palette. */
+.path-graph .pg-removed rect,
+.path-graph .pg-edge.pg-removed {
+  stroke: var(--status-down);
+}
+
+.path-graph .pg-edge.pg-removed,
+.path-graph .pg-removed rect {
+  stroke-dasharray: 4 3;
+}
+
+.path-graph .pg-removed .pg-label {
+  fill: var(--status-down);
+}
+
+.path-graph .pg-added rect,
+.path-graph .pg-edge.pg-added {
+  stroke: var(--status-ok);
+}
+
+.path-graph .pg-added .pg-label {
+  fill: var(--status-ok);
+}
+
+.pg-legend {
+  display: flex;
+  gap: 0.6rem;
+  margin-bottom: 0.35rem;
+}
+
+.pg-key {
+  font-size: 0.75rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  padding: 0.08rem 0.4rem;
+  border-radius: 999px;
+  border: 1px dashed var(--status-down);
+  color: var(--status-down);
+}
+
+.pg-key-added {
+  border-style: solid;
+  border-color: var(--status-ok);
+  color: var(--status-ok);
+}
+
+ol.hops {
+  margin: 0;
+  padding-left: 1.6rem;
+  font-size: 0.82rem;
+}
+
+ol.hops li {
+  padding: 0.12rem 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  a,
+  button,
+  summary,
+  table.matrix td.cell > a {
+    transition:
+      color 120ms ease,
+      background-color 120ms ease,
+      border-color 120ms ease,
+      transform 120ms ease;
+  }
+}
+
+@media (max-width: 760px) {
+  .topbar {
+    flex-wrap: wrap;
+    gap: 0.55rem;
+    padding: 0.65rem 1rem;
+  }
+
+  .topbar-right {
+    margin-left: auto;
+  }
+
+  .topnav {
+    order: 3;
+    width: 100%;
+    margin: 0;
+    overflow-x: auto;
+  }
+
+  .topnav a {
+    flex: 1;
+    min-height: 40px;
+    display: grid;
+    place-items: center;
+  }
+
+  .app main {
+    padding: 1.2rem 0.85rem 3rem;
+  }
+
+  .card {
+    padding: 0.95rem;
+  }
+
+  .page-head {
+    align-items: flex-start;
+  }
+
+  .controls {
+    flex-wrap: nowrap;
+    gap: 0.65rem;
+    overflow-x: auto;
+    padding-bottom: 0.2rem;
+  }
+
+  .control-group {
+    flex: none;
+  }
+
+  .pair-cards,
+  .path-pair {
+    grid-template-columns: 1fr;
+  }
+
+  .pair-card dl > div {
+    align-items: baseline;
+  }
+
+  .path-event-head {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 0.25rem 0.7rem;
+  }
+
+  .path-event-head .hint,
+  .path-summary {
+    justify-self: start;
+  }
+
+  .path-toggle {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    align-self: center;
+  }
+
+  .path-hashes {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  table.agents,
+  table.events,
+  table.agents tbody,
+  table.events tbody,
+  table.agents tr,
+  table.events tr,
+  table.agents td,
+  table.events td {
+    display: block;
+    width: 100%;
+  }
+
+  table.agents thead,
+  table.events thead {
+    display: none;
+  }
+
+  table.agents tr,
+  table.events tr {
+    margin-bottom: 0.75rem;
+    padding: 0.25rem 0.65rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+  }
+
+  table.agents tr:last-child,
+  table.events tr:last-child {
+    margin-bottom: 0;
+  }
+
+  table.agents td,
+  table.events td {
+    display: grid;
+    grid-template-columns: minmax(6.5rem, 35%) 1fr;
+    gap: 0.65rem;
+    padding: 0.38rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  table.agents td::before,
+  table.events td::before {
+    content: attr(data-label);
+    color: var(--ink-3);
+    font-family: var(--sans);
+    font-size: 0.75rem;
+    font-weight: 650;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  table.agents td:last-child,
+  table.events td:last-child {
+    border-bottom: 0;
+  }
+
+  tr.outage-open td:first-child {
+    box-shadow: none;
+  }
+
+  table.events tr.outage-open {
+    border-left: 3px solid var(--status-down);
+  }
+
+  /* The expanded per-probe detail is one full-width cell — the stacked
+     label/value grid treatment would squeeze the strip list into the value
+     column. */
+  table.events tr.agent-detail-row td {
+    display: block;
+  }
+
+  .probe-strip-row {
+    grid-template-columns: 1fr;
+  }
+
+  .outage-error,
+  .outage-error details {
+    max-width: none;
+  }
+}
+
+@media (max-width: 420px) {
+  .page-head h2 {
+    font-size: 1.2rem;
+  }
+
+  .pair-card {
+    padding: 0.9rem;
+  }
+
+  .pair-card dl > div {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.1rem;
+  }
+
+  .chart-card {
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+}

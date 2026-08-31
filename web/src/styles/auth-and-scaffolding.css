@@ -1,0 +1,537 @@
+/* ---- top bar ---- */
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.65rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--ink);
+  text-decoration: none;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.logo-mark {
+  display: block;
+  flex: none;
+}
+
+.logo-mark-header {
+  width: 24px;
+  height: 24px;
+}
+
+.logo-mark-boot {
+  width: 28px;
+  height: 28px;
+}
+
+.topbar-right {
+  display: flex;
+  gap: 1.1rem;
+  align-items: center;
+}
+
+button.linklike {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+button.linklike:hover {
+  text-decoration: underline;
+}
+
+.app main {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 1.6rem 1.5rem 4rem;
+}
+
+.boot-state {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.7rem;
+  color: var(--ink-2);
+}
+
+.app main > .muted,
+.app main > .error {
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+/* ---- login ---- */
+
+.login-wrap {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(600px 320px at 50% 30%, color-mix(in srgb, #e8b93b 7%, transparent), transparent 70%), var(--bg);
+}
+
+.login-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  width: min(340px, 92vw);
+  padding: 2.2rem 2rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.login-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  margin-bottom: 0.4rem;
+}
+
+.logo-mark-login {
+  width: 52px;
+  height: 52px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .logo-mark-login {
+    animation: mark-breathe 4s ease-in-out infinite;
+  }
+  @keyframes mark-breathe {
+    0%,
+    100% {
+      filter: drop-shadow(0 0 2px color-mix(in srgb, #ffd166 35%, transparent));
+    }
+    50% {
+      filter: drop-shadow(0 0 6px color-mix(in srgb, #ffd166 70%, transparent));
+    }
+  }
+}
+
+.login-mark h1 {
+  margin: 0;
+  font-size: 1.35rem;
+  letter-spacing: 0.01em;
+}
+
+.login-sub {
+  text-align: center;
+  margin: -0.6rem 0 0.4rem;
+}
+
+.login-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.login-card input {
+  padding: 0.55rem 0.65rem;
+  font-family: var(--mono);
+  font-size: 0.95rem;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius);
+}
+
+.password-field {
+  position: relative;
+  display: flex;
+}
+
+.password-field input {
+  width: 100%;
+  padding-right: 3.8rem;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 0.35rem;
+  transform: translateY(-50%);
+  min-width: 3rem;
+  padding: 0.25rem 0.4rem;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.password-toggle:hover {
+  background: var(--surface-2);
+}
+
+.login-error {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.login-card button[type='submit'] {
+  margin-top: 0.5rem;
+  padding: 0.6rem;
+  font: inherit;
+  font-weight: 600;
+  color: var(--accent-ink);
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.login-card button[type='submit']:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
+/* SSO entry: a deliberate secondary treatment so the accent submit button
+   stays the primary action. */
+.login-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.35rem 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.login-divider::before,
+.login-divider::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--border);
+}
+
+.login-card .sso-button {
+  padding: 0.6rem;
+  font: inherit;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.login-card .sso-button:hover {
+  background: var(--bg);
+}
+
+/* Attribution byline; static, so it never shifts the form as state changes.
+   Separated from the button above so it reads as card footer rather than as
+   part of the submit control. */
+.login-legal {
+  margin: 1.1rem 0 0;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--border);
+  text-align: center;
+  color: var(--ink-3);
+  font-size: 0.78rem;
+}
+
+/* ---- About ---- */
+.about-card {
+  max-width: 44rem;
+}
+
+.about-title {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+/* Scales with the clamped h1 rather than a fixed px, so the mark keeps its
+   proportion to the title at every viewport width. */
+.about-mark {
+  width: 1em;
+  height: 1em;
+  flex: none;
+}
+
+/* Same shape as .pair-card dl: label left, value right, hairline separated. */
+.about-facts {
+  margin: 0;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.about-facts > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+}
+
+.about-facts > div + div {
+  border-top: 1px solid var(--border);
+  padding-top: 0.55rem;
+}
+
+.about-facts dt {
+  color: var(--ink-3);
+  font-size: 0.82rem;
+}
+
+.about-facts dd {
+  margin: 0;
+  text-align: right;
+}
+
+.about-note {
+  margin: 0 0 0.9rem;
+  color: var(--ink-2);
+}
+
+.about-note code {
+  font-family: var(--mono);
+  font-size: 0.85em;
+}
+
+/* Settings → Authentication */
+.oidc-admin-values textarea {
+  width: 100%;
+  max-width: 24rem;
+  padding: 0.5rem 0.65rem;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius);
+  resize: vertical;
+}
+
+.oidc-admin-values .hint,
+.oidc-capem .hint {
+  display: block;
+  margin-top: 0.25rem;
+}
+
+.oidc-capem textarea {
+  width: 100%;
+  max-width: 46rem;
+  padding: 0.5rem 0.65rem;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius);
+  resize: vertical;
+}
+
+/* The panel's master switch: a full-width row so it can't be missed, with a
+   real toggle instead of a bare checkbox (which also caught the generic
+   `.config-form .threshold-input input` width and rendered broken). */
+.oidc-enable {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  cursor: pointer;
+}
+
+.oidc-enable input {
+  appearance: none;
+  position: relative;
+  flex: none;
+  width: 44px;
+  height: 24px;
+  margin: 0;
+  border-radius: 999px;
+  background: var(--border-strong);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.oidc-enable input::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+  transition: transform 0.15s ease;
+}
+
+.oidc-enable input:checked {
+  background: var(--accent);
+}
+
+.oidc-enable input:checked::after {
+  transform: translateX(20px);
+}
+
+.oidc-enable input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.oidc-enable input:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.oidc-enable-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.oidc-enable-title {
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.oidc-enable-state {
+  flex: none;
+  margin-left: auto;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  color: var(--ink-2);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.oidc-enable-state.is-on {
+  color: var(--status-ok);
+  background: var(--status-ok-bg);
+  border-color: transparent;
+}
+
+.oidc-test-result {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+}
+
+/* ---- page scaffolding ---- */
+
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin: 0 0 1.1rem;
+}
+
+.page-head h2 {
+  margin: 0.15rem 0 0;
+  font-size: 1.35rem;
+  letter-spacing: -0.01em;
+}
+
+.page-head h2 a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.page-head h2 a:hover {
+  text-decoration: underline;
+}
+
+.page-head .sub {
+  color: var(--ink-3);
+  font-size: 0.82rem;
+}
+
+.chips {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 0.8rem;
+  color: var(--ink-2);
+}
+
+.chip .mono {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.chip .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  align-self: center;
+}
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  padding: 1.1rem 1.25rem 1.25rem;
+  margin-bottom: 1.25rem;
+}
+
+.card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.9rem;
+}
+
+/* Secondary metadata (timestamps, cadence notes) everywhere, not just cards. */
+.hint {
+  color: var(--ink-3);
+  font-size: 0.8rem;
+}
+
+.muted {
+  color: var(--ink-2);
+  font-size: 0.9rem;
+}
+
+.error {
+  color: var(--status-down);
+}
+
+.scroll-x {
+  overflow-x: auto;
+}

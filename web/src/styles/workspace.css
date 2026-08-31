@@ -1,0 +1,597 @@
+.app main {
+  width: 100%;
+  max-width: 1440px;
+  padding-top: 2rem;
+}
+
+.page-head-primary {
+  align-items: flex-start;
+  margin-bottom: 1.5rem;
+}
+
+.page-head-primary h1 {
+  margin: 0.2rem 0 0;
+  font-size: clamp(1.65rem, 2.4vw, 2.15rem);
+  line-height: 1.15;
+  letter-spacing: -0.035em;
+}
+
+.page-head-primary p {
+  max-width: 44rem;
+  margin: 0.45rem 0 0;
+  color: var(--ink-2);
+}
+
+.page-head-primary .eyebrow a {
+  color: inherit;
+}
+
+.card-head h2,
+.settings-card h2 {
+  margin: 0.2rem 0 0;
+  font-size: 1rem;
+  letter-spacing: -0.01em;
+}
+
+.page-actions,
+.view-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.view-toolbar {
+  justify-content: flex-start;
+  min-height: 48px;
+  margin-bottom: 1rem;
+}
+
+.view-toolbar > :last-child {
+  margin-left: auto;
+}
+
+.compact-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--ink-3);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.compact-select select {
+  min-height: var(--control-target);
+  min-width: var(--minimum-target);
+  padding: 0.35rem 1.8rem 0.35rem 0.55rem;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius);
+  color: var(--ink);
+  background: var(--surface);
+  font: inherit;
+}
+
+.freshness {
+  color: var(--ink-3);
+  font-size: 0.78rem;
+}
+
+.secondary-button,
+.state-panel button {
+  min-height: 38px;
+  padding: 0.45rem 0.8rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  color: var(--ink);
+  background: var(--surface);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.secondary-button:hover,
+.state-panel button:hover {
+  background: var(--surface-2);
+}
+
+.secondary-button:disabled,
+.state-panel button:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+
+.inline-alert {
+  margin: -0.5rem 0 1rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid color-mix(in srgb, var(--status-degraded) 45%, var(--border));
+  border-radius: var(--radius);
+  color: var(--ink-2);
+  background: var(--status-degraded-bg);
+  font-size: 0.82rem;
+}
+
+.search-field {
+  flex: 1;
+  max-width: 30rem;
+}
+
+.search-field input {
+  width: 100%;
+  min-height: 40px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius);
+  color: var(--ink);
+  background: var(--surface);
+  font: inherit;
+  font-size: 0.83rem;
+}
+
+.search-field input::placeholder {
+  color: var(--ink-3);
+}
+
+.search-field input:focus {
+  border-color: var(--focus);
+  outline: 2px solid color-mix(in srgb, var(--focus) 24%, transparent);
+  outline-offset: 0;
+}
+
+.text-link {
+  color: var(--accent);
+  font-size: 0.8rem;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.text-link:hover {
+  text-decoration: underline;
+}
+
+/* Inline drill-down links inside data surfaces (target names in the
+   Targets tables and Agents probe rows, site names on target source
+   cards): inherit the surrounding ink so tables stay calm, and show the
+   affordance as an engraved underline that sharpens to accent on hover —
+   never the browser default blue. */
+table.events td a,
+.probe-strip-label a,
+.pair-card h2 a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+}
+
+table.events td a:hover,
+.probe-strip-label a:hover,
+.pair-card h2 a:hover {
+  color: var(--accent);
+  text-decoration-color: currentColor;
+}
+
+.chip-alert {
+  border-color: color-mix(in srgb, var(--status-down) 48%, var(--border));
+  color: var(--status-down);
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.85rem;
+  margin-bottom: 1.25rem;
+}
+
+.stat-card {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0.85rem 1.1rem;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  text-decoration: none;
+}
+
+/* Tiles render as <a> or <button> (the directions tile flips the
+   connectivity card); both share one look. */
+button.stat-card {
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.stat-card:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+
+.stat-label {
+  color: var(--ink-3);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.stat-card > strong {
+  margin: 0.15rem 0;
+  font-size: 1.6rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.stat-card > strong small {
+  color: var(--ink-3);
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.stat-context {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The badge carries each tile's semantic accent (the value it grades, per
+   the accents-reflect-the-value rule), template comparison-pill style. */
+.stat-badge {
+  flex: none;
+  padding: 0.06rem 0.45rem;
+  border-radius: 999px;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.stat-good .stat-badge {
+  color: var(--status-ok);
+  background: var(--status-ok-bg);
+}
+.stat-warning .stat-badge {
+  color: var(--status-degraded);
+  background: var(--status-degraded-bg);
+}
+.stat-critical .stat-badge {
+  color: var(--status-down);
+  background: var(--status-down-bg);
+}
+
+/* Overview's main row: connectivity card (map/matrix) left at ≥50% width,
+   fleet card right. align-items:stretch + the fleet scroll region's
+   flex:1/min-height:0 collapse make the connectivity card the height
+   driver — extra fleet rows scroll inside the card. */
+.overview-main-row {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 1.25rem;
+  align-items: stretch;
+  margin-bottom: 1.25rem;
+}
+
+.overview-main-row > .card {
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.overview-connectivity {
+  grid-column: span 7;
+}
+
+.overview-fleet {
+  display: flex;
+  flex-direction: column;
+  grid-column: span 5;
+  min-height: 0;
+}
+
+.card-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.fleet-scroll {
+  flex: 1 1 0;
+  min-height: 12rem;
+  overflow-y: auto;
+}
+
+table.fleet-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.83rem;
+}
+
+table.fleet-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink-3);
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+table.fleet-table td {
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+table.fleet-table tr:last-child td {
+  border-bottom: none;
+}
+
+/* Fleet rows deep-link to the agent's expanded detail; the anchor on the
+   site/hostname cell is the real (keyboard-reachable) control, the row
+   click is a pointer convenience, as on the Agents table. */
+table.fleet-table tbody tr {
+  cursor: pointer;
+}
+
+table.fleet-table tbody tr:hover td {
+  background: var(--surface-2);
+}
+
+.fleet-agent-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.fleet-agent-link:hover strong {
+  text-decoration: underline;
+}
+
+table.fleet-table td strong {
+  display: block;
+  font-size: 0.83rem;
+  font-weight: 650;
+}
+
+/* The plane chip on a fleet row (multi-network installs only): the shared
+   .chip scaled down to table density. inline-flex keeps the row-hover
+   underline off it. */
+table.fleet-table td strong .chip {
+  margin-left: 0.45rem;
+  padding: 0.05rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+table.fleet-table td small {
+  display: block;
+  overflow: hidden;
+  max-width: 11rem;
+  color: var(--ink-3);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fleet-seen {
+  color: var(--ink-2);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.fleet-health {
+  min-width: 7rem;
+}
+
+.fleet-strip-wrap {
+  position: relative;
+  display: block;
+}
+
+.fleet-strip {
+  display: block;
+  width: 100%;
+  height: 16px;
+}
+
+/* Transparent slot buttons over the strip: the roving focus targets. The
+   vertical inset grows the 16px strip's hit and focus target; min sizes
+   reset for the same reason as button.map-marker. */
+button.fleet-strip-slot {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.fleet-strip-seg.strip-ok {
+  fill: var(--accent);
+}
+.fleet-strip-seg.strip-degraded {
+  fill: var(--status-degraded);
+}
+.fleet-strip-seg.strip-down {
+  fill: var(--status-down);
+}
+.fleet-strip-seg.strip-nodata {
+  fill: var(--strip-nodata);
+}
+
+th.fleet-uptime,
+td.fleet-uptime {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+td.fleet-uptime {
+  font-weight: 650;
+}
+
+/* Partial 24 h coverage: the ratio only describes the measured span, so it
+   must not carry the same visual confidence as a fully-covered figure. */
+.fleet-uptime-partial {
+  color: var(--ink-3);
+  font-weight: 550;
+}
+
+/* Per-probe 24 h detail under an expanded Agents row: one labeled strip per
+   probe series, reusing the fleet strip's segment classes. */
+.probe-strip-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.35rem 0;
+}
+
+.probe-strip-row {
+  display: grid;
+  grid-template-columns: minmax(11rem, 1fr) minmax(8rem, 2fr) 4.5rem;
+  align-items: center;
+  gap: 0.3rem 0.75rem;
+}
+
+.probe-strip-row.selected-row {
+  border-radius: var(--radius);
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 3px;
+}
+
+.probe-select-button {
+  min-height: var(--control-target);
+  min-width: var(--minimum-target);
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.probe-select-cell {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.probe-strip-label {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.probe-strip-label > button {
+  min-height: var(--control-target);
+  min-width: var(--minimum-target);
+}
+
+.probe-strip-uptime {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  font-weight: 650;
+}
+
+.probe-strip-error {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+  font-size: 0.82rem;
+}
+
+.probe-strip-error-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.probe-strip-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0;
+  color: var(--ink-3);
+}
+
+/* Strip slot hover card: the map info card's look (composes .map-tip), but
+   fixed-position — strips sit inside scroll containers that would clip an
+   absolute child — and inert: it is a pure readout with no links, so the
+   pointer must never be able to land on it. */
+.strip-tip {
+  position: fixed;
+  z-index: 30;
+  min-width: 10.5rem;
+  max-width: 16rem;
+  transform: translate(-50%, calc(-100% - 10px));
+  pointer-events: none;
+}
+
+/* No headroom above (strip scrolled near the viewport top): the card
+   flips underneath the strip instead of rendering off-screen. */
+.strip-tip-below {
+  transform: translate(-50%, 10px);
+}
+
+/* Clickable slots: the strip has a drill-down wired. */
+.fleet-strip-clickable .fleet-strip-slot {
+  cursor: pointer;
+}
+
+/* Pinned drill-down: the one strip-tip state that IS interactive — the
+   error text must be selectable, so the pointer-inertness lifts. */
+.strip-tip-pinned {
+  pointer-events: auto;
+  user-select: text;
+  max-width: 22rem;
+}
+
+.strip-tip-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.4rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--border);
+}
+
+.strip-tip-fail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  font-size: 0.78rem;
+}
+
+.strip-tip-error {
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--ink-2);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

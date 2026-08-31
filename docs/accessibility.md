@@ -26,7 +26,7 @@ Two mechanisms run in the `web-lint` CI job and in `make web`:
   baselines in that file — heading violations and suppressions — may only
   shrink: fixing a listed defect requires deleting its baseline entry, and
   adding a new defect fails the test. Since #106 the file also recomputes
-  the [contrast token table](#contrast-tokens) from `styles.css` on every
+  the [contrast token table](#contrast-tokens) from the stylesheet on every
   run — parsing both theme blocks, resolving `var()` and `color-mix`
   exactly as browsers do, and failing any pair that drops below its bar —
   and pins the rem type root, the 0.75rem visible-type floor, and the
@@ -37,8 +37,8 @@ environment is DOM-free `node --test`, and runtime verification is manual.
 
 ## Manual test protocol
 
-Run before merging changes that touch views, shared components, or
-`styles.css`, at both reference viewports (1440x1000 and 390x844) in both
+Run before merging changes that touch views, shared components, or the
+`src/styles/` stylesheets, at both reference viewports (1440x1000 and 390x844) in both
 themes:
 
 1. **Keyboard-only walkthrough.** Unplug the mouse figuratively: Tab/Shift+
@@ -146,7 +146,8 @@ patterns, pinned by the source tests:
 Issue #106 measured every token pair the dashboard composes, fixed the
 failures (light `--ink-3`, `--status-ok`, `--status-stale`, the fleet
 strip's no-data fill, and form-control borders), and pinned the result:
-the table below is recomputed from `web/src/styles.css` by
+the table below is recomputed from `web/src/styles.css` (resolved through
+its `src/styles/` partials by `test/util/styles.mjs`) by
 `a11y-source.test.mjs` on every test run, so a token edit that breaks a
 bar fails CI with the failing pair named. Text roles need 4.5:1
 (WCAG 1.4.3); non-text marks need 3:1 (WCAG 1.4.11). Ratios are WCAG
