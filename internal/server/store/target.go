@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -117,18 +118,36 @@ func stageTable(source Source) string {
 // scoped user a co-tenant's target name, address, port, and URL for the
 // price of guessing its UUID.
 func (s *Store) TargetEndpoints(ctx context.Context, targetID uuid.UUID, networks []uuid.UUID) (*TargetEndpoints, error) {
-	var ep TargetEndpoints
-	var dstNetworkID, ownNetworkID *uuid.UUID
-	err := s.pool.QueryRow(ctx,
+	// Both statements key only on (targetID, networks), so one batch round
+	// trip serves them. On the (nil, nil) paths the deferred Close discards
+	// the already-executed sources result — batch results are positional.
+	batch := &pgx.Batch{}
+	batch.Queue(
 		`SELECT t.id, t.kind, t.name, t.address, t.port, t.url, t.agent_id, ds.name,
 		        da.network_id, t.network_id
 		   FROM targets t
 		   LEFT JOIN agents da ON da.id = t.agent_id
 		   LEFT JOIN sites ds ON ds.id = da.site_id
-		  WHERE t.id = $1`, targetID).
+		  WHERE t.id = $1`, targetID)
+	batch.Queue(
+		`SELECT s.name, n.name, ss.agent_id
+		   FROM series_state ss
+		   JOIN agents a ON a.id = ss.agent_id
+		   JOIN sites  s ON s.id = a.site_id
+		   JOIN networks n ON n.id = a.network_id
+		  WHERE ss.target_id = $1
+		    AND ($2::uuid[] IS NULL OR a.network_id = ANY($2))
+		  GROUP BY s.name, n.name, ss.agent_id
+		  ORDER BY s.name, n.name, ss.agent_id`, targetID, networks)
+	res := s.pool.SendBatch(ctx, batch)
+	defer res.Close()
+
+	var ep TargetEndpoints
+	var dstNetworkID, ownNetworkID *uuid.UUID
+	err := res.QueryRow().
 		Scan(&ep.ID, &ep.Kind, &ep.Name, &ep.Address, &ep.Port, &ep.URL, &ep.AgentID, &ep.DstSite,
 			&dstNetworkID, &ownNetworkID)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -141,16 +160,7 @@ func (s *Store) TargetEndpoints(ctx context.Context, targetID uuid.UUID, network
 	} else if !targetVisible(ownNetworkID, networks) {
 		return nil, nil
 	}
-	rows, err := s.pool.Query(ctx,
-		`SELECT s.name, n.name, ss.agent_id
-		   FROM series_state ss
-		   JOIN agents a ON a.id = ss.agent_id
-		   JOIN sites  s ON s.id = a.site_id
-		   JOIN networks n ON n.id = a.network_id
-		  WHERE ss.target_id = $1
-		    AND ($2::uuid[] IS NULL OR a.network_id = ANY($2))
-		  GROUP BY s.name, n.name, ss.agent_id
-		  ORDER BY s.name, n.name, ss.agent_id`, targetID, networks)
+	rows, err := res.Query()
 	if err != nil {
 		return nil, fmt.Errorf("target %s sources: %w", targetID, err)
 	}

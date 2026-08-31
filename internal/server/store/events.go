@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // OutageInfo is one outage_events row joined with display names. Joins are
@@ -518,21 +519,30 @@ type CurrentPath struct {
 	Hops          []byte
 }
 
-// CurrentPaths returns the latest complete paths from any of srcAgents to
-// any of dstTargets (a site can field several agents).
-func (s *Store) CurrentPaths(ctx context.Context, srcAgents, dstTargets []uuid.UUID) ([]CurrentPath, error) {
-	rows, err := s.pool.Query(ctx, `
+// currentPathsSQL is CurrentPaths' statement, shared by the single-shot and
+// batched read paths so they cannot drift.
+const currentPathsSQL = `
 		SELECT tc.agent_id, tc.probe_id, COALESCE(a.hostname, ''), tc.updated_at,
 			tc.dest_reached, tc.path_hash, tc.hops
 		FROM traceroute_current tc
 		LEFT JOIN agents a ON a.id = tc.agent_id
 		WHERE tc.agent_id = ANY($1) AND tc.target_id = ANY($2)
-		ORDER BY a.hostname, tc.agent_id, tc.probe_id`, srcAgents, dstTargets)
+		ORDER BY a.hostname, tc.agent_id, tc.probe_id`
+
+// CurrentPaths returns the latest complete paths from any of srcAgents to
+// any of dstTargets (a site can field several agents).
+func (s *Store) CurrentPaths(ctx context.Context, srcAgents, dstTargets []uuid.UUID) ([]CurrentPath, error) {
+	rows, err := s.pool.Query(ctx, currentPathsSQL, srcAgents, dstTargets)
 	if err != nil {
 		return nil, fmt.Errorf("current paths: %w", err)
 	}
-	defer rows.Close()
+	return scanCurrentPaths(rows)
+}
 
+// scanCurrentPaths drains one CurrentPaths result set. It closes rows, so a
+// batched caller can advance to the next queued result.
+func scanCurrentPaths(rows pgx.Rows) ([]CurrentPath, error) {
+	defer rows.Close()
 	var out []CurrentPath
 	for rows.Next() {
 		var p CurrentPath
@@ -566,22 +576,81 @@ type CurrentPathMTU struct {
 	RttUS           *int32
 }
 
-// CurrentPathMTUs returns the latest usable path MTU measurements from any
-// of srcAgents to any of dstTargets (a site can field several agents).
-func (s *Store) CurrentPathMTUs(ctx context.Context, srcAgents, dstTargets []uuid.UUID) ([]CurrentPathMTU, error) {
-	rows, err := s.pool.Query(ctx, `
+// currentPathMTUsSQL is CurrentPathMTUs' statement, shared by the
+// single-shot and batched read paths so they cannot drift.
+const currentPathMTUsSQL = `
 		SELECT mc.agent_id, mc.probe_id, COALESCE(a.hostname, ''), mc.updated_at,
 			mc.largest_ok_bytes, mc.smallest_failed_bytes, mc.next_hop_mtu_bytes,
 			mc.ip_version, mc.black_hole, mc.local_constraint, mc.rtt_us
 		FROM path_mtu_current mc
 		LEFT JOIN agents a ON a.id = mc.agent_id
 		WHERE mc.agent_id = ANY($1) AND mc.target_id = ANY($2)
-		ORDER BY a.hostname, mc.agent_id, mc.probe_id`, srcAgents, dstTargets)
+		ORDER BY a.hostname, mc.agent_id, mc.probe_id`
+
+// CurrentPathMTUs returns the latest usable path MTU measurements from any
+// of srcAgents to any of dstTargets (a site can field several agents).
+func (s *Store) CurrentPathMTUs(ctx context.Context, srcAgents, dstTargets []uuid.UUID) ([]CurrentPathMTU, error) {
+	rows, err := s.pool.Query(ctx, currentPathMTUsSQL, srcAgents, dstTargets)
 	if err != nil {
 		return nil, fmt.Errorf("current path MTUs: %w", err)
 	}
-	defer rows.Close()
+	return scanCurrentPathMTUs(rows)
+}
 
+// CurrentPathsBatch runs CurrentPaths for every direction in one round
+// trip; out[i] corresponds to dirs[i].
+func (s *Store) CurrentPathsBatch(ctx context.Context, dirs []DirectionKey) ([][]CurrentPath, error) {
+	if len(dirs) == 0 {
+		return nil, nil
+	}
+	batch := &pgx.Batch{}
+	for _, d := range dirs {
+		batch.Queue(currentPathsSQL, d.SrcAgents, d.DstTargets)
+	}
+	res := s.pool.SendBatch(ctx, batch)
+	defer res.Close()
+	out := make([][]CurrentPath, len(dirs))
+	for i := range dirs {
+		rows, err := res.Query()
+		if err == nil {
+			out[i], err = scanCurrentPaths(rows)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("current paths (direction %d): %w", i, err)
+		}
+	}
+	return out, nil
+}
+
+// CurrentPathMTUsBatch runs CurrentPathMTUs for every direction in one
+// round trip; out[i] corresponds to dirs[i].
+func (s *Store) CurrentPathMTUsBatch(ctx context.Context, dirs []DirectionKey) ([][]CurrentPathMTU, error) {
+	if len(dirs) == 0 {
+		return nil, nil
+	}
+	batch := &pgx.Batch{}
+	for _, d := range dirs {
+		batch.Queue(currentPathMTUsSQL, d.SrcAgents, d.DstTargets)
+	}
+	res := s.pool.SendBatch(ctx, batch)
+	defer res.Close()
+	out := make([][]CurrentPathMTU, len(dirs))
+	for i := range dirs {
+		rows, err := res.Query()
+		if err == nil {
+			out[i], err = scanCurrentPathMTUs(rows)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("current path MTUs (direction %d): %w", i, err)
+		}
+	}
+	return out, nil
+}
+
+// scanCurrentPathMTUs drains one CurrentPathMTUs result set. It closes rows,
+// so a batched caller can advance to the next queued result.
+func scanCurrentPathMTUs(rows pgx.Rows) ([]CurrentPathMTU, error) {
+	defer rows.Close()
 	var out []CurrentPathMTU
 	for rows.Next() {
 		var m CurrentPathMTU

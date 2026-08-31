@@ -56,6 +56,18 @@ func (a *api) targetEndpoints(w http.ResponseWriter, r *http.Request) (*store.Ta
 	return ep, true
 }
 
+// targetDirections is the batched-read shape of a target page: one
+// direction per source site, every one aimed at the single target ID.
+// Empty when nothing has probed the target — the batch methods then issue
+// no queries at all.
+func targetDirections(ep *store.TargetEndpoints) []store.DirectionKey {
+	dirs := make([]store.DirectionKey, len(ep.Sources))
+	for i, src := range ep.Sources {
+		dirs[i] = store.DirectionKey{SrcAgents: src.AgentIDs, DstTargets: []uuid.UUID{ep.ID}}
+	}
+	return dirs
+}
+
 // handleTargetSummary serves the target row plus one directionJSON per
 // source site (window aggregates + latest checks), the DirectionCard shape
 // the pair page uses. Sources is empty (not null) when nothing has probed
@@ -75,14 +87,14 @@ func (a *api) handleTargetSummary(w http.ResponseWriter, r *http.Request) {
 		Network string `json:"network"`
 		directionJSON
 	}
+	dirs, err := a.directions(r, targetDirections(ep), spec)
+	if err != nil {
+		internalError(w, "target summary", err)
+		return
+	}
 	sources := []sourceJSON{}
-	for _, src := range ep.Sources {
-		dir, err := a.directionFor(r, src.AgentIDs, []uuid.UUID{ep.ID}, spec)
-		if err != nil {
-			internalError(w, "target summary "+src.Site, err)
-			return
-		}
-		sources = append(sources, sourceJSON{Site: src.Site, Network: src.Network, directionJSON: dir})
+	for i, src := range ep.Sources {
+		sources = append(sources, sourceJSON{Site: src.Site, Network: src.Network, directionJSON: dirs[i]})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"target":  toTargetInfoJSON(ep),
@@ -119,21 +131,16 @@ func (a *api) handleTargetSeries(w http.ResponseWriter, r *http.Request) {
 		LatencySource string      `json:"latency_source"`
 		Points        []pointJSON `json:"points"`
 	}
-	dstTargets := []uuid.UUID{ep.ID}
+	series, err := a.db.PairDirectionSeries(r.Context(), targetDirections(ep), spec.Bucket, spec.Window, spec.Source)
+	if err != nil {
+		internalError(w, "target series", err)
+		return
+	}
 	sources := []sourceSeriesJSON{}
-	for _, src := range ep.Sources {
-		family, err := a.db.PairLatencySource(r.Context(), src.AgentIDs, dstTargets, spec.Window, spec.Source)
-		if err != nil {
-			internalError(w, "target series source "+src.Site, err)
-			return
-		}
-		points, err := a.db.PairSeries(r.Context(), src.AgentIDs, dstTargets, spec.Bucket, spec.Window, spec.Source, family)
-		if err != nil {
-			internalError(w, "target series "+src.Site, err)
-			return
-		}
+	for i, src := range ep.Sources {
 		sources = append(sources, sourceSeriesJSON{
-			Site: src.Site, Network: src.Network, LatencySource: family, Points: toPoints(points),
+			Site: src.Site, Network: src.Network,
+			LatencySource: series[i].LatencySource, Points: toPoints(series[i].Points),
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -211,15 +218,14 @@ func (a *api) handleTargetPaths(w http.ResponseWriter, r *http.Request) {
 		Network string            `json:"network"`
 		Paths   []currentPathJSON `json:"paths"`
 	}
-	dstTargets := []uuid.UUID{ep.ID}
+	paths, err := a.db.CurrentPathsBatch(r.Context(), targetDirections(ep))
+	if err != nil {
+		internalError(w, "target paths", err)
+		return
+	}
 	sources := []sourcePathsJSON{}
-	for _, src := range ep.Sources {
-		paths, err := a.db.CurrentPaths(r.Context(), src.AgentIDs, dstTargets)
-		if err != nil {
-			internalError(w, "target paths "+src.Site, err)
-			return
-		}
-		sources = append(sources, sourcePathsJSON{Site: src.Site, Network: src.Network, Paths: toCurrentPathJSON(paths)})
+	for i, src := range ep.Sources {
+		sources = append(sources, sourcePathsJSON{Site: src.Site, Network: src.Network, Paths: toCurrentPathJSON(paths[i])})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"target":  toTargetInfoJSON(ep),

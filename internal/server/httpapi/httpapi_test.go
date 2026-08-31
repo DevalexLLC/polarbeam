@@ -47,8 +47,8 @@ type fakeDB struct {
 	// networks argument of the last CreateUser / SetUserNetworks /
 	// UpsertOIDCUser call
 	lastUserNetworks []uuid.UUID
-	// source passed to the last PairSeries / PairSummary / TargetStageSeries
-	// call
+	// source passed to the last PairDirectionSeries /
+	// PairDirectionSummaries / TargetStageSeries call
 	lastSource store.Source
 
 	fakeAuthState
@@ -118,8 +118,9 @@ type fakeDashboardState struct {
 	latencySources       map[uuid.UUID]string
 	directionLatest      []store.MatrixRow
 	passedLatencySources []string
-	// srcAgents of every PairSummary call, in order — asserts the pair
-	// endpoints' ?network= filter narrowed the endpoint ID sets.
+	// srcAgents of every PairDirectionSummaries direction, in order —
+	// asserts the pair endpoints' ?network= filter narrowed the endpoint
+	// ID sets.
 	pairSummaryAgents [][]uuid.UUID
 }
 
@@ -447,31 +448,47 @@ func (f *fakeDB) ExpectedPairs(_ context.Context, networks []uuid.UUID) ([]store
 	f.recordScope("ExpectedPairs", networks)
 	return f.expectedPairs, nil
 }
-func (f *fakeDB) SiteEndpoints(_ context.Context, name string, networks []uuid.UUID) (*store.SiteEndpoints, error) {
+func (f *fakeDB) SiteEndpointsBatch(_ context.Context, names []string, networks []uuid.UUID) ([]*store.SiteEndpoints, error) {
 	f.recordScope("SiteEndpoints", networks)
-	return f.endpoints[name], nil
-}
-func (f *fakeDB) PairSeries(_ context.Context, _, _ []uuid.UUID, _, _ time.Duration, source store.Source, latencySource string) ([]store.SeriesBucket, error) {
-	f.lastSource = source
-	f.passedLatencySources = append(f.passedLatencySources, latencySource)
-	return f.pairSeries, nil
-}
-func (f *fakeDB) PairSummary(_ context.Context, srcAgents, _ []uuid.UUID, _ time.Duration, source store.Source) (*store.PairSummaryRow, error) {
-	f.lastSource = source
-	f.pairSummaryAgents = append(f.pairSummaryAgents, srcAgents)
-	if f.pairSummary != nil {
-		return f.pairSummary, nil
+	out := make([]*store.SiteEndpoints, len(names))
+	for i, name := range names {
+		out[i] = f.endpoints[name]
 	}
-	return &store.PairSummaryRow{}, nil
+	return out, nil
 }
-func (f *fakeDB) PairLatencySource(_ context.Context, srcAgents, _ []uuid.UUID, _ time.Duration, _ store.Source) (string, error) {
+
+// pairFamily mirrors the single-shot PairLatencySource fake: a
+// per-direction family keyed by the first source agent when latencySources
+// is seeded, else the shared default.
+func (f *fakeDB) pairFamily(srcAgents []uuid.UUID) string {
 	if len(srcAgents) > 0 && f.latencySources != nil {
-		return f.latencySources[srcAgents[0]], nil
+		return f.latencySources[srcAgents[0]]
 	}
-	return f.latencySource, nil
+	return f.latencySource
 }
-func (f *fakeDB) DirectionLatest(_ context.Context, _, _ []uuid.UUID, _ time.Duration) ([]store.MatrixRow, error) {
-	return f.directionLatest, nil
+
+func (f *fakeDB) PairDirectionSummaries(_ context.Context, dirs []store.DirectionKey, _ time.Duration, source store.Source, _ time.Duration) ([]store.DirectionSummary, error) {
+	f.lastSource = source
+	out := make([]store.DirectionSummary, len(dirs))
+	for i, d := range dirs {
+		f.pairSummaryAgents = append(f.pairSummaryAgents, d.SrcAgents)
+		sum := store.PairSummaryRow{}
+		if f.pairSummary != nil {
+			sum = *f.pairSummary
+		}
+		out[i] = store.DirectionSummary{Summary: sum, Latest: f.directionLatest}
+	}
+	return out, nil
+}
+func (f *fakeDB) PairDirectionSeries(_ context.Context, dirs []store.DirectionKey, _, _ time.Duration, source store.Source) ([]store.DirectionSeries, error) {
+	f.lastSource = source
+	out := make([]store.DirectionSeries, len(dirs))
+	for i, d := range dirs {
+		family := f.pairFamily(d.SrcAgents)
+		f.passedLatencySources = append(f.passedLatencySources, family)
+		out[i] = store.DirectionSeries{LatencySource: family, Points: f.pairSeries}
+	}
+	return out, nil
 }
 func (f *fakeDB) TargetEndpoints(_ context.Context, targetID uuid.UUID, networks []uuid.UUID) (*store.TargetEndpoints, error) {
 	f.recordScope("TargetEndpoints", networks)
@@ -541,23 +558,27 @@ func (f *fakeDB) QueryPathEvents(_ context.Context, _ time.Duration, filter stor
 	end := min(start+filter.Limit, len(f.pathEvents))
 	return f.pathEvents[start:end], total, f.pathEventTruncated, nil
 }
-func (f *fakeDB) CurrentPaths(_ context.Context, srcAgents, _ []uuid.UUID) ([]store.CurrentPath, error) {
-	var out []store.CurrentPath
-	for _, p := range f.paths {
-		for _, id := range srcAgents {
-			if p.AgentID == id {
-				out = append(out, p)
+func (f *fakeDB) CurrentPathsBatch(_ context.Context, dirs []store.DirectionKey) ([][]store.CurrentPath, error) {
+	out := make([][]store.CurrentPath, len(dirs))
+	for i, d := range dirs {
+		for _, p := range f.paths {
+			for _, id := range d.SrcAgents {
+				if p.AgentID == id {
+					out[i] = append(out[i], p)
+				}
 			}
 		}
 	}
 	return out, nil
 }
-func (f *fakeDB) CurrentPathMTUs(_ context.Context, srcAgents, _ []uuid.UUID) ([]store.CurrentPathMTU, error) {
-	var out []store.CurrentPathMTU
-	for _, m := range f.pathMTUs {
-		for _, id := range srcAgents {
-			if m.AgentID == id {
-				out = append(out, m)
+func (f *fakeDB) CurrentPathMTUsBatch(_ context.Context, dirs []store.DirectionKey) ([][]store.CurrentPathMTU, error) {
+	out := make([][]store.CurrentPathMTU, len(dirs))
+	for i, d := range dirs {
+		for _, m := range f.pathMTUs {
+			for _, id := range d.SrcAgents {
+				if m.AgentID == id {
+					out[i] = append(out[i], m)
+				}
 			}
 		}
 	}

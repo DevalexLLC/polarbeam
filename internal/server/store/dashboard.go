@@ -869,6 +869,22 @@ func (s *Store) expectedPairsUncached(ctx context.Context, networks []uuid.UUID)
 	return out, rows.Err()
 }
 
+// SiteEndpoints' statements, shared by the single-shot and batched read
+// paths so they cannot drift. siteVisibleSQL follows siteScopePredicate (the
+// ListSites rule), checked on its own rather than against the endpoint rows
+// so an in-scope agent with no targets yet — or an unstaffed mesh-member
+// site whose expected pairs render as stale — still resolves for its tenant.
+const siteRowSQL = `SELECT id, name, display_name, location, latitude, longitude FROM sites WHERE name = $1`
+
+var siteVisibleSQL = `SELECT ` + siteScopePredicate("$1::uuid", "$2")
+
+const siteTriplesSQL = `SELECT a.id, t.id, n.name
+	   FROM agents a
+	   JOIN targets t ON t.agent_id = a.id
+	   JOIN networks n ON n.id = a.network_id
+	  WHERE a.site_id = $1
+	    AND ($2::uuid[] IS NULL OR a.network_id = ANY($2))`
+
 // SiteEndpoints resolves a site name to its agents and their agent-kind
 // targets, or (nil, nil) when the site does not exist. Resolving IDs first
 // lets the hypertable scans hit the (agent_id, target_id, ...) index with
@@ -876,64 +892,41 @@ func (s *Store) expectedPairsUncached(ctx context.Context, networks []uuid.UUID)
 // scoped caller sees only its planes' endpoint IDs, and a site hosting no
 // in-scope agents resolves to (nil, nil) — byte-identical to an unknown
 // site, so a tenant cannot probe for other tenants' site names.
+//
+// A batch of one: the batched implementation is the only one, so this
+// method's DB tests pin the batch path's scope semantics too.
 func (s *Store) SiteEndpoints(ctx context.Context, siteName string, networks []uuid.UUID) (*SiteEndpoints, error) {
-	var ep SiteEndpoints
-	err := s.pool.QueryRow(ctx,
-		`SELECT id, name, display_name, location, latitude, longitude FROM sites WHERE name = $1`, siteName).
-		Scan(&ep.ID, &ep.Name, &ep.DisplayName, &ep.Location, &ep.Latitude, &ep.Longitude)
-	if err == pgx.ErrNoRows {
-		return nil, nil
-	}
+	eps, err := s.SiteEndpointsBatch(ctx, []string{siteName}, networks)
 	if err != nil {
-		return nil, fmt.Errorf("site %q: %w", siteName, err)
+		return nil, err
 	}
-	if networks != nil {
-		// Visibility follows siteScopePredicate (the ListSites rule),
-		// checked on its own rather than against the endpoint rows below
-		// so an in-scope agent with no targets yet — or an unstaffed
-		// mesh-member site whose expected pairs render as stale — still
-		// resolves for its tenant.
-		var visible bool
-		err := s.pool.QueryRow(ctx,
-			`SELECT `+siteScopePredicate("$1::uuid", "$2"), ep.ID, networks).Scan(&visible)
-		if err != nil {
-			return nil, fmt.Errorf("site %q: %w", siteName, err)
-		}
-		if !visible {
-			return nil, nil
-		}
-	}
-	rows, err := s.pool.Query(ctx,
-		`SELECT a.id, t.id, n.name
-		   FROM agents a
-		   JOIN targets t ON t.agent_id = a.id
-		   JOIN networks n ON n.id = a.network_id
-		  WHERE a.site_id = $1
-		    AND ($2::uuid[] IS NULL OR a.network_id = ANY($2))`, ep.ID, networks)
-	if err != nil {
-		return nil, fmt.Errorf("site %q endpoints: %w", siteName, err)
-	}
+	return eps[0], nil
+}
+
+// scanSiteTriples drains one siteTriplesSQL result set into ep's parallel
+// slices. It closes rows, so a batched caller can advance to the next
+// queued result.
+func scanSiteTriples(rows pgx.Rows, ep *SiteEndpoints) error {
 	defer rows.Close()
 	for rows.Next() {
 		var agentID, targetID uuid.UUID
 		var network string
 		if err := rows.Scan(&agentID, &targetID, &network); err != nil {
-			return nil, fmt.Errorf("site %q endpoints: %w", siteName, err)
+			return err
 		}
 		ep.AgentIDs = append(ep.AgentIDs, agentID)
 		ep.TargetIDs = append(ep.TargetIDs, targetID)
 		ep.Networks = append(ep.Networks, network)
 	}
-	return &ep, rows.Err()
+	return rows.Err()
 }
 
-// PairSeries buckets one direction (srcAgents → dstTargets) over the window,
-// reading raw or a continuous aggregate per source. Aggregate sources add
-// p50/p95/p99 from the rolled-up UddSketch; raw leaves them nil.
-func (s *Store) PairSeries(ctx context.Context, srcAgents, dstTargets []uuid.UUID, bucket, window time.Duration, source Source, latencySource string) ([]SeriesBucket, error) {
-	var sql string
-	if table := source.table(); table == "" {
-		sql = fmt.Sprintf(
+// pairSeriesSQL builds PairSeries' statement for source. The statement text
+// is shared by the single-shot and batched read paths so they cannot drift.
+func pairSeriesSQL(source Source) string {
+	table := source.table()
+	if table == "" {
+		return fmt.Sprintf(
 			`SELECT time_bucket($1::interval, time) AS bucket,
 			        min(%[1]s) FILTER (WHERE status = 1 AND %[2]s = $5)::float8,
 			        avg(%[1]s) FILTER (WHERE status = 1 AND %[2]s = $5)::float8,
@@ -946,12 +939,12 @@ func (s *Store) PairSeries(ctx context.Context, srcAgents, dstTargets []uuid.UUI
 			  WHERE agent_id = ANY($2) AND target_id = ANY($3)
 			    AND time > now() - $4::interval
 			  GROUP BY bucket ORDER BY bucket`, latencyExpr, latencySourceExpr)
-	} else {
-		// time_bucket over the cagg's bucket column regroups hourly rows
-		// into wider chart buckets (identity when widths already match).
-		// Averages come from the materialized sums/counts.
-		sql = fmt.Sprintf(
-			`SELECT time_bucket($1::interval, bucket) AS b,
+	}
+	// time_bucket over the cagg's bucket column regroups hourly rows
+	// into wider chart buckets (identity when widths already match).
+	// Averages come from the materialized sums/counts.
+	return fmt.Sprintf(
+		`SELECT time_bucket($1::interval, bucket) AS b,
 			        min(lat_min_us) FILTER (WHERE latency_source = $5)::float8,
 			        sum(lat_sum_us) FILTER (WHERE latency_source = $5)::float8
 			            / NULLIF(sum(lat_count) FILTER (WHERE latency_source = $5), 0)::float8,
@@ -966,35 +959,46 @@ func (s *Store) PairSeries(ctx context.Context, srcAgents, dstTargets []uuid.UUI
 			  WHERE agent_id = ANY($2) AND target_id = ANY($3)
 			    AND bucket > now() - $4::interval
 			  GROUP BY b ORDER BY b`, table)
-	}
-	rows, err := s.pool.Query(ctx, sql, bucket, srcAgents, dstTargets, window, latencySource)
+}
+
+// PairSeries buckets one direction (srcAgents → dstTargets) over the window,
+// reading raw or a continuous aggregate per source. Aggregate sources add
+// p50/p95/p99 from the rolled-up UddSketch; raw leaves them nil.
+func (s *Store) PairSeries(ctx context.Context, srcAgents, dstTargets []uuid.UUID, bucket, window time.Duration, source Source, latencySource string) ([]SeriesBucket, error) {
+	rows, err := s.pool.Query(ctx, pairSeriesSQL(source), bucket, srcAgents, dstTargets, window, latencySource)
 	if err != nil {
 		return nil, fmt.Errorf("pair series: %w", err)
 	}
+	out, err := scanSeriesBuckets(rows)
+	if err != nil {
+		return nil, fmt.Errorf("pair series: %w", err)
+	}
+	return out, nil
+}
+
+// scanSeriesBuckets drains one PairSeries result set. It closes rows, so a
+// batched caller can advance to the next queued result immediately.
+func scanSeriesBuckets(rows pgx.Rows) ([]SeriesBucket, error) {
 	defer rows.Close()
 	var out []SeriesBucket
 	for rows.Next() {
 		var b SeriesBucket
 		if err := rows.Scan(&b.Bucket, &b.MinUS, &b.AvgUS, &b.MaxUS, &b.LossPct, &b.Samples, &b.Failures,
 			&b.P50US, &b.P95US, &b.P99US); err != nil {
-			return nil, fmt.Errorf("pair series: %w", err)
+			return nil, err
 		}
 		out = append(out, b)
 	}
 	return out, rows.Err()
 }
 
-// PairSummary aggregates one direction (srcAgents → dstTargets) over the
-// window, reading raw or a continuous aggregate and selecting one successful
-// timing family so charts and summaries describe the same measurement.
-func (s *Store) PairSummary(ctx context.Context, srcAgents, dstTargets []uuid.UUID, window time.Duration, source Source) (*PairSummaryRow, error) {
-	latencySource, err := s.PairLatencySource(ctx, srcAgents, dstTargets, window, source)
-	if err != nil {
-		return nil, err
-	}
-	var sql string
-	if table := source.table(); table == "" {
-		sql = fmt.Sprintf(
+// pairSummarySQL builds PairSummary's statement for source. The statement
+// text is shared by the single-shot and batched read paths so they cannot
+// drift.
+func pairSummarySQL(source Source) string {
+	table := source.table()
+	if table == "" {
+		return fmt.Sprintf(
 			`SELECT min(%[1]s) FILTER (WHERE status = 1 AND %[2]s = $4)::float8,
 			        avg(%[1]s) FILTER (WHERE status = 1 AND %[2]s = $4)::float8,
 			        max(%[1]s) FILTER (WHERE status = 1 AND %[2]s = $4)::float8,
@@ -1008,9 +1012,9 @@ func (s *Store) PairSummary(ctx context.Context, srcAgents, dstTargets []uuid.UU
 			   FROM probe_results
 			  WHERE agent_id = ANY($1) AND target_id = ANY($2)
 			    AND time > now() - $3::interval`, latencyExpr, latencySourceExpr)
-	} else {
-		sql = fmt.Sprintf(
-			`SELECT min(lat_min_us) FILTER (WHERE latency_source = $4)::float8,
+	}
+	return fmt.Sprintf(
+		`SELECT min(lat_min_us) FILTER (WHERE latency_source = $4)::float8,
 			        sum(lat_sum_us) FILTER (WHERE latency_source = $4)::float8
 			            / NULLIF(sum(lat_count) FILTER (WHERE latency_source = $4), 0)::float8,
 			        max(lat_max_us) FILTER (WHERE latency_source = $4)::float8,
@@ -1026,27 +1030,43 @@ func (s *Store) PairSummary(ctx context.Context, srcAgents, dstTargets []uuid.UU
 			   FROM %s
 			  WHERE agent_id = ANY($1) AND target_id = ANY($2)
 			    AND bucket > now() - $3::interval`, table)
+}
+
+// PairSummary aggregates one direction (srcAgents → dstTargets) over the
+// window, reading raw or a continuous aggregate and selecting one successful
+// timing family so charts and summaries describe the same measurement.
+func (s *Store) PairSummary(ctx context.Context, srcAgents, dstTargets []uuid.UUID, window time.Duration, source Source) (*PairSummaryRow, error) {
+	latencySource, err := s.PairLatencySource(ctx, srcAgents, dstTargets, window, source)
+	if err != nil {
+		return nil, err
 	}
-	var p PairSummaryRow
-	err = s.pool.QueryRow(ctx, sql, srcAgents, dstTargets, window, latencySource).
-		Scan(&p.MinUS, &p.AvgUS, &p.MaxUS, &p.LossPct, &p.Samples, &p.LastOKAt,
-			&p.P50US, &p.P95US, &p.P99US,
-			&p.JitterAvgUS, &p.TCPConnectAvgUS, &p.TLSHandshakeAvgUS)
+	p, err := scanPairSummaryRow(s.pool.QueryRow(ctx, pairSummarySQL(source), srcAgents, dstTargets, window, latencySource))
 	if err != nil {
 		return nil, fmt.Errorf("pair summary: %w", err)
 	}
 	p.LatencySource = latencySource
+	return p, nil
+}
+
+// scanPairSummaryRow scans one PairSummary result row. LatencySource is left
+// empty — the caller sets it from the family it queried with.
+func scanPairSummaryRow(row pgx.Row) (*PairSummaryRow, error) {
+	var p PairSummaryRow
+	if err := row.Scan(&p.MinUS, &p.AvgUS, &p.MaxUS, &p.LossPct, &p.Samples, &p.LastOKAt,
+		&p.P50US, &p.P95US, &p.P99US,
+		&p.JitterAvgUS, &p.TCPConnectAvgUS, &p.TLSHandshakeAvgUS); err != nil {
+		return nil, err
+	}
 	return &p, nil
 }
 
-// PairLatencySource chooses one successful timing family for a direction
-// and window (see chooseLatencySource for the priority + coverage rule).
-// Aggregate windows inspect their serving cagg, so source selection still
-// works when the matching raw rows have aged out.
-func (s *Store) PairLatencySource(ctx context.Context, srcAgents, dstTargets []uuid.UUID, window time.Duration, source Source) (string, error) {
-	var sql string
-	if table := source.table(); table == "" {
-		sql = fmt.Sprintf(
+// pairLatencySourceSQL builds PairLatencySource's statement for source. The
+// statement text is shared by the single-shot and batched read paths so they
+// cannot drift.
+func pairLatencySourceSQL(source Source) string {
+	table := source.table()
+	if table == "" {
+		return fmt.Sprintf(
 			`SELECT %s AS latency_source, count(*)
 			   FROM probe_results
 			  WHERE agent_id = ANY($1) AND target_id = ANY($2)
@@ -1054,59 +1074,85 @@ func (s *Store) PairLatencySource(ctx context.Context, srcAgents, dstTargets []u
 			    AND status = 1
 			    AND %s IS NOT NULL
 			  GROUP BY latency_source`, latencySourceExpr, latencyExpr)
-	} else {
-		sql = fmt.Sprintf(
-			`SELECT latency_source, sum(lat_count)::bigint
+	}
+	return fmt.Sprintf(
+		`SELECT latency_source, sum(lat_count)::bigint
 			   FROM %s
 			  WHERE agent_id = ANY($1) AND target_id = ANY($2)
 			    AND bucket > now() - $3::interval
 			    AND latency_source <> '' AND lat_count > 0
 			  GROUP BY latency_source`, table)
-	}
-	rows, err := s.pool.Query(ctx, sql, srcAgents, dstTargets, window)
+}
+
+// PairLatencySource chooses one successful timing family for a direction
+// and window (see chooseLatencySource for the priority + coverage rule).
+// Aggregate windows inspect their serving cagg, so source selection still
+// works when the matching raw rows have aged out.
+func (s *Store) PairLatencySource(ctx context.Context, srcAgents, dstTargets []uuid.UUID, window time.Duration, source Source) (string, error) {
+	rows, err := s.pool.Query(ctx, pairLatencySourceSQL(source), srcAgents, dstTargets, window)
 	if err != nil {
 		return "", fmt.Errorf("pair latency source: %w", err)
 	}
+	counts, err := scanLatencyCounts(rows)
+	if err != nil {
+		return "", fmt.Errorf("pair latency source: %w", err)
+	}
+	return chooseLatencySource(counts), nil
+}
+
+// scanLatencyCounts drains one PairLatencySource result set into the
+// (family, successful samples) counts chooseLatencySource folds. It closes
+// rows, so a batched caller can advance to the next queued result.
+func scanLatencyCounts(rows pgx.Rows) (map[string]int64, error) {
 	defer rows.Close()
 	counts := map[string]int64{}
 	for rows.Next() {
 		var family string
 		var n int64
 		if err := rows.Scan(&family, &n); err != nil {
-			return "", fmt.Errorf("pair latency source: %w", err)
+			return nil, err
 		}
 		counts[family] = n
 	}
-	if err := rows.Err(); err != nil {
-		return "", fmt.Errorf("pair latency source: %w", err)
-	}
-	return chooseLatencySource(counts), nil
+	return counts, rows.Err()
 }
+
+// directionLatestSQL is DirectionLatest's statement, shared by the
+// single-shot and batched read paths so they cannot drift.
+const directionLatestSQL = `SELECT DISTINCT ON (agent_id, target_id, probe_type)
+	        target_id, probe_type, last_status, last_time,
+	        last_latency_us, COALESCE(last_latency_source, ''), last_loss_pct
+	   FROM series_state
+	  WHERE agent_id = ANY($1) AND target_id = ANY($2)
+	    AND last_time > now() - $3::interval
+	  ORDER BY agent_id, target_id, probe_type, last_time DESC`
 
 // DirectionLatest returns the latest row per (agent, target, probe type)
 // series for one direction within the horizon — the same SOURCE the matrix
 // uses (series_state, migration 0023), so cell and pair-detail status
 // agree, including immediately after a config deletion removes a series.
 func (s *Store) DirectionLatest(ctx context.Context, srcAgents, dstTargets []uuid.UUID, horizon time.Duration) ([]MatrixRow, error) {
-	rows, err := s.pool.Query(ctx,
-		`SELECT DISTINCT ON (agent_id, target_id, probe_type)
-		        target_id, probe_type, last_status, last_time,
-		        last_latency_us, COALESCE(last_latency_source, ''), last_loss_pct
-		   FROM series_state
-		  WHERE agent_id = ANY($1) AND target_id = ANY($2)
-		    AND last_time > now() - $3::interval
-		  ORDER BY agent_id, target_id, probe_type, last_time DESC`,
-		srcAgents, dstTargets, horizon)
+	rows, err := s.pool.Query(ctx, directionLatestSQL, srcAgents, dstTargets, horizon)
 	if err != nil {
 		return nil, fmt.Errorf("direction latest: %w", err)
 	}
+	out, err := scanDirectionLatest(rows)
+	if err != nil {
+		return nil, fmt.Errorf("direction latest: %w", err)
+	}
+	return out, nil
+}
+
+// scanDirectionLatest drains one DirectionLatest result set. It closes rows,
+// so a batched caller can advance to the next queued result.
+func scanDirectionLatest(rows pgx.Rows) ([]MatrixRow, error) {
 	defer rows.Close()
 	var out []MatrixRow
 	for rows.Next() {
 		var mr MatrixRow
 		var targetID uuid.UUID
 		if err := rows.Scan(&targetID, &mr.ProbeType, &mr.Status, &mr.Time, &mr.LatencyUS, &mr.LatencySource, &mr.LossPct); err != nil {
-			return nil, fmt.Errorf("direction latest: %w", err)
+			return nil, err
 		}
 		mr.TargetID = &targetID
 		out = append(out, mr)
