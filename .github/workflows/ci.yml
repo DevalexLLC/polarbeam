@@ -180,8 +180,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Store and migration tests against TimescaleDB
-        run: CGO_ENABLED=0 go test -count=1 -v ./internal/server/store/... ./internal/server/migrate/... ./internal/server/grpcapi/...
+      - name: Server tests against TimescaleDB
+        # -parallel 4 keeps the connection budget bounded: concurrent tests ×
+        # (4-conn capped pools + 1 admin conn) stays far below the stock
+        # max_connections of 100 even with two packages in flight.
+        run: CGO_ENABLED=0 go test -count=1 -v -parallel 4 ./internal/server/...
 
   # Style gate for the SPA sources. This job installs from the npm registry,
   # which is fine: it checks dev tooling, not release artifacts. The air-gap

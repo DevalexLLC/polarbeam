@@ -106,6 +106,7 @@ func stableCompare(primary int, a, b uuid.UUID, order string) int {
 }
 
 func TestSettingsSiteInventoryQueryAndDetail(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	f := seedSettingsInventory(t, ctx, s)
 	query := func(filter store.SiteConfigFilter) ([]store.SiteAdminInfo, int64) {
@@ -213,6 +214,7 @@ func TestSettingsSiteInventoryQueryAndDetail(t *testing.T) {
 }
 
 func TestSettingsTargetInventoryQueryAndDetail(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	f := seedSettingsInventory(t, ctx, s)
 	query := func(filter store.TargetConfigFilter) ([]store.TargetInfo, int64) {
@@ -320,6 +322,7 @@ func TestSettingsTargetInventoryQueryAndDetail(t *testing.T) {
 }
 
 func TestSettingsProbeInventoryQueryAndDetail(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	f := seedSettingsInventory(t, ctx, s)
 	query := func(filter store.ProbeConfigFilter) ([]store.ProbeConfigInfo, int64) {

@@ -113,6 +113,7 @@ func seedInventoryAgents(t *testing.T, ctx context.Context, s *store.Store) (net
 }
 
 func TestQueryAgentsFilteringSortingPagingAndScope(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	f, _ := seedInventoryAgents(t, ctx, s)
 	query := func(filter store.AgentInventoryFilter) ([]store.AgentListInfo, store.AgentInventorySummary) {
@@ -279,6 +280,7 @@ func seedInventoryTargets(t *testing.T, ctx context.Context, s *store.Store) (ne
 }
 
 func TestQueryOperationalTargetsAggregatesSortingPagingAndScope(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	f, mgmtTarget, foreignTarget := seedInventoryTargets(t, ctx, s)
 	var scopeSummary store.TargetInventorySummary

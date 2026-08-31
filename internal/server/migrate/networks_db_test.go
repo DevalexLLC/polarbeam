@@ -22,6 +22,7 @@ import (
 )
 
 func TestNetworksMigrationUpgrade(t *testing.T) {
+	t.Parallel()
 	url := dbtest.Empty(t)
 	ctx, conn := connect(t, url)
 
@@ -182,6 +183,7 @@ func TestNetworksMigrationUpgrade(t *testing.T) {
 // anywhere, so a writer that forgets to assign a network errors instead of
 // silently landing on default.
 func TestNetworksConstraints(t *testing.T) {
+	t.Parallel()
 	ctx, conn := connect(t, dbtest.Migrated(t))
 
 	var siteID, defaultNet uuid.UUID

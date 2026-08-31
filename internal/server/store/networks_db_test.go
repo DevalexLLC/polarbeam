@@ -174,6 +174,7 @@ func snapshotProbeIDs(t *testing.T, ctx context.Context, s *store.Store, agentID
 }
 
 func TestEnrollAgentInheritsTokenNetwork(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	defaultNet := networkIDByName(t, ctx, s, "default")
 	mgmt := createNetwork(t, ctx, s, "mgmt")
@@ -223,6 +224,7 @@ func TestEnrollAgentInheritsTokenNetwork(t *testing.T) {
 }
 
 func TestLoadAgentConfigInputsScopedByNetwork(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	f := buildNetFixture(t, ctx, s)
 
@@ -265,6 +267,7 @@ func TestLoadAgentConfigInputsScopedByNetwork(t *testing.T) {
 }
 
 func TestEnabledProbeIDsMatchAgentSnapshots(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	f := buildNetFixture(t, ctx, s)
 
@@ -317,6 +320,7 @@ func TestEnabledProbeIDsMatchAgentSnapshots(t *testing.T) {
 }
 
 func TestExpectedPairsNetworkScoped(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	f := buildNetFixture(t, ctx, s)
 
@@ -370,6 +374,7 @@ func TestExpectedPairsNetworkScoped(t *testing.T) {
 // is AgentIDs[i]'s plane (and TargetIDs[i] that agent's target), so the
 // pair handlers can filter all three slices in lockstep by network.
 func TestSiteEndpointsNetworks(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	f := buildNetFixture(t, ctx, s)
 
@@ -396,6 +401,7 @@ func TestSiteEndpointsNetworks(t *testing.T) {
 // latest-per-series row carries its source agent's network name, which is
 // what the per-network sub-cell fold keys on.
 func TestMatrixLatestCarriesNetwork(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	f := buildNetFixture(t, ctx, s)
 
@@ -437,6 +443,7 @@ func seriesExists(t *testing.T, ctx context.Context, s *store.Store, probeID uui
 }
 
 func TestDeleteMeshGroupCleansOnNetworkSeries(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	f := buildNetFixture(t, ctx, s)
 
@@ -458,6 +465,7 @@ func TestDeleteMeshGroupCleansOnNetworkSeries(t *testing.T) {
 }
 
 func TestRemoveMeshMemberRetiresOnNetworkSeries(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	f := buildNetFixture(t, ctx, s)
 
@@ -499,6 +507,7 @@ func TestRemoveMeshMemberRetiresOnNetworkSeries(t *testing.T) {
 }
 
 func TestUpsertMeshGroupKeepsExistingNetwork(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	mgmt := createNetwork(t, ctx, s, "mgmt")
 	defaultNet := networkIDByName(t, ctx, s, "default")
@@ -558,6 +567,7 @@ func TestUpsertMeshGroupKeepsExistingNetwork(t *testing.T) {
 }
 
 func TestNetworkCRUD(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 
 	id, err := s.CreateNetwork(ctx, "mgmt", "Management")
@@ -596,6 +606,7 @@ func TestNetworkCRUD(t *testing.T) {
 }
 
 func TestListNetworksConfigCounts(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	buildNetFixture(t, ctx, s)
 
@@ -619,6 +630,7 @@ func TestListNetworksConfigCounts(t *testing.T) {
 }
 
 func TestDeleteNetwork(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 
 	// Unreferenced network deletes cleanly.
@@ -703,6 +715,7 @@ func TestDeleteNetwork(t *testing.T) {
 }
 
 func TestEventListsCarryNetwork(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	mgmt := createNetwork(t, ctx, s, "mgmt")
 	aDef := enrollNetAgent(t, ctx, s, "site-a", "a-def", nil)

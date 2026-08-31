@@ -15,6 +15,7 @@ import (
 )
 
 func TestEnabledProbeIDsMatchSnapshotExpansion(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	f := buildNetFixture(t, ctx, s)
 

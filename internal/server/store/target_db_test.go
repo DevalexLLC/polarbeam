@@ -45,6 +45,7 @@ func seedSeriesState(t *testing.T, ctx context.Context, s *store.Store, agentID,
 }
 
 func TestTargetEndpoints(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 
 	if got, err := s.TargetEndpoints(ctx, uuid.New(), nil); err != nil || got != nil {
@@ -132,6 +133,7 @@ func TestTargetEndpoints(t *testing.T) {
 // hourly path is queried without a cagg refresh — materialized_only = false
 // serves the whole window live from raw.
 func TestTargetStageSeries(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	agent, other := uuid.New(), uuid.New()
 	target := uuid.New()
@@ -210,6 +212,7 @@ func TestTargetStageSeries(t *testing.T) {
 }
 
 func TestTargetProbeHealth(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	a1 := seedAgent(t, ctx, s, "site-a", "a1")
 	b1 := seedAgent(t, ctx, s, "site-b", "b1")
@@ -329,6 +332,7 @@ func TestTargetProbeHealth(t *testing.T) {
 // TestAgentProbeHealthTargetID pins the target link column: a live target's
 // ID rides along; a deleted target degrades to nil like kind/name.
 func TestAgentProbeHealthTargetID(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	a1 := seedAgent(t, ctx, s, "site-a", "a1")
 

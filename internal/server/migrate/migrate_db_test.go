@@ -37,6 +37,7 @@ func connect(t *testing.T, url string) (context.Context, *pgx.Conn) {
 }
 
 func TestApplyOnFreshDatabase(t *testing.T) {
+	t.Parallel()
 	ctx, conn := connect(t, dbtest.Empty(t))
 
 	pending, err := migrate.Pending(ctx, conn)
@@ -95,6 +96,7 @@ func TestApplyOnFreshDatabase(t *testing.T) {
 // requires every notx file to converge under that re-run — simulate the
 // crash for each one by deleting its record from a fully migrated database.
 func TestNotxCrashBetweenDDLAndRecordConverges(t *testing.T) {
+	t.Parallel()
 	ctx, conn := connect(t, dbtest.Empty(t))
 	if err := migrate.Apply(ctx, conn); err != nil {
 		t.Fatalf("initial Apply: %v", err)
