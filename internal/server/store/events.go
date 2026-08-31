@@ -410,30 +410,16 @@ func pathEventMatchingSQL(countProbe bool) string {
 		 LIMIT ` + limit
 }
 
-func pathEventOrder(sortName, order string) (string, error) {
-	if order != "asc" && order != "desc" {
-		return "", invalidf("path event order must be asc or desc")
-	}
-	direction := " ASC"
-	if order == "desc" {
-		direction = " DESC"
-	}
-	var column string
-	switch sortName {
-	case "time":
-		column = "e.time"
-	case "agent":
-		column = "lower(e.agent_hostname)"
-	case "source":
-		column = "lower(e.src_site)"
-	case "destination":
-		column = "lower(COALESCE(e.dst_site, e.target_name, ''))"
-	case "changes":
-		column = "e.changed_hops"
-	default:
-		return "", invalidf("unknown path event sort %q", sortName)
-	}
-	return column + direction + ", e.id" + direction, nil
+var pathEventSort = orderAllowlist{
+	name:    "path event",
+	tieExpr: "e.id",
+	columns: map[string]orderColumn{
+		"time":        {expr: "e.time"},
+		"agent":       {expr: "lower(e.agent_hostname)"},
+		"source":      {expr: "lower(e.src_site)"},
+		"destination": {expr: "lower(COALESCE(e.dst_site, e.target_name, ''))"},
+		"changes":     {expr: "e.changed_hops"},
+	},
 }
 
 // QueryPathEvents filters, counts, sorts, and pages route changes in SQL.
@@ -442,10 +428,10 @@ func pathEventOrder(sortName, order string) (string, error) {
 // ignoring RTTs and counting added/removed TTLs through a FULL JOIN. TTL
 // identity stays text because the wire's uint32 range exceeds SQL integer.
 func (s *Store) QueryPathEvents(ctx context.Context, window time.Duration, f PathEventFilter) ([]PathEventInfo, int64, bool, error) {
-	if f.Limit < 1 || f.Limit > 100 || f.Offset < 0 {
-		return nil, 0, false, invalidf("invalid path event page")
+	if err := pageBounds("path event", f.Limit, f.Offset); err != nil {
+		return nil, 0, false, err
 	}
-	orderBy, err := pathEventOrder(f.Sort, f.Order)
+	orderBy, err := pathEventSort.clause(f.Sort, f.Order)
 	if err != nil {
 		return nil, 0, false, err
 	}
@@ -495,23 +481,21 @@ func (s *Store) QueryPathEvents(ctx context.Context, window time.Duration, f Pat
 		  FROM enriched e
 		 ORDER BY ` + orderBy + `
 		 LIMIT $4 OFFSET $5`
-	rows, err := s.pool.Query(ctx, listSQL, window, f.Networks, query, f.Limit, f.Offset)
+	// No fallback: total and truncated come from the capped pre-count above.
+	out, err := runPaged(ctx, s.pool, f.Limit, f.Offset, pagedSpec[PathEventInfo]{
+		queryErr: "query path events",
+		scanErr:  "scan queried path event",
+		pageSQL:  listSQL,
+		args:     []any{window, f.Networks, query},
+		scan: func(row rowScanner) (PathEventInfo, error) {
+			var e PathEventInfo
+			err := row.Scan(&e.ID, &e.Time, &e.AgentID, &e.ProbeID, &e.TargetID,
+				&e.AgentHostname, &e.Network, &e.SrcSite, &e.DstSite, &e.TargetName,
+				&e.OldPathHash, &e.NewPathHash, &e.OldHops, &e.NewHops, &e.ChangedHops)
+			return e, err
+		},
+	})
 	if err != nil {
-		return nil, 0, false, fmt.Errorf("query path events: %w", err)
-	}
-	defer rows.Close()
-
-	out := make([]PathEventInfo, 0, f.Limit)
-	for rows.Next() {
-		var e PathEventInfo
-		if err := rows.Scan(&e.ID, &e.Time, &e.AgentID, &e.ProbeID, &e.TargetID,
-			&e.AgentHostname, &e.Network, &e.SrcSite, &e.DstSite, &e.TargetName,
-			&e.OldPathHash, &e.NewPathHash, &e.OldHops, &e.NewHops, &e.ChangedHops); err != nil {
-			return nil, 0, false, fmt.Errorf("scan queried path event: %w", err)
-		}
-		out = append(out, e)
-	}
-	if err := rows.Err(); err != nil {
 		return nil, 0, false, err
 	}
 	return out, total, truncated, nil
