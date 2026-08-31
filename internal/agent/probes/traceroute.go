@@ -31,14 +31,20 @@ const (
 // result every cadence, never a silent skip.
 type Traceroute struct{}
 
+// tracerouteEvent is one matched ICMP error from the reader: which probe
+// (ttl, idx) elicited it, from whom, and whether it proves arrival.
+type tracerouteEvent struct {
+	ttl, idx    int
+	peer        string
+	at          time.Time
+	destReached bool
+}
+
 func (Traceroute) Run(ctx context.Context, spec *pb.ProbeSpec) *pb.ProbeResult {
 	start := time.Now()
 	res := newResult(spec, start)
 	res.Sent = 1
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		deadline = start.Add(30 * time.Second)
-	}
+	deadline := runDeadline(ctx, start, 30*time.Second)
 
 	ip, err := resolveIP(ctx, spec.GetTarget().GetAddress())
 	if err != nil {
@@ -57,7 +63,6 @@ func (Traceroute) Run(ctx context.Context, spec *pb.ProbeSpec) *pb.ProbeResult {
 		return res
 	}
 	defer rawConn.Close()
-	rawConn.SetReadDeadline(deadline)
 
 	udpConn, err := net.ListenPacket(udpNet, ":0")
 	if err != nil {
@@ -75,46 +80,25 @@ func (Traceroute) Run(ctx context.Context, spec *pb.ProbeSpec) *pb.ProbeResult {
 		setTTL = pc.SetHopLimit
 	}
 
-	type event struct {
-		ttl, idx    int
-		peer        string
-		at          time.Time
-		destReached bool
-	}
-	events := make(chan event, tracerouteMaxHops*tracerouteProbesPerHop)
-	go func() {
-		buf := make([]byte, 1500)
-		for {
-			n, peer, err := rawConn.ReadFrom(buf)
-			if err != nil {
-				return
-			}
-			ttl, idx, reached, ok := parseTracerouteReply(v4, buf[:n], localPort, ip)
-			if !ok {
-				continue
-			}
-			// A port-unreachable straight from the target also proves arrival.
-			if !reached {
-				reached = peerIs(peer, ip)
-			}
-			select { // never block: the run may already be over
-			case events <- event{ttl: ttl, idx: idx, peer: peerHost(peer), at: time.Now(), destReached: reached}:
-			default:
-			}
+	parse := func(pkt []byte, peer net.Addr, at time.Time) (tracerouteEvent, bool) {
+		ttl, idx, reached, ok := parseTracerouteReply(v4, pkt, localPort, ip)
+		if !ok {
+			return tracerouteEvent{}, false
 		}
-	}()
-
-	type hopState struct {
-		addrs map[string]struct{}
-		rtts  []int64
-		got   int
+		// A port-unreachable straight from the target also proves arrival.
+		if !reached {
+			reached = peerIs(peer, ip)
+		}
+		return tracerouteEvent{ttl: ttl, idx: idx, peer: peerHost(peer), at: at, destReached: reached}, true
 	}
+	events := icmpReadSession(rawConn, deadline, 1500, tracerouteMaxHops*tracerouteProbesPerHop, parse)
+
 	hops := make([]hopState, tracerouteMaxHops)
 	sendTimes := make([][tracerouteProbesPerHop]time.Time, tracerouteMaxHops)
 	destReached := false
 	lastTTL := 0
 
-	record := func(ev event) {
+	record := func(ev tracerouteEvent) {
 		h := &hops[ev.ttl-1]
 		if h.addrs == nil {
 			h.addrs = make(map[string]struct{})
@@ -147,12 +131,7 @@ ttlLoop:
 		}
 
 		// Budget the wait so all remaining hops fit inside the run deadline.
-		remaining := time.Until(deadline)
-		hopsLeft := tracerouteMaxHops - ttl + 1
-		wait := traceroutePerHopWait
-		if per := remaining / time.Duration(hopsLeft); per < wait {
-			wait = per
-		}
+		wait := budget(time.Until(deadline), tracerouteMaxHops-ttl+1, traceroutePerHopWait, 0)
 		timer := time.NewTimer(wait)
 		for hops[ttl-1].got < tracerouteProbesPerHop {
 			select {
@@ -175,6 +154,19 @@ ttlLoop:
 		}
 	}
 
+	return tracerouteFinalize(res, hops, lastTTL, destReached, ip)
+}
+
+// hopState accumulates one hop's responders, RTTs and reply count.
+type hopState struct {
+	addrs map[string]struct{}
+	rtts  []int64
+	got   int
+}
+
+// tracerouteFinalize assembles the per-hop payload (sorted addresses,
+// path hash) and classifies the run.
+func tracerouteFinalize(res *pb.ProbeResult, hops []hopState, lastTTL int, destReached bool, ip net.IP) *pb.ProbeResult {
 	pbHops := make([]*pb.Hop, lastTTL)
 	for i := 0; i < lastTTL; i++ {
 		addrs := make([]string, 0, len(hops[i].addrs))
@@ -244,27 +236,11 @@ func parseTracerouteReply(v4 bool, b []byte, localPort int, target net.IP) (ttl,
 		return 0, 0, false, false
 	}
 
-	// Extract the quoted IP header + UDP header of our original probe.
-	var udp []byte
-	var quotedDst net.IP
-	if v4 {
-		if len(quoted) < 20 {
-			return 0, 0, false, false
-		}
-		hl := int(quoted[0]&0x0f) * 4
-		if hl < 20 || len(quoted) < hl+8 {
-			return 0, 0, false, false
-		}
-		quotedDst = net.IP(quoted[16:20])
-		udp = quoted[hl : hl+8]
-	} else {
-		if len(quoted) < 40+8 {
-			return 0, 0, false, false
-		}
-		quotedDst = net.IP(quoted[24:40])
-		udp = quoted[40:48]
-	}
-	if !quotedDst.Equal(target) {
+	// Extract the quoted IP header + UDP header of our original probe. The
+	// quoted protocol byte is deliberately not checked — see
+	// TestParseTracerouteReplyIgnoresQuotedProto.
+	_, quotedDst, udp, ok := quotedInner(v4, quoted)
+	if !ok || !quotedDst.Equal(target) {
 		return 0, 0, false, false
 	}
 	srcPort := int(binary.BigEndian.Uint16(udp[0:2]))
