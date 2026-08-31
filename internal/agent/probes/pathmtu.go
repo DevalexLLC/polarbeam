@@ -3,7 +3,6 @@ package probes
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -56,13 +55,19 @@ const (
 // absence is an ERROR result every cadence, never a silent skip.
 type PathMTU struct{}
 
+// pmtuEvent is one matched reply from the reader: an echo reply or a
+// Fragmentation Needed / Packet Too Big, with the advertised MTU.
+type pmtuEvent struct {
+	kind replyKind
+	seq  int
+	mtu  int
+	at   time.Time
+}
+
 func (PathMTU) Run(ctx context.Context, spec *pb.ProbeSpec) *pb.ProbeResult {
 	start := time.Now()
 	res := newResult(spec, start)
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		deadline = start.Add(5 * time.Second)
-	}
+	deadline := runDeadline(ctx, start, 5*time.Second)
 
 	minSize, maxSize, family, err := pmtuParams(spec.GetParams())
 	if err != nil {
@@ -101,44 +106,25 @@ func (PathMTU) Run(ctx context.Context, spec *pb.ProbeSpec) *pb.ProbeResult {
 		res.Error = fmt.Sprintf("cannot enable path MTU probe mode: %v", err)
 		return res
 	}
-	ipConn.SetReadDeadline(deadline)
-
 	// Random per-run token: the raw socket sees every ICMP message on the
 	// host, so echo replies are matched by ID + token prefix. ICMP errors
 	// quote only the first 8 bytes past the IP header — exactly the echo
 	// header — so there they are matched by ID + seq alone.
-	var token [8]byte
-	if _, err := rand.Read(token[:]); err != nil {
+	token, id, err := echoToken()
+	if err != nil {
 		res.Status = pb.ProbeStatus_PROBE_STATUS_ERROR
-		res.Error = fmt.Sprintf("random token: %v", err)
+		res.Error = err.Error()
 		return res
 	}
-	id := int(binary.BigEndian.Uint16(token[:2]))
 
-	type pmtuEvent struct {
-		kind replyKind
-		seq  int
-		mtu  int
-		at   time.Time
-	}
-	events := make(chan pmtuEvent, 64)
-	go func() {
-		buf := make([]byte, 65536)
-		for {
-			n, _, err := ipConn.ReadFrom(buf)
-			if err != nil {
-				return
-			}
-			kind, seq, mtu := parsePMTUReply(v6, buf[:n], id, token[:], ip)
-			if kind == replyNone {
-				continue
-			}
-			select { // never block: the run may already be over
-			case events <- pmtuEvent{kind: kind, seq: seq, mtu: mtu, at: time.Now()}:
-			default:
-			}
+	parse := func(pkt []byte, _ net.Addr, at time.Time) (pmtuEvent, bool) {
+		kind, seq, mtu := parsePMTUReply(v6, pkt, id, token[:], ip)
+		if kind == replyNone {
+			return pmtuEvent{}, false
 		}
-	}()
+		return pmtuEvent{kind: kind, seq: seq, mtu: mtu, at: at}, true
+	}
+	events := icmpReadSession(ipConn, deadline, 65536, 64, parse)
 
 	search := newPMTUSearch(minSize, maxSize, v6)
 	type sentProbe struct {
@@ -213,17 +199,9 @@ sizeLoop:
 			sentAt[seq] = sentProbe{size: size, at: at}
 
 			// Budget the wait so the remaining search fits inside the run
-			// deadline (the traceroute per-hop budgeting pattern).
-			wait := pmtuPerProbeWait
-			if per := remaining / time.Duration(pmtuRetriesPerSize*search.sizesLeft()); per < wait {
-				wait = per
-			}
-			if wait < pmtuMinWait {
-				wait = pmtuMinWait
-			}
-			if wait > remaining {
-				wait = remaining
-			}
+			// deadline; the floor keeps a tight budget from misreading a
+			// slow reply as silence.
+			wait := budget(remaining, pmtuRetriesPerSize*search.sizesLeft(), pmtuPerProbeWait, pmtuMinWait)
 			timer := time.NewTimer(wait)
 			for {
 				select {
@@ -511,18 +489,10 @@ func parsePMTUReply(v6 bool, b []byte, id int, token []byte, target net.IP) (kin
 		// x/net's DstUnreach drops the second header word, which for code 4
 		// carries the next-hop MTU (RFC 1191) — read it from the raw bytes.
 		mtu = int(binary.BigEndian.Uint16(b[6:8]))
-		quoted := body.Data
-		if len(quoted) < ipv4HeaderLen {
+		qproto, quotedDst, e, ok := quotedInner(true, body.Data)
+		if !ok || qproto != protoICMP || !quotedDst.Equal(target.To4()) {
 			return replyNone, 0, 0
 		}
-		hl := int(quoted[0]&0x0f) * 4
-		if hl < ipv4HeaderLen || len(quoted) < hl+icmpEchoHeaderLen {
-			return replyNone, 0, 0
-		}
-		if quoted[9] != protoICMP || !net.IP(quoted[16:20]).Equal(target.To4()) {
-			return replyNone, 0, 0
-		}
-		e := quoted[hl : hl+icmpEchoHeaderLen]
 		if e[0] != 8 /* echo request */ || int(binary.BigEndian.Uint16(e[4:6])) != id {
 			return replyNone, 0, 0
 		}
@@ -537,14 +507,10 @@ func parsePMTUReply(v6 bool, b []byte, id int, token []byte, target net.IP) (kin
 		return replyNone, 0, 0
 	}
 	mtu = body.MTU
-	quoted := body.Data
-	if len(quoted) < ipv6HeaderLen+icmpEchoHeaderLen {
+	qproto, quotedDst, e, ok := quotedInner(false, body.Data)
+	if !ok || qproto != protoICMPv6 || !quotedDst.Equal(target) {
 		return replyNone, 0, 0
 	}
-	if quoted[6] != protoICMPv6 || !net.IP(quoted[24:40]).Equal(target) {
-		return replyNone, 0, 0
-	}
-	e := quoted[ipv6HeaderLen : ipv6HeaderLen+icmpEchoHeaderLen]
 	if e[0] != 128 /* echo request */ || int(binary.BigEndian.Uint16(e[4:6])) != id {
 		return replyNone, 0, 0
 	}
