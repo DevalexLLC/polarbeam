@@ -21,7 +21,14 @@ func connect(t *testing.T, url string) (context.Context, *pgx.Conn) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	t.Cleanup(cancel)
-	conn, err := pgx.Connect(ctx, url)
+	cfg, err := pgx.ParseConfig(url)
+	if err != nil {
+		t.Fatalf("parse %s: %v", url, err)
+	}
+	// dbtest URLs cap pool_max_conns for pooled clients; a single pgx
+	// connection must not forward it to the server as a GUC.
+	delete(cfg.RuntimeParams, "pool_max_conns")
+	conn, err := pgx.ConnectConfig(ctx, cfg)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -30,6 +37,7 @@ func connect(t *testing.T, url string) (context.Context, *pgx.Conn) {
 }
 
 func TestApplyOnFreshDatabase(t *testing.T) {
+	t.Parallel()
 	ctx, conn := connect(t, dbtest.Empty(t))
 
 	pending, err := migrate.Pending(ctx, conn)
@@ -88,6 +96,7 @@ func TestApplyOnFreshDatabase(t *testing.T) {
 // requires every notx file to converge under that re-run — simulate the
 // crash for each one by deleting its record from a fully migrated database.
 func TestNotxCrashBetweenDDLAndRecordConverges(t *testing.T) {
+	t.Parallel()
 	ctx, conn := connect(t, dbtest.Empty(t))
 	if err := migrate.Apply(ctx, conn); err != nil {
 		t.Fatalf("initial Apply: %v", err)

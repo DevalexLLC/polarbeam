@@ -35,6 +35,7 @@ func insertOutageEvent(
 }
 
 func TestListOutagesStableIdentitiesAndRelatedRoutes(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	f := buildNetFixture(t, ctx, s)
 	var serviceTarget uuid.UUID
@@ -122,6 +123,7 @@ func TestListOutagesStableIdentitiesAndRelatedRoutes(t *testing.T) {
 // a pathological incident cannot make the 30s-polled endpoint unbounded —
 // and the cut is reported, never silent.
 func TestListOutagesOpenBranchCap(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	f := buildNetFixture(t, ctx, s)
 

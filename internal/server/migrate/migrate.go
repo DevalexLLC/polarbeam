@@ -14,7 +14,9 @@ package migrate
 
 import (
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"fmt"
 	"slices"
 	"sort"
@@ -60,6 +62,28 @@ func Pending(ctx context.Context, q Querier) ([]string, error) {
 		}
 	}
 	return pending, nil
+}
+
+// SchemaHash returns a stable digest of the embedded migrations (filenames
+// and contents). dbtest keys its pre-migrated template database on it, so
+// editing any migration — including a not-yet-shipped one, which the
+// filename-tracked schema_migrations ledger would not notice — invalidates
+// the template instead of leaking a stale schema into tests.
+func SchemaHash() (string, error) {
+	names, err := embeddedNames()
+	if err != nil {
+		return "", err
+	}
+	h := sha256.New()
+	for _, name := range names {
+		b, err := migrations.ReadFile("sql/" + name)
+		if err != nil {
+			return "", fmt.Errorf("migrate: %w", err)
+		}
+		fmt.Fprintf(h, "%s\n", name)
+		h.Write(b)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func embeddedNames() ([]string, error) {

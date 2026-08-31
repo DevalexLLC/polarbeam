@@ -23,6 +23,7 @@ import (
 )
 
 func TestTargetOwnershipScopedWrites(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	f := buildNetFixture(t, ctx, s)
 	mgmtScope := []uuid.UUID{f.mgmt}
@@ -116,6 +117,7 @@ func TestTargetOwnershipScopedWrites(t *testing.T) {
 }
 
 func TestDeleteNetworkNamesBlockingTargets(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	empty := createNetwork(t, ctx, s, "empty-plane")
 	if _, err := s.UpsertExternalTarget(ctx, "tenant-svc", "203.0.113.30", 443, "", &empty, nil); err != nil {
@@ -140,6 +142,7 @@ func TestDeleteNetworkNamesBlockingTargets(t *testing.T) {
 }
 
 func TestPathThresholdPlanesAreIndependent(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	f := buildNetFixture(t, ctx, s)
 
@@ -224,6 +227,7 @@ func TestPathThresholdPlanesAreIndependent(t *testing.T) {
 }
 
 func TestPathThresholdPairsCarryPlane(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	f := buildNetFixture(t, ctx, s)
 	warn := int64(5000)
@@ -246,6 +250,7 @@ func TestPathThresholdPairsCarryPlane(t *testing.T) {
 }
 
 func TestNetworkThresholdsScopedWrites(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	f := buildNetFixture(t, ctx, s)
 	mgmtScope := []uuid.UUID{f.mgmt}
@@ -317,6 +322,7 @@ func TestNetworkThresholdsScopedWrites(t *testing.T) {
 }
 
 func TestJoinTokensScopedByPlane(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	f := buildNetFixture(t, ctx, s)
 	mgmtScope := []uuid.UUID{f.mgmt}
@@ -383,6 +389,8 @@ func TestJoinTokensScopedByPlane(t *testing.T) {
 // schema says so out loud. Ingest runs this query per agent per cache
 // refresh, so a silent fall back to a sequential scan is a fleet-wide cost
 // that no functional test would notice.
+// Deliberately serial: an EXPLAIN-based planner assertion — concurrent load
+// and autovacuum on sibling databases can shift plan choices.
 func TestPathThresholdPairsStillIndexScans(t *testing.T) {
 	ctx, s := newStore(t)
 	f := buildNetFixture(t, ctx, s)
@@ -431,6 +439,7 @@ func TestPathThresholdPairsStillIndexScans(t *testing.T) {
 // delete — one tenant could pin another's target undeletable and the victim
 // would see a target reporting zero probes that will not go away.
 func TestDirectProbeCannotTargetACoTenantsTarget(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	f := buildNetFixture(t, ctx, s)
 	mgmtScope := []uuid.UUID{f.mgmt}
@@ -464,6 +473,7 @@ func TestDirectProbeCannotTargetACoTenantsTarget(t *testing.T) {
 // who guesses (or is told) a co-tenant's target UUID read its name,
 // address, port, and URL through /api/v1/targets/{id}.
 func TestTargetEndpointsScopesExternalOwnership(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	f := buildNetFixture(t, ctx, s)
 	mgmtScope := []uuid.UUID{f.mgmt}
@@ -515,6 +525,7 @@ func TestTargetEndpointsScopesExternalOwnership(t *testing.T) {
 // row removes that window; these calls prove the refusal exists at the layer
 // that actually mutates.
 func TestMeshWritesAuthorizeUnderTheRowLock(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	f := buildNetFixture(t, ctx, s)
 	mgmtScope := []uuid.UUID{f.mgmt}

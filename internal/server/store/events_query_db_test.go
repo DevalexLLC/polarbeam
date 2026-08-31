@@ -42,6 +42,7 @@ func pathEventIDs(events []store.PathEventInfo) []uuid.UUID {
 }
 
 func TestQueryPathEventsFilteringSortingAndPaging(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	f := buildNetFixture(t, ctx, s)
 	var serviceID uuid.UUID
@@ -189,6 +190,7 @@ func TestQueryPathEventsFilteringSortingAndPaging(t *testing.T) {
 }
 
 func TestQueryPathEventsSafetyCapAndDefaultIndex(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	bulkAgent := enrollNetAgent(t, ctx, s, "bulk-site", "bulk-agent", nil)
 	target := agentTargetID(t, ctx, s, bulkAgent)

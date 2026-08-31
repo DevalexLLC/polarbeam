@@ -265,6 +265,7 @@ func (r *streamRun) joinErr(t *testing.T) error {
 // Behavior 1: the initial send is suppressed when the agent already runs the
 // current snapshot — but liveness (TouchAgent) still updates.
 func TestStreamConfigInitialSendSuppressedOnMatchingHash(t *testing.T) {
+	t.Parallel()
 	ctx, s, raw := streamHarness(t)
 	agentID, serial := streamSetup(t, ctx, s)
 	srv := New(s, nil)
@@ -301,6 +302,7 @@ func TestStreamConfigInitialSendSuppressedOnMatchingHash(t *testing.T) {
 // Behavior 2a: a revoked certificate drops the live stream on the next sweep
 // tick with PermissionDenied — the DB is the sole revocation authority.
 func TestStreamConfigRevocationSweepDropsStream(t *testing.T) {
+	t.Parallel()
 	ctx, s, raw := streamHarness(t)
 	agentID, serial := streamSetup(t, ctx, s)
 	srv := New(s, nil)
@@ -319,6 +321,7 @@ func TestStreamConfigRevocationSweepDropsStream(t *testing.T) {
 // Behavior 2b: fail closed — a sweep that cannot CONFIRM validity drops the
 // stream with Unavailable instead of letting it ride.
 func TestStreamConfigSweepUnavailableOnDBError(t *testing.T) {
+	t.Parallel()
 	ctx, s, raw := streamHarness(t)
 	agentID, serial := streamSetup(t, ctx, s)
 	srv := New(s, nil)
@@ -336,6 +339,7 @@ func TestStreamConfigSweepUnavailableOnDBError(t *testing.T) {
 // a store-mediated write converges in one tick, and a version bump whose
 // rebuild yields the same hash sends nothing.
 func TestStreamConfigVersionGatedRebuild(t *testing.T) {
+	t.Parallel()
 	ctx, s, raw := streamHarness(t)
 	agentID, serial := streamSetup(t, ctx, s)
 	srv := New(s, nil)
@@ -397,6 +401,7 @@ func TestStreamConfigVersionGatedRebuild(t *testing.T) {
 // Behavior 4: config edited behind the store's back (raw SQL, no version
 // bump) is caught by the forced-rebuild backstop after N ticks.
 func TestStreamConfigForcedRebuildBackstop(t *testing.T) {
+	t.Parallel()
 	ctx, s, raw := streamHarness(t)
 	agentID, serial := streamSetup(t, ctx, s)
 	srv := New(s, nil)
@@ -428,6 +433,7 @@ func TestStreamConfigForcedRebuildBackstop(t *testing.T) {
 // Behavior 5: a failing rebuild keeps the last snapshot and the stream —
 // liveness and revocation checking outlive config staleness.
 func TestStreamConfigRebuildFailureKeepsStreamAlive(t *testing.T) {
+	t.Parallel()
 	ctx, s, raw := streamHarness(t)
 	agentID, serial := streamSetup(t, ctx, s)
 	srv := New(s, nil)

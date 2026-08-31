@@ -16,6 +16,7 @@ import (
 )
 
 func TestSweepMinIntervalNetworkScoped(t *testing.T) {
+	t.Parallel()
 	ctx, pool := newPool(t)
 
 	var defaultNet, mgmt uuid.UUID

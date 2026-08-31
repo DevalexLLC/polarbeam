@@ -87,6 +87,7 @@ func resultCount(t *testing.T, ctx context.Context, s *store.Store) int {
 // returned slice holds only genuinely added rows so outage/pathwatch
 // bookkeeping never double-counts.
 func TestInsertResultsTxDedupe(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	agentA, agentB := uuid.New(), uuid.New()
 	p1, p2 := uuid.New(), uuid.New()
@@ -144,6 +145,7 @@ func createUser(t *testing.T, ctx context.Context, s *store.Store, username, rol
 }
 
 func TestLastAdminGuard(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	alice := createUser(t, ctx, s, "alice", "admin")
 
@@ -216,6 +218,7 @@ func TestLastAdminGuard(t *testing.T) {
 // those three sites into one would make this test the sole line of defense,
 // so do not let it be deleted as redundant.
 func TestLastAdminGuardIgnoresScopedRoles(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	netID := createNetwork(t, ctx, s, "tenant-a")
 	root := createUser(t, ctx, s, "root", store.RoleAdmin)
@@ -267,6 +270,8 @@ func TestLastAdminGuardIgnoresScopedRoles(t *testing.T) {
 // locking the whole enabled-admin set, both transactions would count the
 // still-uncommitted peer and both succeed, leaving zero enabled admins on an
 // air-gapped deployment with no recovery path short of container CLI access.
+// Deliberately serial: 25 rounds of two goroutines contending on FOR UPDATE
+// are timing-sensitive and need pool headroom other parallel tests would eat.
 func TestLastAdminGuardRace(t *testing.T) {
 	ctx, s := newStore(t)
 	alice := createUser(t, ctx, s, "alice", "admin")
@@ -323,6 +328,7 @@ func TestLastAdminGuardRace(t *testing.T) {
 // TestEnsureSiteUpsert pins enrollment's site upsert: repeated enrollments
 // into the same site name converge on one row and one ID.
 func TestEnsureSiteUpsert(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	first, err := s.EnsureSite(ctx, "site-a")
 	if err != nil {
@@ -347,6 +353,7 @@ func TestEnsureSiteUpsert(t *testing.T) {
 // TestCurrentPathMTUs pins the per-pair lookup: agent/target filtering and
 // the nullable rtt_us column.
 func TestCurrentPathMTUs(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	agentA, agentB := uuid.New(), uuid.New()
 	probeA, probeB := uuid.New(), uuid.New()
@@ -399,6 +406,7 @@ func TestCurrentPathMTUs(t *testing.T) {
 // holds several rows toward the same target set (one per probe), and two
 // source agents legitimately share a site-wide probe ID.
 func TestCurrentPaths(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	agentA, agentA2, agentB := uuid.New(), uuid.New(), uuid.New()
 	probe1, probe2, probeB := uuid.New(), uuid.New(), uuid.New()

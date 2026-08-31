@@ -66,6 +66,7 @@ func ingestEnroll(t *testing.T, ctx context.Context, s *store.Store, site, hostn
 // TestAgentProbeMapResolvesFourLayers builds a real two-plane mesh and pins
 // that each agent grades on ITS OWN plane's layers.
 func TestAgentProbeMapResolvesFourLayers(t *testing.T) {
+	t.Parallel()
 	ctx, s := ingestStore(t)
 	srv := New(s, nil)
 

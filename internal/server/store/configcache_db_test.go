@@ -10,6 +10,7 @@ import (
 // caches must reflect a config write immediately (write paths invalidate;
 // the TTL is only a backstop for out-of-band SQL).
 func TestConfigCachesInvalidateOnWrites(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	f := buildNetFixture(t, ctx, s)
 

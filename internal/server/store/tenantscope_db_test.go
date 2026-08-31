@@ -30,6 +30,7 @@ func scopedReadFixture(t *testing.T, ctx context.Context, s *store.Store) (netFi
 }
 
 func TestScopedReadsKeepPlanesApart(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	f, _ := scopedReadFixture(t, ctx, s)
 	mgmtScope := []uuid.UUID{f.mgmt}
@@ -341,6 +342,7 @@ func ptr[T any](v T) *T { return &v }
 // site too — otherwise the scoped matrix references sites absent from
 // /sites and pair detail 404s.
 func TestScopedSitesCoverExpectedPairs(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	mgmt := createNetwork(t, ctx, s, "mgmt")
 	enrollNetAgent(t, ctx, s, "site-a", "a-mgmt", &mgmt)
@@ -413,6 +415,7 @@ func sessionFor(t *testing.T, ctx context.Context, s *store.Store, userID uuid.U
 }
 
 func TestScopedUserLifecycle(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	tenantA := createNetwork(t, ctx, s, "tenant-a")
 	tenantB := createNetwork(t, ctx, s, "tenant-b")
@@ -509,6 +512,7 @@ func TestScopedUserLifecycle(t *testing.T) {
 }
 
 func TestUpsertOIDCUserScopeTracksIdP(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	tenantA := createNetwork(t, ctx, s, "tenant-a")
 	tenantB := createNetwork(t, ctx, s, "tenant-b")
@@ -567,6 +571,7 @@ func TestUpsertOIDCUserScopeTracksIdP(t *testing.T) {
 // touching the provider must sign every federated user out — sessions join
 // role and scope live from the users row, which only a login remaps.
 func TestOIDCPolicyChangeRevokesSessions(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	cur, err := s.GetOIDCSettings(ctx)
 	if err != nil {
@@ -626,6 +631,7 @@ func TestOIDCPolicyChangeRevokesSessions(t *testing.T) {
 }
 
 func TestOIDCSettingsRoleRulesRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx, s := newStore(t)
 	rules := []store.OIDCRoleRule{
 		{Value: "tenant-a-admins", Role: store.RoleNetworkAdmin, Networks: []string{"tenant-a"}},

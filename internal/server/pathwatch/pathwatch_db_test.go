@@ -46,6 +46,7 @@ func pathCounts(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (current,
 }
 
 func TestApplyLifecycle(t *testing.T) {
+	t.Parallel()
 	ctx, pool := newPool(t)
 	agentID, probeID, targetID := uuid.New(), uuid.New(), uuid.New()
 	t0 := time.Now().UTC().Truncate(time.Microsecond)
@@ -125,6 +126,7 @@ func TestApplyLifecycle(t *testing.T) {
 // only a white-box call can prove an older write cannot clobber a newer
 // row — and that the skip surfaces as an error, never a silent no-op.
 func TestBulkUpsertStaleGuard(t *testing.T) {
+	t.Parallel()
 	ctx, pool := newPool(t)
 	agentID, probeID, targetID := uuid.New(), uuid.New(), uuid.New()
 	t0 := time.Now().UTC().Truncate(time.Microsecond)
@@ -159,6 +161,7 @@ func TestBulkUpsertStaleGuard(t *testing.T) {
 // re-lock; the bulk form prevents the race outright. Reproducible now
 // precisely because the protection is blocking.
 func TestConcurrentFirstSighting(t *testing.T) {
+	t.Parallel()
 	ctx, pool := newPool(t)
 	t0 := time.Now().UTC().Truncate(time.Microsecond)
 
@@ -251,6 +254,7 @@ func TestConcurrentFirstSighting(t *testing.T) {
 // by time, every intermediate change emits its event, and only the final
 // state is committed.
 func TestApplyMultipleRunsOneSeries(t *testing.T) {
+	t.Parallel()
 	ctx, pool := newPool(t)
 	agentID, probeID, targetID := uuid.New(), uuid.New(), uuid.New()
 	t0 := time.Now().UTC().Truncate(time.Microsecond)

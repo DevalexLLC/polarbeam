@@ -44,6 +44,7 @@ func counts(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (current, eve
 }
 
 func TestApplyLifecycle(t *testing.T) {
+	t.Parallel()
 	ctx, pool := newPool(t)
 	agentID, probeID, targetID := uuid.New(), uuid.New(), uuid.New()
 	t0 := time.Now().UTC().Truncate(time.Microsecond)
@@ -123,6 +124,7 @@ func TestApplyLifecycle(t *testing.T) {
 // the COMMITTED row — here the older run wins the race, so the newer racer
 // must record a change whose old identity is the committed winner's MTU.
 func TestConcurrentFirstSighting(t *testing.T) {
+	t.Parallel()
 	ctx, pool := newPool(t)
 	agentID, probeID, targetID := uuid.New(), uuid.New(), uuid.New()
 	t0 := time.Now().UTC().Truncate(time.Microsecond)
@@ -191,6 +193,7 @@ func TestConcurrentFirstSighting(t *testing.T) {
 // by time, every intermediate change emits its event, and only the final
 // state is committed.
 func TestApplyMultipleRunsOneSeries(t *testing.T) {
+	t.Parallel()
 	ctx, pool := newPool(t)
 	agentID, probeID, targetID := uuid.New(), uuid.New(), uuid.New()
 	t0 := time.Now().UTC().Truncate(time.Microsecond)

@@ -33,6 +33,7 @@ func newPool(t testing.TB) (context.Context, *pgxpool.Pool) {
 }
 
 func TestDegradedLifecycle(t *testing.T) {
+	t.Parallel()
 	ctx, pool := newPool(t)
 	agentID, probeID, targetID := uuid.New(), uuid.New(), uuid.New()
 	t0 := time.Now().UTC().Truncate(time.Microsecond).Add(-time.Hour)

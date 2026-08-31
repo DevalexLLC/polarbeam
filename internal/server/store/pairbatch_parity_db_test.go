@@ -50,6 +50,7 @@ func seedAgentTarget(t *testing.T, ctx context.Context, s *store.Store, agentID 
 }
 
 func TestPairBatchParity(t *testing.T) {
+	t.Parallel()
 	ctx, s := newParityStore(t)
 
 	// Two staffed sites on the default plane plus one on mgmt only (the
@@ -175,6 +176,7 @@ func TestPairBatchParity(t *testing.T) {
 // queues nothing in wave 2, an invisible one queues triples that must be
 // drained and discarded without shifting later results.
 func TestSiteEndpointsBatchParity(t *testing.T) {
+	t.Parallel()
 	ctx, s := newParityStore(t)
 
 	agentA := seedAgent(t, ctx, s, "pair-a", "a1")
@@ -219,6 +221,7 @@ func TestSiteEndpointsBatchParity(t *testing.T) {
 }
 
 func TestCurrentPathsBatchParity(t *testing.T) {
+	t.Parallel()
 	ctx, s := newParityStore(t)
 
 	agentA := seedAgent(t, ctx, s, "pair-a", "a1")
