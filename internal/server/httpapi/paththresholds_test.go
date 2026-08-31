@@ -19,6 +19,18 @@ import (
 
 // ---- fakeDB path-threshold methods ----
 
+var _ thresholdStore = (*fakeDB)(nil)
+
+// fakeThresholdState backs the thresholdStore fake methods (GetSettings /
+// UpdateSettings live in httpapi_test.go, the override layers here).
+type fakeThresholdState struct {
+	settings *store.ThresholdSettings
+	// key: lexically sorted site names joined with \x00 (the fake
+	// canonicalizes by name where the real store uses uuid order)
+	pathThresholds    map[string]*store.PathThresholdOverride
+	networkThresholds map[string]*store.NetworkThreshold
+}
+
 // fakePairKey canonicalizes by name where the real store canonicalizes by
 // uuid order — equivalent for the fake's purposes (both orders of a PUT
 // must land on one row).

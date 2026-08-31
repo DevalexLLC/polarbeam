@@ -17,6 +17,21 @@ import (
 
 // --- fakeDB implementation of the site/token config methods ---
 
+var (
+	_ siteConfigStore = (*fakeDB)(nil)
+	_ joinTokenStore  = (*fakeDB)(nil)
+)
+
+// fakeSiteConfigState backs the siteConfigStore and joinTokenStore fake
+// methods.
+type fakeSiteConfigState struct {
+	siteConfigs          []store.SiteAdminInfo
+	siteConfigNetworks   map[string][]uuid.UUID
+	joinTokens           []store.JoinTokenInfo
+	lastSiteConfigQuery  store.SiteConfigFilter
+	siteConfigQueryTotal int64
+}
+
 func (f *fakeDB) ListSitesConfig(_ context.Context, networks []uuid.UUID) ([]store.SiteAdminInfo, error) {
 	f.recordScope("ListSitesConfig", networks)
 	return f.siteConfigs, nil

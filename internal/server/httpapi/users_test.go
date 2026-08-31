@@ -13,6 +13,18 @@ import (
 	"github.com/devalexllc/polarbeam/internal/server/store"
 )
 
+// fakeUserState backs the userStore fake methods (which live in
+// httpapi_test.go alongside the shared users/sessions maps they also touch).
+type fakeUserState struct {
+	userAccounts []store.UserAccountInfo
+	loginMonths  []store.LoginMonthStat
+	// beforeUpdateOwnPassword, when set, runs at the top of
+	// UpdateOwnPassword — the seam for simulating an admin reset landing
+	// between the handler's current-password verification and the store
+	// transaction.
+	beforeUpdateOwnPassword func()
+}
+
 func TestUsersAuth(t *testing.T) {
 	f := newFakeDB()
 	h := newTestAPI(t, f)

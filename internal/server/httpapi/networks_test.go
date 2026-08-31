@@ -17,6 +17,10 @@ import (
 	"github.com/devalexllc/polarbeam/internal/server/store"
 )
 
+// No state struct: the backing networks field is cross-concern (seeded by
+// newFakeDB, read by the token/probe/user/OIDC fakes) and stays on fakeDB.
+var _ networkStore = (*fakeDB)(nil)
+
 func (f *fakeDB) NetworkIDByName(_ context.Context, name string) (uuid.UUID, error) {
 	for _, n := range f.networks {
 		if n.Name == name {

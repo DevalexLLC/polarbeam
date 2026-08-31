@@ -15,6 +15,18 @@ import (
 	"github.com/devalexllc/polarbeam/internal/server/store"
 )
 
+// fakeTargetDetailState backs the targetDetailReader fake methods (which
+// live in httpapi_test.go next to the pair-read fakes they share spies with).
+type fakeTargetDetailState struct {
+	targetEndpoints map[uuid.UUID]*store.TargetEndpoints
+	stageBuckets    []store.StageBucket
+	targetHealth    []store.TargetProbeHealthRow
+	// arguments of the last TargetStageSeries / TargetProbeHealth call
+	lastStageAgents  []uuid.UUID
+	lastStageTarget  uuid.UUID
+	lastTargetHealth uuid.UUID
+}
+
 func targetFake() (*fakeDB, *store.TargetEndpoints) {
 	f := newFakeDB()
 	nycAgent, lonAgent, lonAgent2 := uuid.New(), uuid.New(), uuid.New()
