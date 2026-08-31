@@ -93,11 +93,6 @@ func (Traceroute) Run(ctx context.Context, spec *pb.ProbeSpec) *pb.ProbeResult {
 	}
 	events := icmpReadSession(rawConn, deadline, 1500, tracerouteMaxHops*tracerouteProbesPerHop, parse)
 
-	type hopState struct {
-		addrs map[string]struct{}
-		rtts  []int64
-		got   int
-	}
 	hops := make([]hopState, tracerouteMaxHops)
 	sendTimes := make([][tracerouteProbesPerHop]time.Time, tracerouteMaxHops)
 	destReached := false
@@ -159,6 +154,19 @@ ttlLoop:
 		}
 	}
 
+	return tracerouteFinalize(res, hops, lastTTL, destReached, ip)
+}
+
+// hopState accumulates one hop's responders, RTTs and reply count.
+type hopState struct {
+	addrs map[string]struct{}
+	rtts  []int64
+	got   int
+}
+
+// tracerouteFinalize assembles the per-hop payload (sorted addresses,
+// path hash) and classifies the run.
+func tracerouteFinalize(res *pb.ProbeResult, hops []hopState, lastTTL int, destReached bool, ip net.IP) *pb.ProbeResult {
 	pbHops := make([]*pb.Hop, lastTTL)
 	for i := 0; i < lastTTL; i++ {
 		addrs := make([]string, 0, len(hops[i].addrs))

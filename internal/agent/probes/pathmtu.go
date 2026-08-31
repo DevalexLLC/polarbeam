@@ -127,40 +127,12 @@ func (PathMTU) Run(ctx context.Context, spec *pb.ProbeSpec) *pb.ProbeResult {
 	events := icmpReadSession(ipConn, deadline, 65536, 64, parse)
 
 	search := newPMTUSearch(minSize, maxSize, v6)
-	type sentProbe struct {
-		size int
-		at   time.Time
+	folder := &pmtuFolder{
+		search:    search,
+		sentAt:    make(map[int]sentProbe),
+		rttBySize: make(map[int]int64),
 	}
-	sentAt := make(map[int]sentProbe)
-	rttBySize := make(map[int]int64)
 	seq := 0
-
-	// fold applies one reply event. Events for the size currently under
-	// test resolve it (returned); late events for earlier sizes are still
-	// evidence and go straight into the search.
-	fold := func(ev pmtuEvent, curSize int) (resolved bool, v sizeVerdict, adv int) {
-		sp, known := sentAt[ev.seq]
-		if !known {
-			return false, 0, 0
-		}
-		switch ev.kind {
-		case replyEcho:
-			rtt := us(ev.at.Sub(sp.at))
-			if old, dup := rttBySize[sp.size]; !dup || rtt < old {
-				rttBySize[sp.size] = rtt
-			}
-			if sp.size == curSize {
-				return true, verdictOK, 0
-			}
-			search.record(sp.size, verdictOK, 0)
-		case replyTooBig:
-			if sp.size == curSize {
-				return true, verdictTooBig, ev.mtu
-			}
-			search.record(sp.size, verdictTooBig, ev.mtu)
-		}
-		return false, 0, 0
-	}
 
 sizeLoop:
 	for {
@@ -196,7 +168,7 @@ sizeLoop:
 				}
 				return fail(res, err, pb.ProbeStatus_PROBE_STATUS_UNSPECIFIED)
 			}
-			sentAt[seq] = sentProbe{size: size, at: at}
+			folder.sentAt[seq] = sentProbe{size: size, at: at}
 
 			// Budget the wait so the remaining search fits inside the run
 			// deadline; the floor keeps a tight budget from misreading a
@@ -206,7 +178,7 @@ sizeLoop:
 			for {
 				select {
 				case ev := <-events:
-					if r, v, a := fold(ev, size); r {
+					if r, v, a := folder.fold(ev, size); r {
 						timer.Stop()
 						verdict, adv = v, a
 						break attempts
@@ -222,6 +194,51 @@ sizeLoop:
 		search.record(size, verdict, adv)
 	}
 
+	return pmtuFinalize(res, search, folder.rttBySize, v6, minSize, ip)
+}
+
+// sentProbe is one outstanding echo: the size it tested and when it left.
+type sentProbe struct {
+	size int
+	at   time.Time
+}
+
+// pmtuFolder applies reply events to the search. Events for the size
+// currently under test resolve it (fold returns true); late events for
+// earlier sizes are still evidence and go straight into the search.
+type pmtuFolder struct {
+	search    *pmtuSearch
+	sentAt    map[int]sentProbe
+	rttBySize map[int]int64 // best RTT per size, for the result's RttUs
+}
+
+func (f *pmtuFolder) fold(ev pmtuEvent, curSize int) (resolved bool, v sizeVerdict, adv int) {
+	sp, known := f.sentAt[ev.seq]
+	if !known {
+		return false, 0, 0
+	}
+	switch ev.kind {
+	case replyEcho:
+		rtt := us(ev.at.Sub(sp.at))
+		if old, dup := f.rttBySize[sp.size]; !dup || rtt < old {
+			f.rttBySize[sp.size] = rtt
+		}
+		if sp.size == curSize {
+			return true, verdictOK, 0
+		}
+		f.search.record(sp.size, verdictOK, 0)
+	case replyTooBig:
+		if sp.size == curSize {
+			return true, verdictTooBig, ev.mtu
+		}
+		f.search.record(sp.size, verdictTooBig, ev.mtu)
+	}
+	return false, 0, 0
+}
+
+// pmtuFinalize fills res from the finished (or abandoned) search: the
+// result payload and the status classification.
+func pmtuFinalize(res *pb.ProbeResult, search *pmtuSearch, rttBySize map[int]int64, v6 bool, minSize int, ip net.IP) *pb.ProbeResult {
 	o := search.outcome()
 	ipVer := uint32(4)
 	if v6 {
