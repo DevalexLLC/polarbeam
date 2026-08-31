@@ -84,8 +84,15 @@ type ConfigSnapshot struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Content hash of the snapshot (server-computed, stable for identical
 	// configs).
-	ConfigHash    string       `protobuf:"bytes,1,opt,name=config_hash,json=configHash,proto3" json:"config_hash,omitempty"`
-	Probes        []*ProbeSpec `protobuf:"bytes,2,rep,name=probes,proto3" json:"probes,omitempty"`
+	ConfigHash string       `protobuf:"bytes,1,opt,name=config_hash,json=configHash,proto3" json:"config_hash,omitempty"`
+	Probes     []*ProbeSpec `protobuf:"bytes,2,rep,name=probes,proto3" json:"probes,omitempty"`
+	// Reserved in practice: never populated by any server, never read by any
+	// agent. Spool bounds are deliberately agent-local (spool.max_bytes /
+	// spool.max_age in agent YAML) because they guard the agent's own disk,
+	// which the control plane cannot see. Field 3 stays allocated for wire
+	// compatibility; any future central spool control must also fold the
+	// policy into config_hash (which today covers only probe specs) or
+	// policy changes would never be re-delivered.
 	Spool         *SpoolPolicy `protobuf:"bytes,3,opt,name=spool,proto3" json:"spool,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -142,7 +149,7 @@ func (x *ConfigSnapshot) GetSpool() *SpoolPolicy {
 	return nil
 }
 
-// Server-tunable spool bounds (agent-local config takes precedence if set).
+// Currently unused — see the ConfigSnapshot.spool comment.
 type SpoolPolicy struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	MaxBytes      int64                  `protobuf:"varint,1,opt,name=max_bytes,json=maxBytes,proto3" json:"max_bytes,omitempty"`

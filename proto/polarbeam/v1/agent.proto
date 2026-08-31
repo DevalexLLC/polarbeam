@@ -36,10 +36,17 @@ message ConfigSnapshot {
   // configs).
   string config_hash = 1;
   repeated ProbeSpec probes = 2;
+  // Reserved in practice: never populated by any server, never read by any
+  // agent. Spool bounds are deliberately agent-local (spool.max_bytes /
+  // spool.max_age in agent YAML) because they guard the agent's own disk,
+  // which the control plane cannot see. Field 3 stays allocated for wire
+  // compatibility; any future central spool control must also fold the
+  // policy into config_hash (which today covers only probe specs) or
+  // policy changes would never be re-delivered.
   SpoolPolicy spool = 3;
 }
 
-// Server-tunable spool bounds (agent-local config takes precedence if set).
+// Currently unused — see the ConfigSnapshot.spool comment.
 message SpoolPolicy {
   int64 max_bytes = 1;
   int64 max_age_seconds = 2;
