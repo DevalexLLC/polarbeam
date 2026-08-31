@@ -239,7 +239,9 @@ func Apply(ctx context.Context, db DB, agentID uuid.UUID, results []Result) ([]T
 	for id := range bySeries {
 		probeIDs = append(probeIDs, id)
 	}
-	// Deterministic lock order across concurrent ingest transactions.
+	// Deterministic order: ensureStates' seed insert locks in array order
+	// and the fold below walks series deterministically. lockStates orders
+	// its own scan in SQL — this sort alone would not order those locks.
 	sort.Slice(probeIDs, func(i, j int) bool {
 		return string(probeIDs[i][:]) < string(probeIDs[j][:])
 	})
@@ -328,9 +330,13 @@ func ensureStates(ctx context.Context, db DB, agentID uuid.UUID, probeIDs []uuid
 // open event row. FOR UPDATE OF ss, not plain FOR UPDATE: locking the
 // nullable side of an outer join is a Postgres error, and outage_events
 // must stay unlocked here to preserve the deadlock analysis in
-// bulkUpsertStates. The join deliberately does not filter on closed_at — a
-// dangling pointer to a closed event keeps behaving exactly as before (the
-// eventual close is a no-op UPDATE and the sweep repairs the pointer).
+// bulkUpsertStates. ORDER BY ss.probe_id keeps lock acquisition in probe
+// order across concurrent transactions: LockRows sits above the Sort, so
+// rows are locked as returned — in sorted order — even when the outer
+// join is planned as a hash join whose scan order is not the PK's. The
+// join deliberately does not filter on closed_at — a dangling pointer to
+// a closed event keeps behaving exactly as before (the eventual close is
+// a no-op UPDATE and the sweep repairs the pointer).
 func lockStates(ctx context.Context, db DB, agentID uuid.UUID, probeIDs []uuid.UUID) (map[uuid.UUID]State, error) {
 	rows, err := db.Query(ctx, `
 		SELECT ss.probe_id, ss.consec_fails, ss.consec_oks, ss.consec_degraded, ss.consec_clean,
@@ -341,6 +347,7 @@ func lockStates(ctx context.Context, db DB, agentID uuid.UUID, probeIDs []uuid.U
 		FROM series_state ss
 		LEFT JOIN outage_events oe ON oe.id = ss.open_event_id
 		WHERE ss.agent_id = $1 AND ss.probe_id = ANY($2)
+		ORDER BY ss.probe_id
 		FOR UPDATE OF ss`, agentID, probeIDs)
 	if err != nil {
 		return nil, fmt.Errorf("lock series_state: %w", err)
@@ -442,7 +449,7 @@ type finalSeries struct {
 // bulkUpsertStates persists every folded series state in one statement —
 // one round trip per push instead of one per series. Every target row is
 // already locked by this transaction (ensureStates' speculative insert or
-// lockStates' FOR UPDATE), so the statement's internal row order cannot
+// lockStates' ordered FOR UPDATE), so the statement's internal row order cannot
 // introduce a new deadlock. Nullable columns ride sentinels stripped back
 // to NULL by NULLIF: zero time → 'epoch' (zeroToEpoch) and nil
 // open_event_id → the nil uuid, which gen_random_uuid() can never mint.
