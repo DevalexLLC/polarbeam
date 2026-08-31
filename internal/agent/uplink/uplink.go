@@ -27,6 +27,11 @@ const (
 	backoffMax = 60 * time.Second
 )
 
+// configRecv is the one method streamOnce needs from the client stream.
+type configRecv interface {
+	Recv() (*pb.ConfigSnapshot, error)
+}
+
 // Uplink owns the gRPC connection and the config stream.
 type Uplink struct {
 	cfg config.Config
@@ -40,6 +45,14 @@ type Uplink struct {
 	OnSnapshot func(*pb.ConfigSnapshot)
 
 	configHash string
+
+	// Transport and clock seams (the gRPC stream in production, stubbed in
+	// tests — same convention as Pusher.push and Renewer.renew/now).
+	// Defaulted in New; tests build struct literals instead.
+	openStream func(ctx context.Context, hello *pb.AgentHello) (configRecv, error)
+	now        func() time.Time
+	after      func(time.Duration) <-chan time.Time
+	jitterFn   func(time.Duration) time.Duration
 }
 
 func New(cfg config.Config) (*Uplink, error) {
@@ -51,7 +64,11 @@ func New(cfg config.Config) (*Uplink, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Uplink{cfg: cfg, pki: pki, conn: conn}, nil
+	u := &Uplink{cfg: cfg, pki: pki, conn: conn, now: time.Now, after: time.After, jitterFn: jitter}
+	u.openStream = func(ctx context.Context, hello *pb.AgentHello) (configRecv, error) {
+		return pb.NewAgentServiceClient(u.getConn()).StreamConfig(ctx, hello)
+	}
+	return u, nil
 }
 
 func dial(cfg config.Config, pki enroll.PKI) (*grpc.ClientConn, error) {
@@ -117,12 +134,12 @@ func (u *Uplink) Run(ctx context.Context) error {
 	const healthyStream = 60 * time.Second
 	backoff := backoffMin
 	for {
-		start := time.Now()
+		start := u.now()
 		err := u.streamOnce(ctx)
 		if ctx.Err() != nil {
 			return nil
 		}
-		if time.Since(start) > healthyStream {
+		if u.now().Sub(start) > healthyStream {
 			backoff = backoffMin
 		}
 		if err != nil {
@@ -131,15 +148,14 @@ func (u *Uplink) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-time.After(jitter(backoff)):
+		case <-u.after(u.jitterFn(backoff)):
 		}
 		backoff = min(backoff*2, backoffMax)
 	}
 }
 
 func (u *Uplink) streamOnce(ctx context.Context) error {
-	client := pb.NewAgentServiceClient(u.getConn())
-	stream, err := client.StreamConfig(ctx, &pb.AgentHello{
+	stream, err := u.openStream(ctx, &pb.AgentHello{
 		AgentVersion: version.Version,
 		ConfigHash:   u.configHash,
 	})
