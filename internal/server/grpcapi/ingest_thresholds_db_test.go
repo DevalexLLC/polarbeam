@@ -26,7 +26,7 @@ import (
 
 var ingestCertSerial atomic.Int64
 
-func ingestStore(t *testing.T) (context.Context, *store.Store) {
+func ingestStore(t testing.TB) (context.Context, *store.Store) {
 	t.Helper()
 	url := dbtest.Migrated(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
