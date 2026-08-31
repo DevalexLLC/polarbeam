@@ -99,7 +99,11 @@ func TestPairBatchParity(t *testing.T) {
 			ProbeType: 1, Status: 1, Sent: 3, Received: 3, RttAvgUS: i32(140), JitterUS: i32(9)},
 	})
 
-	window, bucket, horizon := time.Hour, 5*time.Minute, time.Hour
+	// A 24h window, NOT 1h: the hourly cagg's rows sit on hour-aligned
+	// buckets, so with a 1h window a t0 shortly past the top of the hour
+	// lands in a bucket already outside `bucket > now() - window` and the
+	// hourly sub-test flakes with the wall clock (caught by CI).
+	window, bucket, horizon := 24*time.Hour, time.Hour, time.Hour
 	dirs := []store.DirectionKey{
 		{SrcAgents: []uuid.UUID{agentA}, DstTargets: []uuid.UUID{targetB}},
 		{SrcAgents: []uuid.UUID{agentB}, DstTargets: []uuid.UUID{targetA}},
