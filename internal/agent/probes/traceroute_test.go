@@ -127,6 +127,26 @@ func TestParseTracerouteReply(t *testing.T) {
 	}
 }
 
+// Preserved historic behavior: traceroute matches on the quoted ports and
+// destination alone and has never checked the quoted protocol byte
+// (quotedV4 leaves it zero, so every passing case above already relies on
+// this). pathmtu DOES check it; this pins the asymmetry so it cannot be
+// "fixed" in passing through the shared quotedInner helper.
+func TestParseTracerouteReplyIgnoresQuotedProto(t *testing.T) {
+	target := net.ParseIP("192.0.2.7")
+	local := 54321
+	q := quotedV4(local, tracerouteDstPort(2, 0), target)
+	q[9] = 6 // TCP, not UDP — still ours by port and destination
+	b, err := (&icmp.Message{Type: ipv4.ICMPTypeTimeExceeded, Body: &icmp.TimeExceeded{Data: q}}).Marshal(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ttl, idx, _, ok := parseTracerouteReply(true, b, local, target)
+	if !ok || ttl != 2 || idx != 0 {
+		t.Errorf("quoted proto byte must be ignored: (%d,%d,%v)", ttl, idx, ok)
+	}
+}
+
 func TestTracerouteLoopback(t *testing.T) {
 	raw, err := icmp.ListenPacket("ip4:icmp", "")
 	if err != nil {
