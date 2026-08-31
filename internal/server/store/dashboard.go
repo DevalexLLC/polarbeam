@@ -892,34 +892,15 @@ const siteTriplesSQL = `SELECT a.id, t.id, n.name
 // scoped caller sees only its planes' endpoint IDs, and a site hosting no
 // in-scope agents resolves to (nil, nil) — byte-identical to an unknown
 // site, so a tenant cannot probe for other tenants' site names.
+//
+// A batch of one: the batched implementation is the only one, so this
+// method's DB tests pin the batch path's scope semantics too.
 func (s *Store) SiteEndpoints(ctx context.Context, siteName string, networks []uuid.UUID) (*SiteEndpoints, error) {
-	var ep SiteEndpoints
-	err := s.pool.QueryRow(ctx, siteRowSQL, siteName).
-		Scan(&ep.ID, &ep.Name, &ep.DisplayName, &ep.Location, &ep.Latitude, &ep.Longitude)
-	if err == pgx.ErrNoRows {
-		return nil, nil
-	}
+	eps, err := s.SiteEndpointsBatch(ctx, []string{siteName}, networks)
 	if err != nil {
-		return nil, fmt.Errorf("site %q: %w", siteName, err)
+		return nil, err
 	}
-	if networks != nil {
-		var visible bool
-		err := s.pool.QueryRow(ctx, siteVisibleSQL, ep.ID, networks).Scan(&visible)
-		if err != nil {
-			return nil, fmt.Errorf("site %q: %w", siteName, err)
-		}
-		if !visible {
-			return nil, nil
-		}
-	}
-	rows, err := s.pool.Query(ctx, siteTriplesSQL, ep.ID, networks)
-	if err != nil {
-		return nil, fmt.Errorf("site %q endpoints: %w", siteName, err)
-	}
-	if err := scanSiteTriples(rows, &ep); err != nil {
-		return nil, fmt.Errorf("site %q endpoints: %w", siteName, err)
-	}
-	return &ep, nil
+	return eps[0], nil
 }
 
 // scanSiteTriples drains one siteTriplesSQL result set into ep's parallel
@@ -963,7 +944,7 @@ func pairSeriesSQL(source Source) string {
 	// into wider chart buckets (identity when widths already match).
 	// Averages come from the materialized sums/counts.
 	return fmt.Sprintf(
-			`SELECT time_bucket($1::interval, bucket) AS b,
+		`SELECT time_bucket($1::interval, bucket) AS b,
 			        min(lat_min_us) FILTER (WHERE latency_source = $5)::float8,
 			        sum(lat_sum_us) FILTER (WHERE latency_source = $5)::float8
 			            / NULLIF(sum(lat_count) FILTER (WHERE latency_source = $5), 0)::float8,
@@ -1033,7 +1014,7 @@ func pairSummarySQL(source Source) string {
 			    AND time > now() - $3::interval`, latencyExpr, latencySourceExpr)
 	}
 	return fmt.Sprintf(
-			`SELECT min(lat_min_us) FILTER (WHERE latency_source = $4)::float8,
+		`SELECT min(lat_min_us) FILTER (WHERE latency_source = $4)::float8,
 			        sum(lat_sum_us) FILTER (WHERE latency_source = $4)::float8
 			            / NULLIF(sum(lat_count) FILTER (WHERE latency_source = $4), 0)::float8,
 			        max(lat_max_us) FILTER (WHERE latency_source = $4)::float8,
@@ -1095,7 +1076,7 @@ func pairLatencySourceSQL(source Source) string {
 			  GROUP BY latency_source`, latencySourceExpr, latencyExpr)
 	}
 	return fmt.Sprintf(
-			`SELECT latency_source, sum(lat_count)::bigint
+		`SELECT latency_source, sum(lat_count)::bigint
 			   FROM %s
 			  WHERE agent_id = ANY($1) AND target_id = ANY($2)
 			    AND bucket > now() - $3::interval

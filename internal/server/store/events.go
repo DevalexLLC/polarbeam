@@ -597,6 +597,56 @@ func (s *Store) CurrentPathMTUs(ctx context.Context, srcAgents, dstTargets []uui
 	return scanCurrentPathMTUs(rows)
 }
 
+// CurrentPathsBatch runs CurrentPaths for every direction in one round
+// trip; out[i] corresponds to dirs[i].
+func (s *Store) CurrentPathsBatch(ctx context.Context, dirs []DirectionKey) ([][]CurrentPath, error) {
+	if len(dirs) == 0 {
+		return nil, nil
+	}
+	batch := &pgx.Batch{}
+	for _, d := range dirs {
+		batch.Queue(currentPathsSQL, d.SrcAgents, d.DstTargets)
+	}
+	res := s.pool.SendBatch(ctx, batch)
+	defer res.Close()
+	out := make([][]CurrentPath, len(dirs))
+	for i := range dirs {
+		rows, err := res.Query()
+		if err == nil {
+			out[i], err = scanCurrentPaths(rows)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("current paths (direction %d): %w", i, err)
+		}
+	}
+	return out, nil
+}
+
+// CurrentPathMTUsBatch runs CurrentPathMTUs for every direction in one
+// round trip; out[i] corresponds to dirs[i].
+func (s *Store) CurrentPathMTUsBatch(ctx context.Context, dirs []DirectionKey) ([][]CurrentPathMTU, error) {
+	if len(dirs) == 0 {
+		return nil, nil
+	}
+	batch := &pgx.Batch{}
+	for _, d := range dirs {
+		batch.Queue(currentPathMTUsSQL, d.SrcAgents, d.DstTargets)
+	}
+	res := s.pool.SendBatch(ctx, batch)
+	defer res.Close()
+	out := make([][]CurrentPathMTU, len(dirs))
+	for i := range dirs {
+		rows, err := res.Query()
+		if err == nil {
+			out[i], err = scanCurrentPathMTUs(rows)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("current path MTUs (direction %d): %w", i, err)
+		}
+	}
+	return out, nil
+}
+
 // scanCurrentPathMTUs drains one CurrentPathMTUs result set. It closes rows,
 // so a batched caller can advance to the next queued result.
 func scanCurrentPathMTUs(rows pgx.Rows) ([]CurrentPathMTU, error) {
