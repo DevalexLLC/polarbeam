@@ -95,6 +95,57 @@ jobs:
       - name: Test with the race detector
         run: CGO_ENABLED=1 go test -race -count=1 ./...
 
+  # Loopback tests for the raw-socket probers (icmp/traceroute/pathmtu),
+  # which skip everywhere else because they need CAP_NET_RAW. Like
+  # race-test above, deliberately NOT in the branch ruleset's required
+  # checks (adding it there is a ruleset change, not a repo change); it
+  # still reports on every PR. The capability comes from setcap on the
+  # compiled test binary rather than a root container: docker's
+  # --cap-add NET_RAW only raises the sets for uid 0, and running as
+  # root would flip the euid-gated selfcheck/spool permission tests to
+  # skips. The runner's permissive ping_group_range means
+  # TestICMPLoopback exercises openICMP's normal datagram-first order
+  # here, with the raw fallback still covered via the capability.
+  # TestPathMTURunNoCapability inverse-skips in this job by design;
+  # offline-build and race-test keep covering the missing-capability
+  # path.
+  cap-net-raw-test:
+    runs-on: ubuntu-latest
+    env:
+      GOFLAGS: -mod=vendor
+      GOPROXY: "off"
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Compile probes test binary
+        run: CGO_ENABLED=0 go test -c -o probes.test ./internal/agent/probes
+      - name: Grant CAP_NET_RAW to the test binary
+        run: sudo setcap cap_net_raw+ep probes.test
+      # Compiled test binaries default to NO timeout, hence the explicit
+      # -test.timeout. Exit status is captured bare — never through a
+      # pipe that could mask it — and the log is printed pass or fail.
+      - name: Probe tests with CAP_NET_RAW
+        run: |
+          status=0
+          ./probes.test -test.v -test.count=1 -test.timeout=300s > probes-test.log 2>&1 || status=$?
+          cat probes-test.log
+          exit "$status"
+      # The whole point of this job: turn PASS-by-skipping into a failure
+      # for the three loopback tests. Only runs when the tests passed.
+      - name: Loopback tests must have run, not skipped
+        run: |
+          for t in TestICMPLoopback TestTracerouteLoopback TestPathMTURunLoopback; do
+            if ! grep -q "^--- PASS: ${t} " probes-test.log; then
+              grep "^--- SKIP: ${t} " probes-test.log >&2 || true
+              echo "${t} did not run and pass" >&2
+              exit 1
+            fi
+          done
+
   # DB-backed store/migrate tests against the same TimescaleDB image the
   # compose stack ships. Deliberately a separate job: offline-build proves
   # the air-gap property and must stay network-free, while this one needs
