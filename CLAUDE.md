@@ -55,6 +55,9 @@ Full design + milestone plan: `docs/architecture.md`.
 
 ## Workflows
 
+- Ingest benchmarks: `make bench` — DB-backed, gated on
+  `POLARBEAM_TEST_DB_URL` like all DB suites (skips silently when unset),
+  run manually only; never add a CI job for them.
 - Build/test (offline): `make build`, `make test`. Dev stack: `make up` /
   `make down`, and `make reset` for teardown INCLUDING volumes (fresh
   DB/CA/tokens — what older notes call `down -v`; plain `make down -v`
