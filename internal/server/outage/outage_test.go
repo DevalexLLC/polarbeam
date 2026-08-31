@@ -324,8 +324,15 @@ func TestApplyIssuesOneBulkStateUpsert(t *testing.T) {
 	}
 	// FOR UPDATE OF ss, not plain FOR UPDATE: the OpenKind join must not
 	// lock outage_events (and plain FOR UPDATE errors on an outer join).
-	if len(db.queries) != 1 || !strings.Contains(db.queries[0], "FOR UPDATE OF ss") {
-		t.Errorf("queries = %d %q, want exactly the FOR UPDATE OF ss lock", len(db.queries), db.queries)
+	// ORDER BY ss.probe_id must precede it: lock acquisition order across
+	// concurrent transactions comes from this clause, not the Go-side sort.
+	if len(db.queries) != 1 {
+		t.Fatalf("queries = %d %q, want exactly the lock select", len(db.queries), db.queries)
+	}
+	lock := db.queries[0]
+	order, upd := strings.Index(lock, "ORDER BY ss.probe_id"), strings.Index(lock, "FOR UPDATE OF ss")
+	if order < 0 || upd < 0 || order > upd {
+		t.Errorf("lock select misses ORDER BY ss.probe_id before FOR UPDATE OF ss: %q", lock)
 	}
 	if len(db.execs) != 2 {
 		t.Fatalf("execs = %d, want exactly 2 (seed insert + bulk upsert): %q", len(db.execs), db.execs)
