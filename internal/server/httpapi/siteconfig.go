@@ -13,12 +13,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/devalexllc/polarbeam/internal/server/siteadmin"
+	"github.com/devalexllc/polarbeam/internal/server/configadmin"
 	"github.com/devalexllc/polarbeam/internal/server/store"
 )
 
 // siteAPIFields makes shared site validation errors name the JSON fields.
-var siteAPIFields = siteadmin.FieldNames{Name: "name", Lat: "latitude", Lon: "longitude"}
+var siteAPIFields = configadmin.SiteFields{Name: "name", Lat: "latitude", Lon: "longitude"}
 
 // --- sites ---
 
@@ -55,7 +55,7 @@ func validateSiteCoords(in siteRequest) []string {
 	if (in.Latitude == nil) != (in.Longitude == nil) {
 		problems = append(problems, "latitude and longitude must be set together")
 	} else if in.Latitude != nil {
-		problems = append(problems, siteadmin.ValidateCoords(*in.Latitude, *in.Longitude, siteAPIFields)...)
+		problems = append(problems, configadmin.ValidateSiteCoords(*in.Latitude, *in.Longitude, siteAPIFields)...)
 	}
 	return problems
 }
@@ -130,7 +130,7 @@ func (a *api) handleSiteConfigPost(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &in) {
 		return
 	}
-	problems := siteadmin.ValidateName(in.Name, siteAPIFields)
+	problems := configadmin.ValidateSiteName(in.Name, siteAPIFields)
 	problems = append(problems, validateSiteCoords(in)...)
 	if len(problems) > 0 {
 		writeError(w, http.StatusBadRequest, strings.Join(problems, "; "))

@@ -8,10 +8,7 @@
 package httpapi
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -20,62 +17,10 @@ import (
 	"github.com/google/uuid"
 
 	pb "github.com/devalexllc/polarbeam/internal/pb/polarbeamv1"
+	"github.com/devalexllc/polarbeam/internal/server/configadmin"
 	"github.com/devalexllc/polarbeam/internal/server/probeadmin"
 	"github.com/devalexllc/polarbeam/internal/server/store"
-	"github.com/devalexllc/polarbeam/internal/server/targetadmin"
 )
-
-// decodeStrict decodes exactly one JSON object, rejecting unknown fields
-// (a client bug or version skew — never silently dropped) and trailing
-// data. It writes the 400/413 itself; callers bail on false.
-func decodeStrict(w http.ResponseWriter, r *http.Request, v any) bool {
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
-		if isBodyTooLarge(w, err) {
-			return false
-		}
-		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
-		return false
-	}
-	if err := dec.Decode(new(json.RawMessage)); err != io.EOF {
-		if isBodyTooLarge(w, err) {
-			return false
-		}
-		writeError(w, http.StatusBadRequest, "invalid body: trailing data after JSON object")
-		return false
-	}
-	return true
-}
-
-// isBodyTooLarge writes a 413 and reports true when err is the body-limit
-// middleware's overflow (withBodyLimit); any other error is the caller's.
-func isBodyTooLarge(w http.ResponseWriter, err error) bool {
-	var mbe *http.MaxBytesError
-	if !errors.As(err, &mbe) {
-		return false
-	}
-	writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
-	return true
-}
-
-// writeStoreError maps the store's typed admin errors onto HTTP statuses;
-// anything untyped is an internal error (logged, opaque 500).
-func writeStoreError(w http.ResponseWriter, what string, err error) {
-	var inUse store.InUseError
-	switch {
-	case errors.As(err, &inUse):
-		writeError(w, http.StatusConflict, inUse.Error())
-	case errors.Is(err, store.ErrConflict):
-		writeError(w, http.StatusConflict, err.Error())
-	case errors.Is(err, store.ErrInvalid):
-		writeError(w, http.StatusBadRequest, err.Error())
-	case errors.Is(err, store.ErrNotFound):
-		writeError(w, http.StatusNotFound, err.Error())
-	default:
-		internalError(w, what, err)
-	}
-}
 
 // --- probe types (param registry) ---
 
@@ -182,7 +127,7 @@ func (a *api) handleTargetConfigGet(w http.ResponseWriter, r *http.Request) {
 }
 
 // targetAPIFields makes shared target validation errors name the JSON fields.
-var targetAPIFields = targetadmin.FieldNames{Name: "name", Address: "address", URL: "url", Port: "port"}
+var targetAPIFields = configadmin.TargetFields{Name: "name", Address: "address", URL: "url", Port: "port"}
 
 type targetRequest struct {
 	Name    string `json:"name"`
@@ -202,7 +147,7 @@ func (a *api) handleTargetPost(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &in) {
 		return
 	}
-	problems := targetadmin.Validate(in.Name, in.Address, in.URL, int64(in.Port), targetAPIFields)
+	problems := configadmin.ValidateTarget(in.Name, in.Address, in.URL, int64(in.Port), targetAPIFields)
 	if len(problems) > 0 {
 		writeError(w, http.StatusBadRequest, strings.Join(problems, "; "))
 		return

@@ -32,7 +32,7 @@ const draftFrom = (site: SiteConfig): Draft => ({
   longitude: site.longitude !== null ? String(site.longitude) : '',
 })
 
-// Mirrors the server's siteadmin validation; server 400s render verbatim as
+// Mirrors the server's configadmin site validation; server 400s render verbatim as
 // a backstop. Coordinates are both-or-neither — clearing both unplaces the
 // site (the PUT is full-state).
 function validate(d: Draft): { errors: string[]; latitude: number | null; longitude: number | null } {

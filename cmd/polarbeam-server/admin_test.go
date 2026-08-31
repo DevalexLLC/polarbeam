@@ -29,4 +29,4 @@ func TestParamsFlag(t *testing.T) {
 // Probe type parsing and cadence/train validation moved to
 // internal/server/probeadmin (shared with the HTTP config API) and are
 // tested there. Site coordinate validation likewise moved to
-// internal/server/siteadmin.
+// internal/server/configadmin.

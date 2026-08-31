@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/devalexllc/polarbeam/internal/server/networkadmin"
+	"github.com/devalexllc/polarbeam/internal/server/configadmin"
 	"github.com/devalexllc/polarbeam/internal/server/store"
 )
 
 // networkAPIFields makes shared validation errors name the JSON keys.
-var networkAPIFields = networkadmin.FieldNames{Name: "name"}
+var networkAPIFields = configadmin.NetworkFields{Name: "name"}
 
 type networkConfigJSON struct {
 	ID          string    `json:"id"`
@@ -61,7 +61,7 @@ func (a *api) handleNetworkPost(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &in) {
 		return
 	}
-	if problems := networkadmin.ValidateName(in.Name, networkAPIFields); len(problems) > 0 {
+	if problems := configadmin.ValidateNetworkName(in.Name, networkAPIFields); len(problems) > 0 {
 		writeError(w, http.StatusBadRequest, strings.Join(problems, "; "))
 		return
 	}

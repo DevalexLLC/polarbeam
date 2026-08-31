@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/devalexllc/polarbeam/internal/server/networkadmin"
+	"github.com/devalexllc/polarbeam/internal/server/configadmin"
 )
 
 // cliNetworkFields makes shared validation errors name the CLI flags.
-var cliNetworkFields = networkadmin.FieldNames{Name: "--name"}
+var cliNetworkFields = configadmin.NetworkFields{Name: "--name"}
 
 func cmdNetwork(args []string) error {
 	const use = "usage: polarbeam-server network list|create|set|delete --config <file> ..."
@@ -49,7 +49,7 @@ func cmdNetwork(args []string) error {
 		if err != nil {
 			return err
 		}
-		if problems := networkadmin.ValidateName(*name, cliNetworkFields); len(problems) > 0 {
+		if problems := configadmin.ValidateNetworkName(*name, cliNetworkFields); len(problems) > 0 {
 			return errors.New(strings.Join(problems, "; "))
 		}
 		st, ctx, cancel, err := adminStore(cfg)
@@ -73,7 +73,7 @@ func cmdNetwork(args []string) error {
 		if err != nil {
 			return err
 		}
-		problems := networkadmin.ValidateName(*name, cliNetworkFields)
+		problems := configadmin.ValidateNetworkName(*name, cliNetworkFields)
 		// fs.Visit presence tracking, like site set: an explicit empty
 		// --display-name is a real value (clear), an omitted flag is a
 		// no-op request worth refusing loudly.
@@ -104,7 +104,7 @@ func cmdNetwork(args []string) error {
 		if err != nil {
 			return err
 		}
-		if problems := networkadmin.ValidateName(*name, cliNetworkFields); len(problems) > 0 {
+		if problems := configadmin.ValidateNetworkName(*name, cliNetworkFields); len(problems) > 0 {
 			return errors.New(strings.Join(problems, "; "))
 		}
 		st, ctx, cancel, err := adminStore(cfg)
