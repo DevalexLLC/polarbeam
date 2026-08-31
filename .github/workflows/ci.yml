@@ -181,7 +181,7 @@ jobs:
           go-version-file: go.mod
           cache: false
       - name: Store and migration tests against TimescaleDB
-        run: CGO_ENABLED=0 go test -count=1 -v ./internal/server/store/... ./internal/server/migrate/...
+        run: CGO_ENABLED=0 go test -count=1 -v ./internal/server/store/... ./internal/server/migrate/... ./internal/server/grpcapi/...
 
   # Style gate for the SPA sources. This job installs from the npm registry,
   # which is fine: it checks dev tooling, not release artifacts. The air-gap

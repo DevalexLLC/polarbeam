@@ -40,6 +40,14 @@ type Server struct {
 	// s.store.CertValid. The stream sweep bypasses it (and the cache) on
 	// purpose — see certCache.
 	fetchCertValid func(ctx context.Context, serial *big.Int, agentID uuid.UUID) (bool, error)
+
+	// streamTicker is the test seam for StreamConfig's liveness tick; nil
+	// means a real 30s ticker. Returns the tick channel and a stop func.
+	streamTicker func() (<-chan time.Time, func())
+
+	// forcedRebuildEvery overrides forcedRebuildTicks in tests; 0 means
+	// the const.
+	forcedRebuildEvery int
 }
 
 func New(st *store.Store, authority *ca.CA) *Server {
@@ -122,6 +130,21 @@ func (s *Server) Enroll(ctx context.Context, req *pb.EnrollRequest) (*pb.EnrollR
 // connected agent: 10 ticks × 30s = 5 minutes.
 const forcedRebuildTicks = 10
 
+func (s *Server) tickSource() (<-chan time.Time, func()) {
+	if s.streamTicker != nil {
+		return s.streamTicker()
+	}
+	t := time.NewTicker(30 * time.Second)
+	return t.C, t.Stop
+}
+
+func (s *Server) rebuildEvery() int {
+	if s.forcedRebuildEvery > 0 {
+		return s.forcedRebuildEvery
+	}
+	return forcedRebuildTicks
+}
+
 // StreamConfig registers the agent as connected and pushes config snapshots:
 // a full snapshot on connect (unless the agent already runs it), then a fresh
 // full snapshot whenever a rebuild on the liveness tick yields a new hash.
@@ -171,15 +194,15 @@ func (s *Server) StreamConfig(hello *pb.AgentHello, stream grpc.ServerStreamingS
 
 	// Keep the stream open; periodically refresh liveness and re-check the
 	// certificate so revocation cuts live streams within a minute.
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
+	tick, stopTick := s.tickSource()
+	defer stopTick()
 	sinceRebuild := 0
 	for {
 		select {
 		case <-ctx.Done():
 			slog.Info("agent disconnected", "agent", id.AgentID)
 			return nil
-		case <-ticker.C:
+		case <-tick:
 			// Fail closed: the DB is the sole revocation authority, so a
 			// stream whose certificate cannot be confirmed valid does not
 			// stay up. The agent reconnects with backoff once the check
@@ -205,7 +228,7 @@ func (s *Server) StreamConfig(hello *pb.AgentHello, stream grpc.ServerStreamingS
 			if verErr != nil {
 				slog.Error("config version read failed", "agent", id.AgentID, "err", verErr)
 			}
-			if verErr == nil && ver != lastVer || sinceRebuild >= forcedRebuildTicks {
+			if verErr == nil && ver != lastVer || sinceRebuild >= s.rebuildEvery() {
 				// Config staleness must not kill the stream (liveness and
 				// revocation checking matter more): a failed rebuild keeps
 				// the last snapshot, leaves lastVer/sinceRebuild untouched,
