@@ -20,6 +20,30 @@ import (
 
 // --- fakeDB implementation of the config methods ---
 
+var (
+	_ targetConfigStore = (*fakeDB)(nil)
+	_ probeConfigStore  = (*fakeDB)(nil)
+)
+
+// fakeTargetConfigState backs the targetConfigStore fake methods.
+type fakeTargetConfigState struct {
+	targets                []store.TargetInfo
+	meshes                 []store.MeshGroupInfo
+	lastTargetConfigQuery  store.TargetConfigFilter
+	targetConfigQueryTotal int64
+	operationalTargets     []store.OperationalTargetInfo
+	lastTargetQuery        store.TargetInventoryFilter
+	targetQuerySummary     store.TargetInventorySummary
+	targetScopeSummary     store.TargetInventorySummary
+}
+
+// fakeProbeConfigState backs the probeConfigStore fake methods.
+type fakeProbeConfigState struct {
+	probes                []store.ProbeConfigInfo
+	lastProbeConfigQuery  store.ProbeConfigFilter
+	probeConfigQueryTotal int64
+}
+
 func (f *fakeDB) ListTargets(_ context.Context, networks []uuid.UUID) ([]store.TargetInfo, error) {
 	f.recordScope("ListTargets", networks)
 	return f.targets, nil

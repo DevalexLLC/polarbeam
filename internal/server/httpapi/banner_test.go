@@ -10,6 +10,11 @@ import (
 	"github.com/devalexllc/polarbeam/internal/server/store"
 )
 
+// fakeBannerState backs the bannerStore fake methods (in httpapi_test.go).
+type fakeBannerState struct {
+	banner *store.BannerSettings
+}
+
 func putBanner(h http.Handler, cookie *http.Cookie, csrf string, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest("PUT", "/api/v1/settings/ui-banner", strings.NewReader(body))
 	if cookie != nil {

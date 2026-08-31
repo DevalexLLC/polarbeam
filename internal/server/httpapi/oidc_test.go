@@ -17,6 +17,17 @@ import (
 	"github.com/devalexllc/polarbeam/internal/server/store"
 )
 
+// fakeOIDCState backs the oidcStore fake methods (which live in
+// httpapi_test.go alongside the shared users/sessions maps they also touch).
+type fakeOIDCState struct {
+	oidcSettings *store.OIDCSettings
+	oidcUsers    map[string]*store.UserInfo // key: oidcKey(issuer, subject)
+	// beforeUpdateOIDCSettings, when set, runs at the top of
+	// UpdateOIDCSettings — the seam for simulating a concurrent settings
+	// write landing between the handler's read and the store transaction.
+	beforeUpdateOIDCSettings func()
+}
+
 // fakeProvider scripts the IdP boundary and records what the handlers pass.
 type fakeProvider struct {
 	claims      *oidcauth.Claims

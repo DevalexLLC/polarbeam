@@ -25,27 +25,74 @@ import (
 
 // fakeDB implements DB in memory. Only the parts each test exercises are
 // populated; unhandled paths return zero values.
+//
+// Its state decomposes along db.go's per-concern seams: each embedded
+// fake*State is declared in the file holding that concern's fake methods,
+// and field promotion keeps every f.<field> selector working. The fields
+// declared directly on fakeDB are cross-concern — written or read by fake
+// methods of two or more concerns. The methods themselves all stay on
+// *fakeDB (they cross-call between concerns), so adding a store method
+// means touching one small interface in db.go plus one state struct and
+// method in the matching concern's test file.
 type fakeDB struct {
-	users      map[string]*store.UserInfo
-	sessions   map[string]*store.SessionInfo // key: string(token_hash)
-	outages    []store.OutageInfo
-	pathEvents []store.PathEventInfo
-	// whether the most recent outage read requested correlated route evidence
-	lastOutageRoutes bool
-	// Query-mode path event arguments and metadata. The fake preserves its
-	// seeded order; SQL filtering/sorting is covered by store DB tests.
-	lastPathEventFilter store.PathEventFilter
-	pathEventTotal      int64
-	pathEventTruncated  bool
-	agents              []store.AgentListInfo
-	lastAgentQuery      store.AgentInventoryFilter
-	agentQuerySummary   store.AgentInventorySummary
-	operationalTargets  []store.OperationalTargetInfo
-	lastTargetQuery     store.TargetInventoryFilter
-	targetQuerySummary  store.TargetInventorySummary
-	targetScopeSummary  store.TargetInventorySummary
-	networks            []store.NetworkAdminInfo
-	agentHealth         []store.AgentHealthBucket
+	users    map[string]*store.UserInfo
+	sessions map[string]*store.SessionInfo // key: string(token_hash)
+	networks []store.NetworkAdminInfo
+	// userScopes seeds SessionInfo.Networks for scoped users (key: user ID).
+	userScopes map[uuid.UUID][]store.NetworkRef
+	// scopeArgs records the networks argument of every scoped read, keyed
+	// by method name — handler tests assert the session scope reached the
+	// store (nil = unfiltered, non-nil = scoped).
+	scopeArgs map[string][]uuid.UUID
+	// networks argument of the last CreateUser / SetUserNetworks /
+	// UpsertOIDCUser call
+	lastUserNetworks []uuid.UUID
+	// source passed to the last PairSeries / PairSummary / TargetStageSeries
+	// call
+	lastSource store.Source
+
+	fakeAuthState
+	fakeUserState
+	fakeSiteConfigState
+	fakeAgentState
+	fakeDashboardState
+	fakeTargetDetailState
+	fakeThresholdState
+	fakeTargetConfigState
+	fakeProbeConfigState
+	fakeEventState
+	fakeBannerState
+	fakeOIDCState
+}
+
+// Each concern's fake methods satisfy the matching db.go interface; the
+// assertion lives in the file holding those methods.
+var (
+	_ sessionStore       = (*fakeDB)(nil)
+	_ userStore          = (*fakeDB)(nil)
+	_ agentReader        = (*fakeDB)(nil)
+	_ dashboardReader    = (*fakeDB)(nil)
+	_ targetDetailReader = (*fakeDB)(nil)
+	_ eventReader        = (*fakeDB)(nil)
+	_ bannerStore        = (*fakeDB)(nil)
+	_ oidcStore          = (*fakeDB)(nil)
+)
+
+// fakeAuthState backs the sessionStore fake methods.
+type fakeAuthState struct {
+	logins []recordedLogin // appended by RecordLogin
+	// beforeCreateLocalSession, when set, runs at the top of
+	// CreateLocalSession — the seam for simulating a password rotation
+	// landing between login's verification and the session insert.
+	beforeCreateLocalSession func()
+}
+
+// fakeAgentState backs the agentReader fake methods.
+type fakeAgentState struct {
+	agents            []store.AgentListInfo
+	lastAgentQuery    store.AgentInventoryFilter
+	agentQuerySummary store.AgentInventorySummary
+	agentHealth       []store.AgentHealthBucket
 	// probe type the last AgentHealthSeries call was told to exclude
 	lastHealthExclude int16
 	probeHealth       []store.AgentProbeHealthRow
@@ -57,80 +104,38 @@ type fakeDB struct {
 	lastBucketStart   time.Time
 	lastBucketProbe   *uuid.UUID
 	lastBucketExclude int16
-	sites             []store.SiteInfo
-	endpoints         map[string]*store.SiteEndpoints
-	settings          *store.ThresholdSettings
-	// key: lexically sorted site names joined with \x00 (the fake
-	// canonicalizes by name where the real store uses uuid order)
-	pathThresholds    map[string]*store.PathThresholdOverride
-	networkThresholds map[string]*store.NetworkThreshold
+}
 
-	paths    []store.CurrentPath
-	pathMTUs []store.CurrentPathMTU
-
-	targets                []store.TargetInfo
-	meshes                 []store.MeshGroupInfo
-	probes                 []store.ProbeConfigInfo
-	siteConfigs            []store.SiteAdminInfo
-	siteConfigNetworks     map[string][]uuid.UUID
-	joinTokens             []store.JoinTokenInfo
-	lastSiteConfigQuery    store.SiteConfigFilter
-	siteConfigQueryTotal   int64
-	lastTargetConfigQuery  store.TargetConfigFilter
-	targetConfigQueryTotal int64
-	lastProbeConfigQuery   store.ProbeConfigFilter
-	probeConfigQueryTotal  int64
-
-	userAccounts []store.UserAccountInfo
-	loginMonths  []store.LoginMonthStat
-	logins       []recordedLogin // appended by RecordLogin
-
-	banner *store.BannerSettings
-
-	oidcSettings *store.OIDCSettings
-	oidcUsers    map[string]*store.UserInfo // key: oidcKey(issuer, subject)
-	// beforeUpdateOIDCSettings, when set, runs at the top of
-	// UpdateOIDCSettings — the seam for simulating a concurrent settings
-	// write landing between the handler's read and the store transaction.
-	beforeUpdateOIDCSettings func()
-	// beforeUpdateOwnPassword: same seam for the self-service password
-	// change — simulates an admin reset landing between the handler's
-	// current-password verification and the store transaction.
-	beforeUpdateOwnPassword func()
-	// beforeCreateLocalSession: same seam for login — simulates a password
-	// rotation landing between login's verification and the session insert.
-	beforeCreateLocalSession func()
-
+// fakeDashboardState backs the dashboardReader fake methods.
+type fakeDashboardState struct {
+	sites                []store.SiteInfo
+	endpoints            map[string]*store.SiteEndpoints
+	matrixRows           []store.MatrixRow
+	expectedPairs        []store.NetworkPair
 	pairSummary          *store.PairSummaryRow
 	pairSeries           []store.SeriesBucket
 	latencySource        string
 	latencySources       map[uuid.UUID]string
 	directionLatest      []store.MatrixRow
 	passedLatencySources []string
-	lastSource           store.Source // source passed to the last PairSeries/PairSummary call
 	// srcAgents of every PairSummary call, in order — asserts the pair
 	// endpoints' ?network= filter narrowed the endpoint ID sets.
 	pairSummaryAgents [][]uuid.UUID
+}
 
-	matrixRows    []store.MatrixRow
-	expectedPairs []store.NetworkPair
-
-	targetEndpoints map[uuid.UUID]*store.TargetEndpoints
-	stageBuckets    []store.StageBucket
-	targetHealth    []store.TargetProbeHealthRow
-	// arguments of the last TargetStageSeries / TargetProbeHealth call
-	lastStageAgents  []uuid.UUID
-	lastStageTarget  uuid.UUID
-	lastTargetHealth uuid.UUID
-
-	// userScopes seeds SessionInfo.Networks for scoped users (key: user ID).
-	userScopes map[uuid.UUID][]store.NetworkRef
-	// scopeArgs records the networks argument of every scoped read, keyed
-	// by method name — handler tests assert the session scope reached the
-	// store (nil = unfiltered, non-nil = scoped).
-	scopeArgs map[string][]uuid.UUID
-	// networks argument of the last CreateUser / SetUserNetworks call
-	lastUserNetworks []uuid.UUID
+// fakeEventState backs the eventReader fake methods.
+type fakeEventState struct {
+	outages []store.OutageInfo
+	// whether the most recent outage read requested correlated route evidence
+	lastOutageRoutes bool
+	pathEvents       []store.PathEventInfo
+	// Query-mode path event arguments and metadata. The fake preserves its
+	// seeded order; SQL filtering/sorting is covered by store DB tests.
+	lastPathEventFilter store.PathEventFilter
+	pathEventTotal      int64
+	pathEventTruncated  bool
+	paths               []store.CurrentPath
+	pathMTUs            []store.CurrentPathMTU
 }
 
 // recordScope notes a scoped read's networks argument. The distinction the
@@ -148,16 +153,16 @@ func (f *fakeDB) recordScope(method string, networks []uuid.UUID) {
 
 func newFakeDB() *fakeDB {
 	return &fakeDB{
-		users:              map[string]*store.UserInfo{},
-		sessions:           map[string]*store.SessionInfo{},
-		oidcUsers:          map[string]*store.UserInfo{},
-		userScopes:         map[uuid.UUID][]store.NetworkRef{},
-		siteConfigNetworks: map[string][]uuid.UUID{},
+		users:      map[string]*store.UserInfo{},
+		sessions:   map[string]*store.SessionInfo{},
+		userScopes: map[uuid.UUID][]store.NetworkRef{},
 		// Mirror migration 0017's seed: the default network always exists,
 		// and token/probe handlers unconditionally resolve a network.
 		networks: []store.NetworkAdminInfo{
 			{ID: uuid.New(), Name: "default", DisplayName: "Default", CreatedAt: time.Now()},
 		},
+		fakeOIDCState:       fakeOIDCState{oidcUsers: map[string]*store.UserInfo{}},
+		fakeSiteConfigState: fakeSiteConfigState{siteConfigNetworks: map[string][]uuid.UUID{}},
 	}
 }
 
