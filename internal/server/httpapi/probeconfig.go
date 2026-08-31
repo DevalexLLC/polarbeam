@@ -439,13 +439,20 @@ func validateProbeRequest(in probeRequest, probeType pb.ProbeType, mesh bool) []
 }
 
 func (in probeRequest) settings(probeType pb.ProbeType) store.ProbeSettings {
+	params := in.Params
+	if params == nil {
+		// An omitted params object means "no parameters", not NULL — the
+		// probe_configs column is NOT NULL, and a PUT without params would
+		// otherwise 500 at the database.
+		params = map[string]string{}
+	}
 	return store.ProbeSettings{
 		ProbeType:    int16(probeType),
 		Interval:     time.Duration(in.IntervalMS) * time.Millisecond,
 		Timeout:      time.Duration(in.TimeoutMS) * time.Millisecond,
 		TrainCount:   in.TrainCount,
 		TrainSpacing: time.Duration(in.TrainSpacingMS) * time.Millisecond,
-		Params:       in.Params,
+		Params:       params,
 	}
 }
 
