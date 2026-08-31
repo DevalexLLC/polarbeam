@@ -34,7 +34,10 @@
 #   web dep needs a maintainer to bump it by hand.
 #
 # github-actions — keeps the SHA pins fresh (Dependabot updates the pinned
-#   hash and the trailing version comment together).
+#   hash and the trailing version comment together). codeql-action is
+#   grouped because init and analyze must run the same version — split PRs
+#   each fail CodeQL with a config/runtime version mismatch (seen with
+#   4.37.8→4.37.9, PRs #135/#136).
 version: 2
 updates:
   - package-ecosystem: gomod
@@ -53,3 +56,7 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    groups:
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
