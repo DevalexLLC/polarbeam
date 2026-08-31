@@ -398,21 +398,21 @@ func (a *api) handleMatrix(w http.ResponseWriter, r *http.Request) {
 // name — a tenant can never distinguish "foreign" from "nonexistent".
 func (a *api) pairEndpoints(w http.ResponseWriter, r *http.Request) (ea, eb *store.SiteEndpoints, networks []string, ok bool) {
 	scope := scopeIDs(r.Context())
-	for _, seg := range []struct {
-		name string
-		dst  **store.SiteEndpoints
-	}{{r.PathValue("a"), &ea}, {r.PathValue("b"), &eb}} {
-		ep, err := a.db.SiteEndpoints(r.Context(), seg.name, scope)
-		if err != nil {
-			internalError(w, "site endpoints", err)
-			return nil, nil, nil, false
-		}
-		if ep == nil {
-			writeError(w, http.StatusNotFound, "unknown site "+seg.name)
-			return nil, nil, nil, false
-		}
-		*seg.dst = ep
+	names := []string{r.PathValue("a"), r.PathValue("b")}
+	eps, err := a.db.SiteEndpointsBatch(r.Context(), names, scope)
+	if err != nil {
+		internalError(w, "site endpoints", err)
+		return nil, nil, nil, false
 	}
+	// Report the first unknown site, a before b — the order the serial
+	// lookups used, so 404 bodies are unchanged.
+	for i, name := range names {
+		if eps[i] == nil {
+			writeError(w, http.StatusNotFound, "unknown site "+name)
+			return nil, nil, nil, false
+		}
+	}
+	ea, eb = eps[0], eps[1]
 	inA := make(map[string]bool, len(ea.Networks))
 	for _, n := range ea.Networks {
 		inA[n] = true
@@ -480,43 +480,39 @@ type directionJSON struct {
 	Checks            []probeJSON `json:"checks"`
 }
 
-// direction assembles one direction's summary (aggregates over the window,
-// status from the latest results inside the staleness horizon).
-func (a *api) direction(r *http.Request, src, dst *store.SiteEndpoints, spec windowSpec) (directionJSON, error) {
-	return a.directionFor(r, src.AgentIDs, dst.TargetIDs, spec)
-}
-
-// directionFor is direction on raw endpoint ID sets — the target detail
-// page aims a site's agents at a single target ID instead of a peer site's
-// target set.
-func (a *api) directionFor(r *http.Request, srcAgents, dstTargets []uuid.UUID, spec windowSpec) (directionJSON, error) {
-	sum, err := a.db.PairSummary(r.Context(), srcAgents, dstTargets, spec.Window, spec.Source)
+// directions assembles one summary per direction (aggregates over the
+// window, status from the latest results inside the staleness horizon) from
+// a single batched read — two round trips however many directions the page
+// has. out[i] corresponds to dirs[i].
+func (a *api) directions(r *http.Request, dirs []store.DirectionKey, spec windowSpec) ([]directionJSON, error) {
+	sums, err := a.db.PairDirectionSummaries(r.Context(), dirs, spec.Window, spec.Source, staleHorizon)
 	if err != nil {
-		return directionJSON{}, err
+		return nil, err
 	}
-	latest, err := a.db.DirectionLatest(r.Context(), srcAgents, dstTargets, staleHorizon)
-	if err != nil {
-		return directionJSON{}, err
+	out := make([]directionJSON, len(sums))
+	for i, ds := range sums {
+		sum := ds.Summary
+		checks := make([]probeJSON, len(ds.Latest))
+		for j, row := range ds.Latest {
+			checks[j] = toProbeJSON(row)
+		}
+		out[i] = directionJSON{
+			Status:   directionStatus(ds.Latest),
+			LastOKAt: sum.LastOKAt,
+			Latency: latencyJSON{
+				MinUS: sum.MinUS, AvgUS: sum.AvgUS, MaxUS: sum.MaxUS,
+				P50US: sum.P50US, P95US: sum.P95US, P99US: sum.P99US,
+			},
+			LatencySource:     sum.LatencySource,
+			LossPct:           sum.LossPct,
+			Samples:           sum.Samples,
+			JitterAvgUS:       sum.JitterAvgUS,
+			TCPConnectAvgUS:   sum.TCPConnectAvgUS,
+			TLSHandshakeAvgUS: sum.TLSHandshakeAvgUS,
+			Checks:            checks,
+		}
 	}
-	checks := make([]probeJSON, len(latest))
-	for i, row := range latest {
-		checks[i] = toProbeJSON(row)
-	}
-	return directionJSON{
-		Status:   directionStatus(latest),
-		LastOKAt: sum.LastOKAt,
-		Latency: latencyJSON{
-			MinUS: sum.MinUS, AvgUS: sum.AvgUS, MaxUS: sum.MaxUS,
-			P50US: sum.P50US, P95US: sum.P95US, P99US: sum.P99US,
-		},
-		LatencySource:     sum.LatencySource,
-		LossPct:           sum.LossPct,
-		Samples:           sum.Samples,
-		JitterAvgUS:       sum.JitterAvgUS,
-		TCPConnectAvgUS:   sum.TCPConnectAvgUS,
-		TLSHandshakeAvgUS: sum.TLSHandshakeAvgUS,
-		Checks:            checks,
-	}, nil
+	return out, nil
 }
 
 func (a *api) handlePair(w http.ResponseWriter, r *http.Request) {
@@ -529,16 +525,15 @@ func (a *api) handlePair(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	aToB, err := a.direction(r, ea, eb, spec)
+	dirs, err := a.directions(r, []store.DirectionKey{
+		{SrcAgents: ea.AgentIDs, DstTargets: eb.TargetIDs},
+		{SrcAgents: eb.AgentIDs, DstTargets: ea.TargetIDs},
+	}, spec)
 	if err != nil {
-		internalError(w, "pair a→b", err)
+		internalError(w, "pair directions", err)
 		return
 	}
-	bToA, err := a.direction(r, eb, ea, spec)
-	if err != nil {
-		internalError(w, "pair b→a", err)
-		return
-	}
+	aToB, bToA := dirs[0], dirs[1]
 	writeJSON(w, http.StatusOK, map[string]any{
 		"a": ea.Name, "b": eb.Name,
 		"window": windowName(r), "source": string(spec.Source),
@@ -593,26 +588,15 @@ func (a *api) handleSeries(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	aSource, err := a.db.PairLatencySource(r.Context(), ea.AgentIDs, eb.TargetIDs, spec.Window, spec.Source)
+	series, err := a.db.PairDirectionSeries(r.Context(), []store.DirectionKey{
+		{SrcAgents: ea.AgentIDs, DstTargets: eb.TargetIDs},
+		{SrcAgents: eb.AgentIDs, DstTargets: ea.TargetIDs},
+	}, spec.Bucket, spec.Window, spec.Source)
 	if err != nil {
-		internalError(w, "series a→b source", err)
+		internalError(w, "pair series", err)
 		return
 	}
-	bSource, err := a.db.PairLatencySource(r.Context(), eb.AgentIDs, ea.TargetIDs, spec.Window, spec.Source)
-	if err != nil {
-		internalError(w, "series b→a source", err)
-		return
-	}
-	aToB, err := a.db.PairSeries(r.Context(), ea.AgentIDs, eb.TargetIDs, spec.Bucket, spec.Window, spec.Source, aSource)
-	if err != nil {
-		internalError(w, "series a→b", err)
-		return
-	}
-	bToA, err := a.db.PairSeries(r.Context(), eb.AgentIDs, ea.TargetIDs, spec.Bucket, spec.Window, spec.Source, bSource)
-	if err != nil {
-		internalError(w, "series b→a", err)
-		return
-	}
+	aToB, bToA := series[0], series[1]
 	writeJSON(w, http.StatusOK, map[string]any{
 		"metric": metric, "window": windowName(r),
 		"resolution_s": int(spec.Bucket.Seconds()),
@@ -620,9 +604,9 @@ func (a *api) handleSeries(w http.ResponseWriter, r *http.Request) {
 		"network":      r.URL.Query().Get("network"),
 		// Top-level latency_source predates directional sources; it stays
 		// as the a_to_b alias so pre-M5 clients keep an honest axis label.
-		"latency_source": aSource,
-		"a_to_b":         map[string]any{"latency_source": aSource, "points": toPoints(aToB)},
-		"b_to_a":         map[string]any{"latency_source": bSource, "points": toPoints(bToA)},
+		"latency_source": aToB.LatencySource,
+		"a_to_b":         map[string]any{"latency_source": aToB.LatencySource, "points": toPoints(aToB.Points)},
+		"b_to_a":         map[string]any{"latency_source": bToA.LatencySource, "points": toPoints(bToA.Points)},
 	})
 }
 

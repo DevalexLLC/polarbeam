@@ -232,20 +232,18 @@ func (a *api) handleTraceroute(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	aToB, err := a.db.CurrentPaths(r.Context(), ea.AgentIDs, eb.TargetIDs)
+	paths, err := a.db.CurrentPathsBatch(r.Context(), []store.DirectionKey{
+		{SrcAgents: ea.AgentIDs, DstTargets: eb.TargetIDs},
+		{SrcAgents: eb.AgentIDs, DstTargets: ea.TargetIDs},
+	})
 	if err != nil {
-		internalError(w, "traceroute a→b", err)
-		return
-	}
-	bToA, err := a.db.CurrentPaths(r.Context(), eb.AgentIDs, ea.TargetIDs)
-	if err != nil {
-		internalError(w, "traceroute b→a", err)
+		internalError(w, "traceroute", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"a": ea.Name, "b": eb.Name,
-		"a_to_b": map[string]any{"paths": toCurrentPathJSON(aToB)},
-		"b_to_a": map[string]any{"paths": toCurrentPathJSON(bToA)},
+		"a_to_b": map[string]any{"paths": toCurrentPathJSON(paths[0])},
+		"b_to_a": map[string]any{"paths": toCurrentPathJSON(paths[1])},
 	})
 }
 
@@ -286,19 +284,17 @@ func (a *api) handlePathMTU(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	aToB, err := a.db.CurrentPathMTUs(r.Context(), ea.AgentIDs, eb.TargetIDs)
+	mtus, err := a.db.CurrentPathMTUsBatch(r.Context(), []store.DirectionKey{
+		{SrcAgents: ea.AgentIDs, DstTargets: eb.TargetIDs},
+		{SrcAgents: eb.AgentIDs, DstTargets: ea.TargetIDs},
+	})
 	if err != nil {
-		internalError(w, "path MTU a→b", err)
-		return
-	}
-	bToA, err := a.db.CurrentPathMTUs(r.Context(), eb.AgentIDs, ea.TargetIDs)
-	if err != nil {
-		internalError(w, "path MTU b→a", err)
+		internalError(w, "path MTU", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"a": ea.Name, "b": eb.Name,
-		"a_to_b": map[string]any{"mtus": toCurrentMTUJSON(aToB)},
-		"b_to_a": map[string]any{"mtus": toCurrentMTUJSON(bToA)},
+		"a_to_b": map[string]any{"mtus": toCurrentMTUJSON(mtus[0])},
+		"b_to_a": map[string]any{"mtus": toCurrentMTUJSON(mtus[1])},
 	})
 }

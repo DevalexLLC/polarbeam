@@ -79,16 +79,17 @@ type agentReader interface {
 	AgentBucketFailures(ctx context.Context, agentID uuid.UUID, bucketStart time.Time, bucket time.Duration, probeID *uuid.UUID, excludeProbeType int16, networks []uuid.UUID) ([]store.AgentBucketFailureGroup, error)
 }
 
-// dashboardReader is the matrix and site-pair read surface.
+// dashboardReader is the matrix and site-pair read surface. The pair reads
+// are batched (issue #126): the handlers hand the store every direction of
+// a page at once and the store pipelines the statements, so a page load
+// costs a fixed handful of round trips instead of O(directions).
 type dashboardReader interface {
 	ListSites(ctx context.Context, networks []uuid.UUID) ([]store.SiteInfo, error)
 	MatrixLatest(ctx context.Context, horizon time.Duration, networks []uuid.UUID) ([]store.MatrixRow, error)
 	ExpectedPairs(ctx context.Context, networks []uuid.UUID) ([]store.NetworkPair, error)
-	SiteEndpoints(ctx context.Context, siteName string, networks []uuid.UUID) (*store.SiteEndpoints, error)
-	PairSeries(ctx context.Context, srcAgents, dstTargets []uuid.UUID, bucket, window time.Duration, source store.Source, latencySource string) ([]store.SeriesBucket, error)
-	PairSummary(ctx context.Context, srcAgents, dstTargets []uuid.UUID, window time.Duration, source store.Source) (*store.PairSummaryRow, error)
-	PairLatencySource(ctx context.Context, srcAgents, dstTargets []uuid.UUID, window time.Duration, source store.Source) (string, error)
-	DirectionLatest(ctx context.Context, srcAgents, dstTargets []uuid.UUID, horizon time.Duration) ([]store.MatrixRow, error)
+	SiteEndpointsBatch(ctx context.Context, names []string, networks []uuid.UUID) ([]*store.SiteEndpoints, error)
+	PairDirectionSummaries(ctx context.Context, dirs []store.DirectionKey, window time.Duration, source store.Source, horizon time.Duration) ([]store.DirectionSummary, error)
+	PairDirectionSeries(ctx context.Context, dirs []store.DirectionKey, bucket, window time.Duration, source store.Source) ([]store.DirectionSeries, error)
 }
 
 // targetDetailReader is the per-target drill-down read surface.
@@ -145,8 +146,8 @@ type eventReader interface {
 	ListOutages(ctx context.Context, window time.Duration, networks []uuid.UUID, includeRoutes bool) ([]store.OutageInfo, bool, error)
 	ListPathEvents(ctx context.Context, window time.Duration, networks []uuid.UUID) ([]store.PathEventInfo, error)
 	QueryPathEvents(ctx context.Context, window time.Duration, f store.PathEventFilter) ([]store.PathEventInfo, int64, bool, error)
-	CurrentPaths(ctx context.Context, srcAgents, dstTargets []uuid.UUID) ([]store.CurrentPath, error)
-	CurrentPathMTUs(ctx context.Context, srcAgents, dstTargets []uuid.UUID) ([]store.CurrentPathMTU, error)
+	CurrentPathsBatch(ctx context.Context, dirs []store.DirectionKey) ([][]store.CurrentPath, error)
+	CurrentPathMTUsBatch(ctx context.Context, dirs []store.DirectionKey) ([][]store.CurrentPathMTU, error)
 }
 
 // bannerStore is the UI banner read/write surface.
