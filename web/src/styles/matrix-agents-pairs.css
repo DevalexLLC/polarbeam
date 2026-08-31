@@ -1,0 +1,479 @@
+/* ---- signal board (matrix) ---- */
+
+table.matrix {
+  border-collapse: separate;
+  border-spacing: 2px;
+  margin: 0 auto;
+}
+
+table.matrix th {
+  padding: 0.3rem 0.45rem;
+  font-weight: 600;
+  font-size: 0.76rem;
+  color: var(--ink-2);
+}
+
+table.matrix thead th {
+  text-align: center;
+  vertical-align: bottom;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface);
+}
+
+table.matrix tbody th {
+  text-align: right;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+
+table.matrix th.corner {
+  text-align: right;
+  vertical-align: bottom;
+  left: 0;
+  z-index: 3;
+  line-height: 1.35;
+}
+
+table.matrix td {
+  min-width: 5.5rem;
+  border-radius: var(--radius);
+  text-align: center;
+}
+
+table.matrix td.diag {
+  background: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 5px,
+    color-mix(in srgb, var(--ink-3) 12%, transparent) 5px,
+    color-mix(in srgb, var(--ink-3) 12%, transparent) 6px
+  );
+}
+
+table.matrix td.empty {
+  color: var(--ink-3);
+  background: var(--surface-2);
+  padding: 0.5rem 0.45rem;
+  font-size: 0.75rem;
+}
+
+table.matrix td.cell {
+  padding: 0;
+}
+
+table.matrix td.cell > a {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.35rem 0.45rem 0.4rem;
+  color: var(--ink);
+  text-decoration: none;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+}
+
+table.matrix td.cell > a:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+
+.cell-value {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.cell-sub {
+  max-width: 11rem;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: var(--ink-2);
+}
+
+.cell-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  color: var(--ink-2);
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.cell-status .dot {
+  width: 6px;
+  height: 6px;
+}
+
+td.status-ok {
+  background: var(--status-ok-bg);
+  box-shadow: inset 0 -2px 0 var(--status-ok);
+}
+td.status-degraded {
+  background: var(--status-degraded-bg);
+  box-shadow: inset 0 -2px 0 var(--status-degraded);
+}
+td.status-down {
+  background: var(--status-down-bg);
+  box-shadow: inset 0 -2px 0 var(--status-down);
+}
+td.status-stale {
+  background: var(--status-stale-bg);
+  box-shadow: inset 0 -2px 0 var(--status-stale);
+}
+
+td.status-down .cell-value {
+  color: var(--status-down);
+}
+td.status-stale .cell-value {
+  color: var(--ink-3);
+}
+
+.legend {
+  display: flex;
+  gap: 1.2rem;
+  margin-top: 1rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--ink-2);
+  font-size: 0.8rem;
+}
+
+.swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex: none;
+}
+
+.swatch.status-ok {
+  background: var(--status-ok);
+}
+.swatch.status-degraded {
+  background: var(--status-degraded);
+}
+.swatch.status-down {
+  background: var(--status-down);
+}
+.swatch.status-stale {
+  background: var(--status-stale);
+}
+.swatch.series-a {
+  background: var(--series-a);
+}
+.swatch.series-b {
+  background: var(--series-b);
+}
+
+/* ---- agents panel ---- */
+
+table.agents {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+table.agents th {
+  text-align: left;
+  padding: 0.35rem 0.9rem 0.35rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+table.agents td {
+  padding: 0.45rem 0.9rem 0.45rem 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--ink-2);
+}
+
+table.agents td.mono {
+  color: var(--ink);
+}
+
+table.agents tr:last-child td {
+  border-bottom: none;
+}
+
+.seen-live {
+  color: var(--status-ok);
+}
+.seen-gone {
+  color: var(--status-down);
+}
+
+/* ---- pair detail ---- */
+
+.controls {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.25rem;
+}
+
+/* Template-style segmented control: recessed track, raised active segment. */
+.control-group {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.control-group button {
+  min-height: 32px;
+  padding: 0.3rem 0.85rem;
+  font: inherit;
+  font-size: 0.83rem;
+  font-weight: 550;
+  border: 1px solid transparent;
+  border-radius: calc(var(--radius) - 3px);
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.control-group button.active {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-card);
+}
+
+.control-group button:hover:not(.active) {
+  color: var(--ink);
+}
+
+.pair-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1.25rem;
+  margin-bottom: 1.25rem;
+}
+
+.pair-card {
+  padding: 1rem 1.2rem 1.1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.pair-card.dir-a {
+  border-top: 3px solid var(--series-a);
+}
+.pair-card.dir-b {
+  border-top: 3px solid var(--series-b);
+}
+
+.pair-card h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.8rem;
+  font-size: 1rem;
+}
+
+.pair-headline {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  margin-bottom: 0.7rem;
+}
+
+.pair-headline .big {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 1.7rem;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.pair-headline .big .unit {
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+
+.pair-card dl {
+  margin: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.pair-card dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.pair-card dt {
+  color: var(--ink-3);
+  font-size: 0.82rem;
+}
+
+.pair-card dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.88rem;
+}
+
+.check-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.9rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--border);
+}
+
+.check-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.18rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.check-chip strong {
+  color: var(--ink);
+  font-weight: 650;
+}
+
+/* A chip that is a link (pair detail → target detail) keeps the chip look;
+   affordance is the hover lift, mirroring table.matrix cell links. */
+a.check-chip {
+  text-decoration: none;
+  cursor: pointer;
+}
+
+a.check-chip:hover {
+  border-color: var(--border-strong);
+  color: var(--ink);
+  transform: translateY(-1px);
+}
+
+.check-indicator {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--status-down);
+}
+
+.check-ok .check-indicator {
+  background: var(--status-ok);
+}
+
+.metric-source {
+  margin-left: auto;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--ink-2);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.status-text-ok {
+  color: var(--status-ok);
+  font-weight: 650;
+}
+.status-text-degraded {
+  color: var(--status-degraded);
+  font-weight: 650;
+}
+.status-text-down {
+  color: var(--status-down);
+  font-weight: 650;
+}
+.status-text-stale {
+  color: var(--ink-3);
+  font-weight: 650;
+}
+
+.chart-card {
+  padding-bottom: 0.9rem;
+}
+
+.chart-card > h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.95rem;
+  margin: 0 0 0.7rem;
+}
+
+.chart-host {
+  width: 100%;
+}
+
+.chart-host-empty {
+  display: none;
+}
+
+.chart-investigation-controls {
+  display: flex;
+  min-height: var(--control-target);
+  align-items: center;
+  gap: 0.55rem;
+  margin: -0.25rem 0 0.35rem;
+}
+
+.chart-investigation-mode {
+  font-weight: 650;
+}
+
+.chart-investigation-mode.active {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.chart-investigation-controls .secondary-button {
+  min-height: var(--control-target);
+}
+
+.chart-empty {
+  display: grid;
+  place-items: center;
+  min-height: 180px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  padding: 1rem;
+}
+
+.chart-empty p {
+  margin: 0;
+  max-width: 46ch;
+  text-align: center;
+  color: var(--ink-2);
+  font-size: 0.88rem;
+}
+
+.chart-empty .linklike {
+  font-size: inherit;
+}
+
+/* uPlot chrome follows the theme */
+.u-legend {
+  color: var(--ink-2);
+  font-size: 0.78rem;
+  font-family: var(--mono);
+}

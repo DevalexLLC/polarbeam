@@ -1,0 +1,523 @@
+/* ---- Shared operational data table ---- */
+
+.data-table-root {
+  min-width: 0;
+  outline: none;
+}
+
+.data-table-root:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Pagination bounds row count, so only wide content scrolls (horizontally);
+   vertical scrolling belongs to the page. */
+.data-table-desktop {
+  overflow-x: auto;
+}
+
+table.data-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.85rem;
+}
+
+table.data-table th {
+  padding: 0.45rem 0.8rem;
+  border-bottom: 1px solid var(--border-strong);
+  color: var(--ink-3);
+  background: var(--surface);
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+table.data-table td {
+  padding: 0.5rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  /* Disclosure/action buttons set the row height and center themselves;
+     middle keeps the text cells on the same visual line. */
+  vertical-align: middle;
+}
+
+table.data-table tbody tr:hover > td {
+  background: var(--surface-2);
+}
+
+table.data-table tbody tr.selected-row > td {
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+table.data-table tbody tr:last-child > td {
+  border-bottom: 0;
+}
+
+.data-table-sort {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 30px;
+  align-items: center;
+  gap: 0.35rem;
+  margin: -0.25rem -0.4rem;
+  padding: 0.25rem 0.4rem;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+.data-table-sort:hover,
+.data-table-sort:focus-visible {
+  color: var(--accent);
+}
+
+.data-table-sort-mark {
+  font-size: 0.85rem;
+}
+
+.data-table-disclosure-cell,
+.data-table-actions-cell {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.data-table-disclosure {
+  display: inline-flex;
+  min-width: var(--minimum-target);
+  min-height: var(--control-target);
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.2rem 0.35rem;
+  border: 0;
+  color: var(--accent);
+  background: transparent;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.data-table-detail-row > td,
+.data-table-detail {
+  background: var(--surface-2);
+}
+
+.data-table-actions {
+  position: relative;
+}
+
+.data-table-actions-toggle {
+  min-height: var(--control-target);
+}
+
+.data-table-actions-menu {
+  position: fixed;
+  z-index: 20;
+  display: flex;
+  min-width: 10rem;
+  max-width: calc(100vw - 0.5rem);
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.5rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.16);
+}
+
+.data-table-actions-menu > * {
+  width: 100%;
+}
+
+.data-table-mobile {
+  display: none;
+}
+
+.data-table-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.9rem 0.25rem 0.15rem;
+}
+
+.data-table-pager-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.data-table-refresh-error {
+  margin-bottom: 0.75rem;
+}
+
+.data-table-context {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.85rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+@media (max-width: 760px) {
+  .data-table-desktop {
+    display: none;
+  }
+
+  .data-table-mobile {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.65rem;
+  }
+
+  .data-table-mobile-row {
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+  }
+
+  .data-table-mobile-row.selected-row {
+    border-color: var(--accent);
+  }
+
+  .data-table-mobile-primary,
+  .data-table-mobile-secondary {
+    display: grid;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.55rem 0.8rem;
+    padding: 0.75rem;
+  }
+
+  .data-table-mobile-secondary {
+    grid-template-columns: 1fr;
+    border-top: 1px solid var(--border);
+    background: var(--surface-2);
+  }
+
+  .data-table-mobile-field {
+    min-width: 0;
+  }
+
+  .data-table-identity,
+  .data-table-primary {
+    grid-column: 1;
+  }
+
+  .data-table-status {
+    grid-column: 2;
+    grid-row: 1;
+    text-align: right;
+  }
+
+  .data-table-mobile-label {
+    display: block;
+    margin-bottom: 0.12rem;
+    color: var(--ink-3);
+    font-size: 0.75rem;
+    font-weight: 650;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .data-table-mobile-field > div {
+    overflow-wrap: anywhere;
+  }
+
+  .data-table-mobile-row > .data-table-disclosure {
+    width: 100%;
+    min-height: 44px;
+    padding: 0.45rem 0.75rem;
+    border-top: 1px solid var(--border);
+    text-align: left;
+  }
+
+  .data-table-mobile-row > .data-table-detail {
+    padding: 0.75rem;
+    border-top: 1px solid var(--border);
+  }
+
+  .data-table-mobile-row > .data-table-actions {
+    padding: 0.45rem 0.75rem 0.65rem;
+    border-top: 1px solid var(--border);
+  }
+
+  .data-table-mobile-row .data-table-actions-toggle {
+    width: 100%;
+  }
+
+  .data-table-pager {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .data-table-context {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .data-table-pager-actions > button {
+    flex: 1;
+  }
+}
+
+.incident-details .progressive-footer {
+  border-top: 1px solid var(--border);
+}
+
+.settings-card {
+  max-width: 52rem;
+}
+.section-intro {
+  max-width: 45rem;
+  margin: -0.25rem 0 1.25rem;
+  color: var(--ink-2);
+}
+.threshold-settings-page .threshold-panel {
+  position: static;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.threshold-settings-page .threshold-grid {
+  max-width: 38rem;
+  gap: 1rem 2rem;
+}
+
+.threshold-settings-page .threshold-input input {
+  width: min(12rem, 100%);
+  min-height: 40px;
+  padding: 0.5rem 0.65rem;
+}
+
+/* Login is part of the product, not an isolated utility form. */
+.login-wrap {
+  grid-template-columns: minmax(22rem, 31rem) minmax(22rem, 26rem);
+  justify-content: center;
+  gap: clamp(3rem, 6vw, 5rem);
+  padding: 2rem;
+}
+
+.login-context {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.login-context-mark {
+  width: 64px;
+  height: 64px;
+  margin-bottom: 2rem;
+}
+.login-context .login-headline {
+  max-width: 12ch;
+  margin: 0.35rem 0 1rem;
+  font-size: clamp(2.5rem, 4vw, 3.8rem);
+  /* Was a heading; the paragraph keeps its rendered weight. */
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.05em;
+}
+.login-context p {
+  max-width: 34rem;
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 1rem;
+}
+.login-signals {
+  display: flex;
+  align-items: flex-end;
+  gap: 7px;
+  height: 54px;
+  margin-top: 2.2rem;
+}
+.login-signals span {
+  display: block;
+  width: 5rem;
+  height: 2px;
+  background: var(--accent);
+}
+.login-signals span:nth-child(2) {
+  width: 2rem;
+  height: 8px;
+  background: var(--status-ok);
+}
+.login-signals span:nth-child(3) {
+  width: 7rem;
+  background: var(--series-b);
+}
+.login-signals span:nth-child(4) {
+  width: 1rem;
+  height: 14px;
+  background: var(--status-degraded);
+}
+.login-card {
+  width: 100%;
+  padding: 2.4rem;
+  box-shadow: 0 22px 60px rgb(0 0 0 / 0.12);
+}
+.login-sub {
+  margin: -0.35rem 0 0.5rem;
+  color: var(--ink-2);
+  font-size: 0.86rem;
+  text-align: center;
+}
+
+@media (max-width: 1100px) {
+  .overview-connectivity,
+  .overview-fleet {
+    grid-column: span 12;
+  }
+  /* Stacked, nothing constrains the fleet card's height — cap the scroll
+     region so a long fleet doesn't swallow the page. */
+  .fleet-scroll {
+    max-height: 420px;
+  }
+  .stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .login-wrap {
+    grid-template-columns: 1fr;
+    padding: 1rem;
+  }
+  .login-context {
+    display: none;
+  }
+  .login-card {
+    max-width: 24rem;
+    margin: auto;
+    padding: 2rem 1.4rem;
+  }
+}
+
+@media (max-width: 760px) {
+  .topbar {
+    position: static;
+  }
+  .page-head-primary {
+    margin-bottom: 1rem;
+  }
+  .page-actions,
+  .view-toolbar {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+  .view-toolbar > :last-child {
+    margin-left: 0;
+  }
+  .search-field {
+    max-width: none;
+    flex-basis: 100%;
+    order: -1;
+  }
+  .incident-toolbar .control-group:last-child {
+    overflow-x: auto;
+  }
+  /* The role/status segmented controls are wider than the narrowest
+     reflow viewport (320px); like the incident toolbar's, they pan
+     within themselves instead of widening the page. */
+  .users-toolbar .control-group {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .incident-summary {
+    grid-template-columns: auto 1fr auto;
+    gap: 0.7rem;
+  }
+  .incident-impact {
+    grid-column: 2;
+  }
+  .incident-meta {
+    grid-column: 2;
+  }
+  /* Scoped to the incident header: .incident-toggle is also worn by the
+     Agents rows' detail button, which must not inherit this grid slot
+     inside the stacked mobile table cells. */
+  .incident-summary .incident-toggle {
+    grid-column: 3;
+    grid-row: 1 / span 3;
+  }
+  .incident-details {
+    padding-left: 1.25rem;
+    overflow-x: auto;
+  }
+  .incident-detail-head,
+  .incident-instance {
+    min-width: 46rem;
+  }
+  .threshold-settings-page .threshold-grid {
+    grid-template-columns: 1fr;
+  }
+  .threshold-settings-page .threshold-input input {
+    width: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  .stat-grid {
+    grid-template-columns: 1fr;
+  }
+  .overview-main-row {
+    display: block;
+  }
+  .overview-main-row > .card {
+    margin-right: -0.85rem;
+    margin-bottom: 1rem;
+    margin-left: -0.85rem;
+    border-right: 0;
+    border-left: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .topology-sites {
+    margin-right: -0.95rem;
+    margin-left: -0.95rem;
+    border-right: 0;
+    border-left: 0;
+    border-radius: 0;
+  }
+  .topology-site-summary {
+    grid-template-columns: auto minmax(0, 1fr);
+    min-height: 64px;
+  }
+  .topology-site-health {
+    grid-column: 2;
+    text-align: left;
+  }
+  .topology-site-detail {
+    padding-left: 2.45rem;
+  }
+  .progressive-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .state-spinner {
+    animation: none;
+  }
+
+  .disclosure-chevron {
+    transition: none;
+  }
+}

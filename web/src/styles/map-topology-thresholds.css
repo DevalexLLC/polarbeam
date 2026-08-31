@@ -1,0 +1,604 @@
+/* ---- shared dot-matrix operations map ---- */
+
+.worldmap-shell {
+  position: relative;
+}
+
+.map-zoom-readout {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.5rem;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  pointer-events: none;
+}
+
+.worldmap {
+  display: block;
+  width: 100%;
+  height: auto;
+  cursor: grab;
+  touch-action: pan-y;
+  user-select: none;
+}
+
+.worldmap:focus-visible {
+  border-radius: var(--radius);
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.worldmap.map-dragging {
+  cursor: grabbing;
+}
+
+.map-bg {
+  fill: transparent;
+}
+
+.map-dotgrid {
+  fill: none;
+  stroke: var(--map-dot);
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+
+/* Interactive twin of each bubble: a real button layered over the svg so
+   markers are reliably focusable and browse-mode readable while the svg
+   stays a decorative image. Transparent — the bubble underneath is the
+   visual — and sized to the touch target (the visible mark alone can be a
+   small target at phone viewports). The layer clips buttons whose sites
+   sit outside the current viewport; it is pointer-inert so drags between
+   markers reach the pan surface. */
+.map-markers {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* button.* beats the global control-target rule's specificity: these
+   buttons manage their own hit geometry (markers honor the coarse-pointer
+   target through their inline size; slots ARE the strip's cells), and the
+   global min-width/min-height would inflate and overlap them. */
+button.map-marker {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+/* Leader marks tie a decluttered bubble back to its true projection.
+   Neutral ink, not the severity color — the layer sits outside .map-site
+   (for z-order), and alarms stay the map's only pop of color. */
+.map-leaders {
+  pointer-events: none;
+}
+
+.map-leader {
+  stroke: var(--ink-3);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+  opacity: 0.6;
+}
+
+.map-anchor-dot {
+  fill: var(--ink-3);
+  opacity: 0.7;
+}
+
+/* Healthy sites wear the template's translucent accent (the map's own
+   operations palette, as the carrier cyan did before); anything wrong takes
+   the status ramp so alarms are the only thing that pops. warn and crit are
+   both publicly "Degraded" — crit is a stronger intensity, never a new
+   state. */
+.map-site {
+  --map-bubble-color: var(--status-stale);
+}
+
+.map-site.sev-ok {
+  --map-bubble-color: var(--accent);
+}
+
+.map-site.sev-warn,
+.map-site.sev-crit {
+  --map-bubble-color: var(--status-degraded);
+}
+
+.map-site.sev-down {
+  --map-bubble-color: var(--status-down);
+}
+
+.map-bubble {
+  fill: color-mix(in srgb, var(--map-bubble-color) 24%, transparent);
+  stroke: color-mix(in srgb, var(--map-bubble-color) 70%, transparent);
+  stroke-width: 1;
+  transition: fill 140ms ease;
+}
+
+.map-site.sev-crit .map-bubble {
+  fill: color-mix(in srgb, var(--map-bubble-color) 32%, transparent);
+  stroke: color-mix(in srgb, var(--map-bubble-color) 85%, transparent);
+  stroke-width: 1.5;
+}
+
+.map-site.hovered .map-bubble,
+.map-site.pinned .map-bubble {
+  fill: color-mix(in srgb, var(--map-bubble-color) 34%, transparent);
+}
+
+.map-bubble-core {
+  fill: var(--map-bubble-color);
+}
+
+.map-selection {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1.2;
+  opacity: 0.55;
+}
+
+.map-legend {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem 1rem;
+  flex-wrap: wrap;
+  margin-top: 0.6rem;
+  color: var(--ink-3);
+  font-size: 0.75rem;
+}
+
+.map-legend .legend-item {
+  color: inherit;
+  font-size: inherit;
+}
+
+.map-legend-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  vertical-align: -1px;
+}
+
+.map-legend-dot.sev-ok {
+  background: var(--accent);
+}
+.map-legend-dot.sev-warn {
+  background: var(--status-degraded);
+}
+.map-legend-dot.sev-down {
+  background: var(--status-down);
+}
+.map-legend-dot.sev-stale {
+  background: var(--status-stale);
+}
+.map-legend-hint {
+  margin-left: auto;
+}
+
+.map-keys-hint {
+  margin: 0.5rem 0 0;
+}
+
+/* Site info card, template style: name + status, headline value, severity
+   breakdown bar. Position tracks the bubble in map %-space. */
+.map-tip {
+  position: absolute;
+  z-index: 3;
+  min-width: 13rem;
+  max-width: 17rem;
+  padding: 0.7rem 0.85rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.18);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  /* Interactive — it carries pair links; hover persistence is handled by
+     the delayed-clear logic in WorldMap.tsx. */
+  transform: translate(18px, -50%);
+}
+
+.map-tip-left {
+  transform: translate(calc(-100% - 18px), -50%);
+}
+
+.map-tip-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.map-tip-head b {
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.map-tip-pill {
+  padding: 0.05rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.map-tip-pill.sev-ok {
+  color: var(--status-ok);
+  background: var(--status-ok-bg);
+}
+.map-tip-pill.sev-warn,
+.map-tip-pill.sev-crit {
+  color: var(--status-degraded);
+  background: var(--status-degraded-bg);
+}
+.map-tip-pill.sev-down {
+  color: var(--status-down);
+  background: var(--status-down-bg);
+}
+.map-tip-pill.sev-stale {
+  color: var(--ink-3);
+  background: var(--status-stale-bg);
+}
+
+.map-tip-sub {
+  color: var(--ink-3);
+  font-size: 0.75rem;
+}
+
+.map-tip-value {
+  margin-top: 0.35rem;
+  font-size: 1.25rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.map-tip-value small {
+  color: var(--ink-3);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.map-tip-bar {
+  display: flex;
+  gap: 2px;
+  height: 5px;
+  margin-top: 0.45rem;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.map-tip-bar-seg {
+  min-width: 3px;
+  border-radius: 3px;
+}
+
+.map-tip-bar-seg.sev-ok {
+  background: var(--accent);
+}
+.map-tip-bar-seg.sev-warn,
+.map-tip-bar-seg.sev-crit {
+  background: var(--status-degraded);
+}
+.map-tip-bar-seg.sev-down {
+  background: var(--status-down);
+}
+.map-tip-bar-seg.sev-stale {
+  background: var(--status-stale);
+}
+
+.map-tip-caption {
+  margin-top: 0.3rem;
+  color: var(--ink-2);
+  font-size: 0.75rem;
+}
+
+.map-tip-links {
+  display: flex;
+  flex-direction: column;
+  max-height: 8.5rem;
+  margin-top: 0.45rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+.map-tip-links a {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.18rem 0.1rem;
+  border-radius: calc(var(--radius) - 4px);
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 550;
+  text-decoration: none;
+}
+
+.map-tip-links a:hover,
+.map-tip-links a:focus-visible {
+  background: var(--surface-2);
+}
+
+.map-tip-link-arrow {
+  color: var(--ink-3);
+}
+
+.map-tip-links a:hover .map-tip-link-arrow {
+  color: var(--accent);
+}
+
+.map-empty {
+  padding: 0.4rem 0;
+}
+
+.map-missing {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+}
+
+.swatch.sev-ok {
+  background: var(--status-ok);
+}
+.swatch.sev-warn {
+  background: var(--status-warn);
+}
+.swatch.sev-crit {
+  background: var(--status-crit);
+}
+.swatch.sev-down {
+  background: var(--status-down);
+}
+.swatch.sev-stale {
+  background: var(--status-stale);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .map-bubble {
+    transition: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .map-legend-hint {
+    display: none;
+  }
+}
+
+/* Health-ranked topology list: rows rather than nested cards keep dense
+   deployments scannable and flatten naturally at the phone breakpoint. */
+.topology-sites {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  list-style: none;
+}
+
+.topology-site + .topology-site {
+  border-top: 1px solid var(--border);
+}
+
+.topology-site-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(10rem, auto);
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.7rem 0.8rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.topology-site-summary:hover,
+.topology-site-summary[aria-expanded='true'] {
+  background: var(--surface-2);
+}
+
+.topology-site-identity,
+.topology-site-health {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.topology-site-identity > strong,
+.topology-site-identity > span,
+.topology-site-health > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topology-site-identity > span,
+.topology-site-health > span {
+  color: var(--ink-3);
+  font-size: 0.78rem;
+}
+
+.topology-site-health {
+  text-align: right;
+}
+
+.topology-site-ok .topology-site-health > strong {
+  color: var(--status-ok);
+}
+
+.topology-site-warn .topology-site-health > strong,
+.topology-site-crit .topology-site-health > strong {
+  color: var(--status-degraded);
+}
+
+.topology-site-down .topology-site-health > strong {
+  color: var(--status-down);
+}
+
+.topology-site-stale .topology-site-health > strong {
+  color: var(--ink-3);
+}
+
+.topology-site-detail {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem 1rem;
+  flex-wrap: wrap;
+  padding: 0.65rem 0.8rem 0.75rem 2.15rem;
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+  color: var(--ink-2);
+  font-size: 0.8rem;
+}
+
+.topology-site-peers {
+  display: flex;
+  gap: 0.35rem 0.8rem;
+  flex-wrap: wrap;
+}
+
+.topology-site-peers a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.topology-site-peers a:hover,
+.topology-site-peers a:focus-visible {
+  text-decoration: underline;
+}
+
+/* ---- threshold settings panel ---- */
+
+.threshold-settings {
+  position: relative;
+}
+
+.threshold-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.5rem);
+  z-index: 10;
+  width: min(30rem, 86vw);
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 0.16);
+}
+
+.threshold-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem 1rem;
+}
+
+.threshold-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.threshold-input {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.threshold-input input {
+  width: 6rem;
+  padding: 0.35rem 0.5rem;
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius);
+}
+
+.threshold-input input:disabled {
+  opacity: 0.6;
+}
+
+.threshold-input input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.threshold-errors {
+  margin: 0.6rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.82rem;
+}
+
+.threshold-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+}
+
+.threshold-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+/* Generalized primary action (originally scoped to .threshold-foot; the
+   config forms reuse it). */
+button.primary {
+  padding: 0.4rem 0.9rem;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--accent-ink);
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+button.primary:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
+button.danger-button {
+  padding: 0.4rem 0.9rem;
+  border: none;
+  border-radius: var(--radius);
+  background: var(--status-down);
+  color: var(--accent-ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+@media (max-width: 560px) {
+  .threshold-grid {
+    grid-template-columns: 1fr;
+  }
+}

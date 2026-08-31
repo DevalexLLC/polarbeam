@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { SETTINGS_GROUPS, SETTINGS_TABS } from '../src/settingsTabs.ts'
 import { canonicalSnapshot, serverSnapshotChanged, synchronizeDraftBaseline } from '../src/settingsSnapshot.ts'
+import { readStyles } from './util/styles.mjs'
 
 test('settings navigation has the required groups and one canonical subsection per tab', () => {
   assert.deepEqual(
@@ -72,7 +73,7 @@ test('settings mutation boundary guards navigation and standardizes feedback', a
 test('destructive settings actions name the resource and consequence in one dialog', async () => {
   const button = await readFile(new URL('../src/components/ConfirmButton.tsx', import.meta.url), 'utf8')
   const provider = await readFile(new URL('../src/settingsMutation.tsx', import.meta.url), 'utf8')
-  const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8')
+  const styles = readStyles()
   assert.match(button, /resource: string/)
   assert.match(button, /consequence: string/)
   assert.doesNotMatch(button, /armed|ARM_MS/)
@@ -158,7 +159,7 @@ test('create collisions preserve target input and destructive labels use verbs',
 
 test('session changes clear notifications and banner layout offsets the sticky sidebar', async () => {
   const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8')
-  const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8')
+  const styles = readStyles()
   assert.match(app, /useEffect\(\(\) => clearNotifications\(\), \[clearNotifications, user\]\)/)
   assert.match(app, /guardAction\(\(\) => void logout\(\)\)/)
   assert.match(styles, /\.banner-frame \.settings-sidebar[\s\S]*top: calc\(5rem \+ var\(--banner-h\)\)/)

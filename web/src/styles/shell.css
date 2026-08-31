@@ -1,0 +1,456 @@
+/* ---- Unified product shell and operator workspace ---- */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip-link {
+  position: fixed;
+  top: 0.5rem;
+  left: 0.5rem;
+  z-index: 100;
+  padding: 0.55rem 0.8rem;
+  border-radius: var(--radius);
+  color: var(--accent-ink);
+  background: var(--accent);
+  transform: translateY(-150%);
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+/* ---- UI banner (Settings → Banner) ----
+   Two sticky in-flow bands framing every screen. The wrapper only exists
+   while the banner is enabled, so every override below is scoped under it
+   and the banner-off layout is untouched. */
+.banner-frame {
+  --banner-h: 28px;
+  display: flex;
+  min-height: 100dvh;
+  flex-direction: column;
+}
+
+.banner-frame > :not(.ui-banner) {
+  flex: 1 0 auto;
+}
+
+.ui-banner {
+  /* The .eyebrow engraved-label treatment, centered in a slim band.
+     Block + line-height (not flex) so text-overflow can ellipsize. */
+  position: sticky;
+  z-index: 60; /* above .topbar (50), below .skip-link (100) */
+  overflow: hidden;
+  height: var(--banner-h);
+  flex: none;
+  padding: 0 1rem;
+  background: var(--surface-2);
+  color: var(--ink-3);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  line-height: var(--banner-h);
+  text-align: center;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.ui-banner-top {
+  top: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.ui-banner-bottom {
+  bottom: 0;
+  border-top: 1px solid var(--border);
+}
+
+.banner-frame .topbar {
+  top: var(--banner-h);
+}
+
+/* Only the FOCUSED skip-link moves below the band — offsetting `top` would
+   also shift the hidden state back into view. */
+.banner-frame .skip-link:focus {
+  transform: translateY(var(--banner-h));
+}
+
+/* The full-viewport screens give back the two band heights so the frame
+   never overflows an unscrolled viewport. */
+.banner-frame .login-wrap,
+.banner-frame .boot-state {
+  min-height: calc(100dvh - 2 * var(--banner-h));
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  min-height: 64px;
+  padding: 0.65rem max(1.25rem, calc((100vw - 1440px) / 2));
+  box-shadow: 0 1px 0 rgb(0 0 0 / 0.04);
+}
+
+.topnav {
+  align-self: stretch;
+  align-items: center;
+}
+
+.topnav a {
+  position: relative;
+  display: grid;
+  min-height: 36px;
+  place-items: center;
+  padding-inline: 0.75rem;
+  border-radius: var(--radius);
+  font-weight: 550;
+}
+
+.topnav a.active {
+  color: var(--ink);
+  background: var(--surface-2);
+  font-weight: 650;
+}
+
+.topbar-right {
+  gap: 0.8rem;
+}
+
+.theme-toggle {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  cursor: pointer;
+  place-items: center;
+}
+
+.theme-toggle:hover,
+.theme-toggle:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Same hit target and hover treatment as the theme toggle, but a text pill:
+   the label is the state (UTC vs Local), so it must stay readable. */
+.tz-toggle {
+  width: auto;
+  min-width: 40px;
+  padding: 0 0.7rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.theme-toggle-icon {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+.user-menu {
+  position: relative;
+}
+
+.user-menu > summary {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  cursor: pointer;
+  list-style: none;
+  place-items: center;
+}
+
+.user-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.user-menu > summary:hover,
+.user-menu > summary:focus-visible,
+.user-menu[open] > summary,
+.user-menu-current > summary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.user-menu-icon {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+.user-menu-popover {
+  position: absolute;
+  top: calc(100% + 0.55rem);
+  right: 0;
+  z-index: 100;
+  min-width: 13rem;
+  padding: 0.4rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 14px 32px rgb(0 0 0 / 0.16);
+}
+
+.user-menu-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+  margin-bottom: 0.35rem;
+  padding: 0.65rem 0.75rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.user-menu-identity strong {
+  overflow: hidden;
+  font-size: 0.85rem;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-menu-identity span {
+  color: var(--ink-3);
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* One ordered claim-to-role mapping per row: value, role, the networks it
+   grants, and its remove button. Collapses to stacked blocks on narrow
+   screens, where the horizontal rhythm stops helping. */
+.oidc-role-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.4rem 0;
+}
+
+.oidc-role-rule {
+  display: grid;
+  align-items: center;
+  gap: 0.5rem;
+  grid-template-columns: minmax(8rem, 1fr) auto minmax(0, 2fr) auto;
+}
+
+.oidc-role-rule .chips {
+  gap: 0.3rem;
+  margin: 0;
+}
+
+.oidc-role-rule .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+}
+
+.oidc-role-rule .chip input {
+  margin: 0;
+}
+
+@media (max-width: 720px) {
+  .oidc-role-rule {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Checkbox chips for assigning a scoped account's networks. The chip class
+   supplies the pill; this only has to seat the box beside its name. */
+.users-network-picker .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+}
+
+.users-network-picker input {
+  margin: 0;
+}
+
+/* A scoped account's planes, under its role. Lower-case and unspaced: it
+   is a list of names, not a label like the role above it, and a long list
+   must wrap rather than push the popover wide. */
+.user-menu-scope {
+  color: var(--ink-3);
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+  text-transform: none !important;
+}
+
+/* The static plane indicator a single-plane tenant gets in place of the
+   filter popover: same slot in the top bar, but nothing to open. */
+.topbar-plane {
+  align-self: center;
+  white-space: nowrap;
+}
+
+.user-menu-popover > a,
+.user-menu-popover > button {
+  display: block;
+  width: 100%;
+  padding: 0.65rem 0.75rem;
+  border: 0;
+  border-radius: calc(var(--radius) - 2px);
+  color: var(--ink);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.85rem;
+  text-align: left;
+  text-decoration: none;
+}
+
+.user-menu-popover > a:hover,
+.user-menu-popover > a:focus-visible,
+.user-menu-popover > button:hover,
+.user-menu-popover > button:focus-visible {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+
+.user-menu-popover > a[aria-current='page'] {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.user-menu-popover > button:last-child:hover,
+.user-menu-popover > button:last-child:focus-visible {
+  color: var(--status-down);
+  background: var(--status-down-bg);
+}
+
+/* Global filter popover: the user-menu <details> pattern with the
+   theme-toggle's round summary. Absent entirely on single-network installs. */
+.topbar-filter {
+  position: relative;
+}
+
+.topbar-filter > summary {
+  position: relative;
+  display: grid;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  cursor: pointer;
+  list-style: none;
+  place-items: center;
+}
+
+.topbar-filter > summary::-webkit-details-marker {
+  display: none;
+}
+
+.topbar-filter > summary:hover,
+.topbar-filter > summary:focus-visible,
+.topbar-filter[open] > summary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.topbar-filter-icon {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+/* An active filter changes what every view shows, so its marker must read
+   at a glance even with the popover closed. */
+.filter-badge {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.topbar-filter-popover {
+  position: absolute;
+  top: calc(100% + 0.55rem);
+  right: 0;
+  z-index: 100;
+  min-width: 13rem;
+  padding: 0.4rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 14px 32px rgb(0 0 0 / 0.16);
+}
+
+.topbar-filter-heading {
+  display: block;
+  padding: 0.5rem 0.75rem 0.35rem;
+  color: var(--ink-3);
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.topbar-filter-popover button {
+  display: block;
+  width: 100%;
+  padding: 0.65rem 0.75rem;
+  border: 0;
+  border-radius: calc(var(--radius) - 2px);
+  color: var(--ink);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.85rem;
+  text-align: left;
+}
+
+.topbar-filter-popover button:hover,
+.topbar-filter-popover button:focus-visible {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+
+.topbar-filter-popover button[aria-checked='true'] {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}

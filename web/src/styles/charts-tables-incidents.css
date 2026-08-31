@@ -1,0 +1,497 @@
+/* Settings → Users: monthly sign-in chart (stacked local/SSO bars, hover
+   card via .strip-tip like the fleet strips). */
+.login-bars {
+  display: block;
+  width: 100%;
+  height: 140px;
+  margin-top: 0.5rem;
+}
+
+.login-bar-local {
+  fill: var(--chart-local);
+}
+.login-bar-oidc {
+  fill: var(--chart-oidc);
+}
+.login-bar-zero {
+  fill: var(--border-strong);
+}
+
+.login-bars-labels {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  margin-top: 0.35rem;
+  color: var(--ink-3);
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+.login-bars-legend {
+  display: flex;
+  gap: 1rem;
+  margin-top: 0.6rem;
+  color: var(--ink-2);
+  font-size: 0.8rem;
+}
+
+.login-bars-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.swatch.chart-local {
+  background: var(--chart-local);
+}
+.swatch.chart-oidc {
+  background: var(--chart-oidc);
+}
+
+/* Incidents: bucketed timeline (48 slices of the selected window, hover
+   card via .strip-tip like the fleet strips, click filters the groups
+   card below). Colors ride the status vars, so both themes are covered. */
+.itl-wrap {
+  position: relative;
+  margin-top: 0.5rem;
+}
+
+.incident-timeline {
+  display: block;
+  width: 100%;
+  height: 80px;
+}
+
+/* Transparent slice buttons over the timeline: the roving focus targets;
+   min sizes reset for the same reason as button.map-marker. */
+button.itl-slot {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.incident-timeline-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.35rem;
+  color: var(--ink-3);
+  font-size: 0.75rem;
+}
+
+.itl-bar-open.sev-warn {
+  fill: var(--status-warn);
+}
+.itl-bar-open.sev-crit {
+  fill: var(--status-crit);
+}
+.itl-bar-resolved.sev-warn {
+  fill: var(--status-warn);
+  opacity: 0.35;
+}
+.itl-bar-resolved.sev-crit {
+  fill: var(--status-crit);
+  opacity: 0.35;
+}
+.itl-bar-open.sev-down {
+  fill: var(--status-down);
+}
+.itl-bar-resolved.sev-down {
+  fill: var(--status-down);
+  opacity: 0.35;
+}
+.itl-bar-zero {
+  fill: var(--border-strong);
+}
+/* The timeline tip's range labels run long (date+time ranges, sometimes
+   with years); let the pill wrap under the range instead of squeezing it
+   into one-word-per-line. Scoped: other .map-tip heads hold short text. */
+.incident-tip .map-tip-head {
+  flex-wrap: wrap;
+}
+.itl-slot-selected {
+  fill: color-mix(in srgb, var(--ink) 8%, transparent);
+}
+.itl-bar-selected {
+  stroke: var(--ink);
+  stroke-width: 1.25;
+  /* Keeps the outline uniform: preserveAspectRatio="none" would otherwise
+     stretch the stroke with the bars. */
+  vector-effect: non-scaling-stroke;
+}
+
+/* The clear-filter chip is a real button (keyboard-recoverable filter);
+   font: inherit undoes the UA button face, then the chip size is restated
+   because the shorthand also reset it. */
+.bucket-filter-chip {
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8rem;
+}
+.bucket-filter-chip:hover {
+  border-color: var(--border-strong);
+  color: var(--ink);
+}
+
+/* Accounts table controls: search + segmented filters above, pager below. */
+.users-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.users-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.users-pager-buttons {
+  display: inline-flex;
+  gap: 0.5rem;
+}
+
+.users-pager .secondary-button:disabled {
+  opacity: 0.45;
+}
+
+/* Row actions: a real table cell (config-actions' flex breaks table-cell
+   layout and jumbles row borders), right-aligned flat text buttons instead
+   of outlined ones — two outlined buttons per row read as chrome. */
+td.users-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+td.users-actions .inline-confirm {
+  min-height: 0;
+  padding: 0.15rem 0.4rem;
+  border: none;
+  background: none;
+  color: var(--ink-2);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+td.users-actions .inline-confirm:hover {
+  color: var(--ink);
+  background: none;
+  text-decoration: underline;
+}
+
+td.users-actions .inline-confirm:disabled {
+  color: var(--ink-3);
+  opacity: 0.55;
+  text-decoration: none;
+}
+
+/* Create-user modal: native <dialog> wearing the card look. */
+.users-dialog {
+  margin: auto;
+  width: min(26rem, calc(100vw - 2rem));
+  padding: 1.25rem 1.4rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.users-dialog::backdrop {
+  background: rgb(0 0 0 / 0.45);
+}
+
+.users-dialog h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+}
+
+.users-dialog .section-intro {
+  margin: 0 0 1rem;
+}
+
+.users-dialog-foot {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 1.1rem;
+}
+
+/* Change-password dialog: stacked full-width fields (the base
+   .threshold-input width is sized for short numeric values) with room for
+   the show/hide toggle. */
+.password-dialog .threshold-field {
+  width: 100%;
+}
+
+.password-dialog .password-field input {
+  width: 100%;
+  padding-right: 3.8rem;
+}
+
+.status-marker {
+  display: block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.status-marker-down {
+  background: var(--status-down);
+}
+.status-marker-muted {
+  background: var(--status-stale);
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.status-pill-degraded {
+  color: var(--status-degraded);
+  background: var(--status-degraded-bg);
+}
+
+.empty-state {
+  display: flex;
+  min-height: 120px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 1rem;
+  color: var(--ink-2);
+  text-align: center;
+}
+
+.empty-state strong {
+  color: var(--ink);
+}
+.empty-state span {
+  font-size: 0.83rem;
+}
+
+.state-panel {
+  display: flex;
+  min-height: 18rem;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  color: var(--ink-2);
+  background: var(--surface);
+  text-align: center;
+}
+
+.state-panel h1,
+.state-panel h2,
+.state-panel p {
+  margin: 0;
+}
+.state-error h1,
+.state-error h2 {
+  color: var(--status-down);
+}
+
+.state-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.state-actions .secondary-button {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+.state-spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: state-spin 0.8s linear infinite;
+}
+
+@keyframes state-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.incident-card {
+  padding-inline: 0;
+}
+.incident-card > .card-head {
+  padding-inline: 1.25rem;
+}
+
+.incident-group {
+  border-top: 1px solid var(--border);
+}
+
+.incident-group.incident-active {
+  box-shadow: inset 3px 0 0 var(--status-down);
+}
+
+.incident-summary {
+  display: grid;
+  width: 100%;
+  min-height: 72px;
+  grid-template-columns: auto minmax(12rem, 2fr) minmax(7rem, 0.8fr) minmax(9rem, 1fr) auto;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1.25rem;
+  border: 0;
+  color: var(--ink);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.incident-summary:hover {
+  background: var(--surface-2);
+}
+
+.incident-primary,
+.incident-impact,
+.incident-meta {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.incident-summary strong {
+  font-size: 0.83rem;
+}
+.incident-summary small {
+  color: var(--ink-3);
+  font-size: 0.75rem;
+}
+.incident-primary small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.incident-impact strong {
+  font-family: var(--mono);
+  font-size: 1rem;
+}
+
+.incident-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--accent);
+  font-size: 0.76rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.disclosure-chevron {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  transition: transform 120ms ease;
+}
+
+.disclosure-chevron-expanded {
+  transform: rotate(90deg);
+}
+
+.incident-details {
+  padding: 0 1.25rem 0.8rem 3.4rem;
+  background: color-mix(in srgb, var(--surface-2) 50%, transparent);
+}
+
+.incident-detail-head,
+.incident-instance {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1.5fr) 0.65fr 0.6fr minmax(14rem, 2fr);
+  gap: 1rem;
+  padding: 0.5rem 0;
+}
+
+.incident-detail-head {
+  color: var(--ink-3);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.incident-instance {
+  border-top: 1px solid var(--border);
+  color: var(--ink-2);
+  font-size: 0.78rem;
+}
+
+.incident-instance code {
+  overflow: hidden;
+  color: var(--ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.incident-investigation {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(12rem, 1fr) minmax(18rem, 2fr);
+  gap: 1rem;
+  padding: 0.35rem 0 0.25rem;
+}
+
+.incident-resource-links,
+.incident-route-links {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.8rem;
+}
+
+.incident-resource-links a,
+.incident-route-links a {
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.incident-route-links .eyebrow {
+  flex-basis: 100%;
+}
+
+.incident-route-links .hint {
+  font-size: 0.75rem;
+}
+
+.progressive-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 0.9rem 0.5rem 0.55rem;
+}

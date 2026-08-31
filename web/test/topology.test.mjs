@@ -16,6 +16,7 @@ import { declutter } from '../src/mapLayout.ts'
 import { SEVERITY_LABEL } from '../src/severity.ts'
 import { buildSiteTopology, rankSiteTopology, topologyUrgentSites } from '../src/siteTopology.ts'
 import { resolveTopologyMode } from '../src/topologyMode.ts'
+import { readStyles } from './util/styles.mjs'
 
 const topologyEntry = (name, displayName, severity) => ({
   site: { name, display_name: displayName, location: '', latitude: null, longitude: null },
@@ -193,7 +194,7 @@ test('screen-sized pointer targets feed the same radius into decluttering', () =
 
 test('map controls, labels, and pointer targets expose the accessibility contract', async () => {
   const map = await readFile(new URL('../src/components/WorldMap.tsx', import.meta.url), 'utf8')
-  const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8')
+  const styles = readStyles()
   // Direct manipulation (drag + wheel) must keep keyboard equivalents: the
   // focusable map pans with arrows, zooms with +/-, fits with F, resets
   // with 0 — attached natively (like the wheel listener) through the
@@ -245,7 +246,7 @@ test('all topology modes share one health vocabulary and the unscoped empty stat
 
 test('PathGraph label size stays in the same fixed coordinate system as its width estimate', async () => {
   const graph = await readFile(new URL('../src/components/PathGraph.tsx', import.meta.url), 'utf8')
-  const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8')
+  const styles = readStyles()
   assert.match(graph, /const CHAR_W = 7\.3/)
   assert.match(styles, /\.path-graph \.pg-label[\s\S]*font-size: 12px/)
   assert.match(styles, /\.path-graph \.pg-sub[\s\S]*font-size: 12px/)
