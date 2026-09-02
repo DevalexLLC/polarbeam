@@ -7,7 +7,7 @@ Full design + milestone plan: `docs/architecture.md`.
 ## Hard constraints (user-mandated)
 
 - **Air-gapped customer deployments.** Production sites can run PolarBEAM
-  on isolated networks with zero INTERNET access (full local connectivity —
+  on isolated networks with zero internet access (full local connectivity —
   probing is the product). Runtime binaries make no network calls beyond
   what an operator explicitly configures: probe targets (external ones are
   fine on connected sites) plus the optional default-off OIDC SSO, which
@@ -17,7 +17,7 @@ Full design + milestone plan: `docs/architecture.md`.
   `vendor/` is committed (`-mod=vendor` everywhere), generated protobuf code
   is committed (`internal/pb/`), the built SPA is committed (`web/dist/`).
   New Go deps: `make vendor` in the same change. Never add a build step that
-  fetches anything — the dev/build environment IS online, but the
+  fetches anything — the dev/build environment is online, but the
   `offline-build` CI gate and the air-gap bundle must keep working without it.
   The minimum Go version includes the security patch level in `go.mod`; keep
   both Go build stages and `docs/airgap-build.md` pinned to that exact version.
@@ -28,10 +28,10 @@ Full design + milestone plan: `docs/architecture.md`.
   when `listen.proxy_protocol` is on (default off, shipped configs enable
   it) so rate limiting and enrollment see real client addresses.
 - **The agent is a single static Go binary** (`CGO_ENABLED=0`), no runtime
-  deps, shipped ONLY as a container image (`deploy/docker/agent.Dockerfile`,
+  deps, shipped only as a container image (`deploy/docker/agent.Dockerfile`,
   `--target release`; the default target is the dev overlay image). The
-  release entrypoint runs `selfcheck` before `run` — the fail-loud preflight
-  the retired systemd unit used to provide. No RPM/systemd packaging exists.
+  release entrypoint runs `selfcheck` before `run` as the fail-loud
+  preflight. No RPM/systemd packaging exists.
 - **Fail loud.** Unknown YAML keys are fatal (`internal/strictyaml`),
   preflight names every problem, spool overflow is reported to the server,
   unsupported probe types report `UNSUPPORTED` instead of being skipped.
@@ -42,13 +42,13 @@ Full design + milestone plan: `docs/architecture.md`.
   never message fields. Direction (site A→B vs B→A) derives from cert + the
   server-side target row; it is unforgeable by construction.
 - The DB is the sole certificate revocation authority (per-RPC check
-  through a 30 s TTL cache — DB errors never cached — plus an UNCACHED
+  through a 30 s TTL cache — DB errors never cached — plus an uncached
   30 s stream sweep as the enforcement path). No CRL/OCSP.
 - Enrollment trust is explicit: `--ca-cert` or `--fingerprint` — no TOFU.
-- The built-in CA signs agent client certs AND the auto-issued gRPC server
+- The built-in CA signs agent client certs and the auto-issued gRPC server
   cert (`listen.grpc_hostname` SAN). Operator TLS (`tls.*`) covers only the
   dashboard listener.
-- Server streams FULL config snapshots keyed by `config_hash`; agents diff
+- Server streams full config snapshots keyed by `config_hash`; agents diff
   locally. All wire timings are int64 microseconds, -1 = not measured.
 - Proto compatibility: fields are only added, never renumbered/repurposed
   (old agents in other languages must keep working).
@@ -59,10 +59,10 @@ Full design + milestone plan: `docs/architecture.md`.
   `POLARBEAM_TEST_DB_URL` like all DB suites (skips silently when unset),
   run manually only; never add a CI job for them.
 - Build/test (offline): `make build`, `make test`. Dev stack: `make up` /
-  `make down`, and `make reset` for teardown INCLUDING volumes (fresh
-  DB/CA/tokens — what older notes call `down -v`; plain `make down -v`
-  does NOT work, make eats `-v`). All three default
-  `POLARBEAM_DB_PASSWORD`. ALWAYS composes base + dev overlay together;
+  `make down`, and `make reset` for teardown including volumes (fresh
+  DB/CA/tokens). `make down -v` does not work: make consumes `-v`, so
+  volumes survive. All three default
+  `POLARBEAM_DB_PASSWORD`. Every one composes base + dev overlay together;
   never `docker compose up` the base file alone (silently drops overlay
   services).
 - CodeQL uses advanced setup with a manual, offline Go build so analysis uses
@@ -77,33 +77,34 @@ Full design + milestone plan: `docs/architecture.md`.
 - Licensing/attribution: `LICENSE` (AGPL-3.0-only; Devalex LLC offers
   commercial exceptions, so external contributions need a CLA — see
   CONTRIBUTING.md) + hand-written `NOTICE` + generated `THIRD-PARTY-NOTICES`.
-  The copyright/license line (year/holder/license) lives in FIVE editable
+  The copyright/license line (year/holder/license) lives in five editable
   places that must change together — `NOTICE`, `README.md`'s License
   section, the header in `tools/gen-third-party-notices.sh`, and the SPA's
-  `views/About.tsx` + `views/Login.tsx` — plus TWO generated copies that
+  `views/About.tsx` + `views/Login.tsx` — plus two generated copies that
   must be regenerated after any change: the `THIRD-PARTY-NOTICES` header
   (`make notices`) and the committed `web/dist/` bundle (`make web`).
-  `make notices` does NOT sync or validate them. All THREE files ship in
+  `make notices` does not sync or validate them. All three files ship in
   every artifact — all three images (`/licenses`) and the air-gap bundle.
   Any new distribution channel must carry them too. `make notices`
   (`tools/gen-third-party-notices.sh`) regenerates the third-party file and
-  is chained off BOTH `make vendor` and `make web`, because it folds four
+  is chained off both `make vendor` and `make web`, because it folds four
   input groups: the Go stdlib (`$(go env GOROOT)/LICENSE`+`PATENTS` — it is
   linked in, and BSD-3 §2 covers binary redistribution), `vendor/`, the
-  COMMITTED `web/THIRD-PARTY-LICENSES`, and `web/public/fonts/OFL.txt`. The
+  committed `web/THIRD-PARTY-LICENSES`, and `web/public/fonts/OFL.txt`. The
   SPA half is a separate generator (`web/tools/gen-spa-licenses.mjs`, run by
   `make web`) precisely because `node_modules` is gitignored and absent from
-  the offline build — the top-level script must never need it. Both ABORT on
-  a shipped component with no license file. TWO CI gates, because one cannot
-  cover both halves: `offline-build` runs `make notices` before its existing
+  the offline build — the top-level script must never need it. Both abort on
+  a shipped component with no license file. Two CI gates, because one cannot
+  cover both halves: `offline-build` runs `make notices` before its
   clean-tree check, and `web-lint` (the only job with `node_modules`)
   regenerates `web/THIRD-PARTY-LICENSES` and diffs it — without the second,
   a react bump without `make web` would fold stale attribution and still
-  pass. Neither adds a named check, so the ruleset is untouched.
-- SPA style: `make web` runs `pnpm run lint && pnpm run fmt:check` BEFORE
+  pass. Neither gate is a named required check, so the ruleset does not
+  reference them.
+- SPA style: `make web` runs `pnpm run lint && pnpm run fmt:check` before
   building, so a finding or an unformatted file blocks the dist rebuild;
-  `make web-fix` = `oxlint --fix` + `oxfmt`. `make lint` is untouched
-  (Go-only, offline — CONTRIBUTING.md promises that).
+  `make web-fix` = `oxlint --fix` + `oxfmt`. `make lint` stays Go-only and
+  offline (CONTRIBUTING.md promises that).
 - Branding: the PolarBEAM mark uses the dashboard's neutral ink and indigo
   accent. `web/public/polarbeam-mark.svg` is the adaptive favicon; its static
   light/dark variants are used by the SPA and duplicated under `docs/assets/`
@@ -114,7 +115,7 @@ Full design + milestone plan: `docs/architecture.md`.
 - Migrations: `internal/server/migrate/sql/NNNN_*.sql`, applied in filename
   order, one transaction each — except `NNNN_name.notx.sql` files, which run
   outside any transaction for DDL Postgres refuses in one (continuous
-  aggregates) and must hold exactly ONE idempotent top-level statement (see
+  aggregates) and must hold exactly one idempotent top-level statement (see
   `internal/server/migrate/migrate.go` package doc). Dev server auto-migrates;
   prod runs `polarbeam-server migrate` explicitly. **Once a migration has shipped in
   any release, it is immutable** — schema changes get a new numbered file
@@ -126,10 +127,10 @@ Full design + milestone plan: `docs/architecture.md`.
   drop-and-recreate a shipped cagg either: it can only rematerialize from
   raw (14d retention), destroying long-window aggregate history.
 - Conventional Commits (`feat(scope): ...`); see CONTRIBUTING.md.
-- Branch → PR is ENFORCED, not convention: a GitHub ruleset protects `main`
+- Branch → PR is enforced, not convention: a GitHub ruleset protects `main`
   with no bypass actors, so even the repo owner cannot push to it. Work on a
   branch, open a PR, merge once CI is green (no approval required — a
-  maintainer can self-merge). The six checks are required BY NAME
+  maintainer can self-merge). The six checks are required by name
   (`offline-build`, `web-lint`, `db-test`, `docker-build (server)`,
   `docker-build (agent)`, `docker-build (proxy)` — the matrix legs carry an
   explicit `name:` for this), so renaming a CI job strands every PR on a
