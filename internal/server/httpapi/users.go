@@ -41,7 +41,10 @@ type userAccountJSON struct {
 	Status      string     `json:"status"` // "active" | "disabled" | "deleted"
 	LoginCount  int64      `json:"login_count"`
 	LastLoginAt *time.Time `json:"last_login_at"` // null = never
-	CreatedAt   *time.Time `json:"created_at"`    // null for deleted identities
+	// LastActiveAt is the newest dashboard request seen from the account,
+	// sampled at the session-touch cadence; null = never.
+	LastActiveAt *time.Time `json:"last_active_at"`
+	CreatedAt    *time.Time `json:"created_at"` // null for deleted identities
 	// Networks is the scope of a live network-scoped account; null for
 	// global roles and deleted identities.
 	Networks []string `json:"networks"`
@@ -55,6 +58,9 @@ type loginMonthJSON struct {
 	Local       int64  `json:"local"`
 	OIDC        int64  `json:"oidc"`
 	UniqueUsers int64  `json:"unique_users"`
+	// ActiveUsers counts distinct people who made any dashboard request in
+	// the month, signed in that month or not.
+	ActiveUsers int64 `json:"active_users"`
 }
 
 // oneOf validates an enum-ish query parameter, collecting a problem string
@@ -118,7 +124,8 @@ func (a *api) handleUsersGet(w http.ResponseWriter, r *http.Request) {
 			ID: acc.ID.String(), Username: acc.Username, Role: acc.Role,
 			AuthSource: acc.AuthSource, Status: acc.Status,
 			LoginCount: acc.LoginCount, LastLoginAt: acc.LastLoginAt,
-			CreatedAt: acc.CreatedAt, Networks: acc.Networks,
+			LastActiveAt: acc.LastActiveAt,
+			CreatedAt:    acc.CreatedAt, Networks: acc.Networks,
 		})
 	}
 	monthsOut := make([]loginMonthJSON, 0, len(months))
@@ -126,6 +133,7 @@ func (a *api) handleUsersGet(w http.ResponseWriter, r *http.Request) {
 		monthsOut = append(monthsOut, loginMonthJSON{
 			Month: m.Month.UTC().Format("2006-01"), Total: m.Total,
 			Local: m.Local, OIDC: m.OIDC, UniqueUsers: m.UniqueUsers,
+			ActiveUsers: m.ActiveUsers,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{

@@ -40,6 +40,10 @@
   gap: 0.4rem;
 }
 
+.login-bars-legend > .hint {
+  margin-left: auto;
+}
+
 .swatch.chart-local {
   background: var(--chart-local);
 }

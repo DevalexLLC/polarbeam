@@ -6,7 +6,7 @@ import { useConcurrentSettingsDraft, useSettingsMutation } from '../settingsMuta
 import type { Role, UserAccount, UserCreateResponse, UsersResponse } from '../types'
 import { usePolledResource } from '../usePolledResource'
 import { ALL_ROLES } from '../userRoles'
-import LoginBars from './LoginBars'
+import LoginBars, { type LoginBarsMode } from './LoginBars'
 import RoleWall from './RoleWall'
 import SettingsPageError from './SettingsPageError'
 import UserCreateDialog, { type MintedSecret } from './UserCreateDialog'
@@ -74,6 +74,7 @@ export default function UsersPanel({
   const [role, setRole] = useState<RoleFilter>('')
   const [status, setStatus] = useState<StatusFilter>('')
   const [source, setSource] = useState<SourceFilter>('')
+  const [chartMode, setChartMode] = useState<LoginBarsMode>('active')
   const [offset, setOffset] = useState(0)
   const [actionError, setActionError] = useState('') // row disable/delete failures
 
@@ -274,19 +275,41 @@ export default function UsersPanel({
       <section className="card settings-card config-card">
         <div className="card-head">
           <div>
-            <span className="eyebrow">Sign-in activity</span>
+            <span className="eyebrow">Usage</span>
             <h2>Last 12 months</h2>
           </div>
-          <span className="hint">UTC calendar months · refreshes every 30s</span>
+          <FilterGroup
+            label="Chart series"
+            value={chartMode}
+            options={[
+              { value: 'active', label: 'Active users' },
+              { value: 'signins', label: 'Sign-ins' },
+            ]}
+            onChange={setChartMode}
+          />
         </div>
-        <LoginBars months={data.login_months} />
+        <p className="section-intro">
+          {chartMode === 'active'
+            ? 'People who used the dashboard each month, whether or not they signed in that month — a session lasts seven days, so sign-ins alone miss users who stayed logged in across a month boundary. Activity is sampled at most every five minutes.'
+            : 'Successful dashboard sign-ins each month, local under SSO.'}
+        </p>
+        <LoginBars months={data.login_months} mode={chartMode} />
         <div className="login-bars-legend">
-          <span>
-            <span className="swatch chart-local" /> Local
-          </span>
-          <span>
-            <span className="swatch chart-oidc" /> SSO
-          </span>
+          {chartMode === 'signins' ? (
+            <>
+              <span>
+                <span className="swatch chart-local" /> Local
+              </span>
+              <span>
+                <span className="swatch chart-oidc" /> SSO
+              </span>
+            </>
+          ) : (
+            <span>
+              <span className="swatch chart-local" /> Active users
+            </span>
+          )}
+          <span className="hint">UTC calendar months · refreshes every 30s</span>
         </div>
       </section>
       <section className="card settings-card config-card">
@@ -307,7 +330,7 @@ export default function UsersPanel({
         <p className="section-intro">
           Single sign-on accounts are provisioned automatically at first login. Deleted accounts stay listed with their
           last-known details as long as their sign-in history is retained. Sign-in counts start when this server first
-          records logins.
+          records logins; "last active" is the newest dashboard request seen from the account.
         </p>
         {actionError && (
           <div className="inline-alert" role="alert">
