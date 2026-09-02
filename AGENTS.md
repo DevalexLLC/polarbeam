@@ -106,7 +106,8 @@ assigns them to that network.
 Settings Sites, Targets, and Probes preserve their complete legacy responses
 without list parameters. Query mode uses SQL-side tenant scope, literal search,
 stable ID tie breakers, and `page` metadata. Keep the query sort/filter names in
-their handler allowlists aligned with `settings_inventory.go`. Their
+their handler allowlists aligned with
+`internal/server/store/settings_inventory.go`. Their
 `/{identity}` GET routes return the existing resource object directly and must
 hide inaccessible resources behind the same 404 shape as missing ones. Unlike
 the operational target view, an explicit Settings network retains visible
@@ -119,8 +120,8 @@ network, and sorting reset page one. Desktop uses the component's semantic
 table inside a horizontal-only overflow wrapper — pagination bounds row
 count, so the page owns vertical scrolling. Mobile uses its separate flat list:
 identity, status, and primary evidence remain visible, while secondary
-metadata stays behind the full-width disclosure target. Do not restore the
-generic CSS that turns every table cell into a nested mobile card. Row-action
+metadata stays behind the full-width disclosure target. Mobile rows stay
+flat; table cells are never restyled as nested cards. Row-action
 menus are portalled outside the desktop scroller, and disclosure renderers
 receive their desktop/mobile surface so nested DOM IDs remain unique. A
 server-paged disclosure may retain a temporarily missing stable key only while
