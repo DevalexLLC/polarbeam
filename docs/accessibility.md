@@ -104,7 +104,7 @@ themes:
   accompanied by the legend, per-direction labels, and the keyboard
   readouts from #105.
 - Under forced colors, marks whose color *is* the data — legend swatches,
-  fleet strips, sign-in bars, the incident timeline, the map surface with
+  fleet strips, usage bars, the incident timeline, the map surface with
   its legend and hover tip, and the canvas-backed chart cards — opt out
   via `forced-color-adjust: none` and keep the AA-verified palette (the
   canonical sanctioned use of the property). Each island also pins its
@@ -136,7 +136,8 @@ patterns, pinned by the source tests:
   linked to, and its zoom announcer debounced so wheel and pinch streams
   announce only the settled value. Focus-driven readout cards may announce
   after the button's own label; that double announcement is accepted.
-- **Hover-only readouts** (the users panel's sign-ins chart): the svg
+- **Hover-only readouts** (the users panel's usage chart, in both its
+  active-users and sign-ins views): the svg
   keeps its aggregate `role="img"` label and pairs the pointer readout
   with an sr-only per-month breakdown instead of synthetic tab stops —
   there is no action to activate.

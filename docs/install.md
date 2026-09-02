@@ -1170,8 +1170,12 @@ being silently downgraded.
 
 - **Settings → Users** (admin-only) lists every account — local and
   federated — with its role, auth source, sign-in count, last sign-in,
-  and a 12-month sign-in activity chart, filterable by username, role,
-  status, and source. Deleted accounts stay listed (status "Deleted",
+  last active, and a 12-month usage chart switchable between active
+  users and sign-ins, filterable by username, role, status, and source.
+  "Active" means the account made any dashboard request that UTC day;
+  the server samples this at most every five minutes per session, so
+  someone who signed in on the 28th and kept the tab open still counts
+  in the following month, where the sign-in view shows nothing. Deleted accounts stay listed (status "Deleted",
   last-known details) as long as their sign-in history is retained.
   Admins can also create local users there (the password is generated
   and shown once), and disable, re-enable, or delete accounts — you

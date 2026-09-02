@@ -50,6 +50,7 @@ export default function UsersTable({
             <th>Status</th>
             <th>Sign-ins</th>
             <th>Last sign-in</th>
+            <th>Last active</th>
             <th>Created</th>
             <th className="actions-col">
               <span className="sr-only">Actions</span>
@@ -99,6 +100,9 @@ export default function UsersTable({
                 <td data-label="Sign-ins">{u.login_count}</td>
                 <td data-label="Last sign-in" title={u.last_login_at ? fmtTime(u.last_login_at) : undefined}>
                   {fmtAgo(u.last_login_at)}
+                </td>
+                <td data-label="Last active" title={u.last_active_at ? fmtTime(u.last_active_at) : undefined}>
+                  {fmtAgo(u.last_active_at)}
                 </td>
                 <td data-label="Created" title={u.created_at ? fmtTime(u.created_at) : undefined}>
                   {u.created_at ? fmtAgo(u.created_at) : '—'}
@@ -174,7 +178,7 @@ export default function UsersTable({
               </tr>
               {scopeEdit?.id === u.id && (
                 <tr className="config-edit-row">
-                  <td colSpan={9}>
+                  <td colSpan={10}>
                     <div className="config-form">
                       <h3 className="eyebrow">Networks · {u.username}</h3>
                       <NetworkPicker

@@ -45,14 +45,15 @@ func TestUsersAuth(t *testing.T) {
 
 type usersResponse struct {
 	Users []struct {
-		ID          string     `json:"id"`
-		Username    string     `json:"username"`
-		Role        string     `json:"role"`
-		AuthSource  string     `json:"auth_source"`
-		Status      string     `json:"status"`
-		LoginCount  int64      `json:"login_count"`
-		LastLoginAt *time.Time `json:"last_login_at"`
-		CreatedAt   *time.Time `json:"created_at"`
+		ID           string     `json:"id"`
+		Username     string     `json:"username"`
+		Role         string     `json:"role"`
+		AuthSource   string     `json:"auth_source"`
+		Status       string     `json:"status"`
+		LoginCount   int64      `json:"login_count"`
+		LastLoginAt  *time.Time `json:"last_login_at"`
+		LastActiveAt *time.Time `json:"last_active_at"`
+		CreatedAt    *time.Time `json:"created_at"`
 	} `json:"users"`
 	Total       int64 `json:"total"`
 	LoginMonths []struct {
@@ -61,6 +62,7 @@ type usersResponse struct {
 		Local       int64  `json:"local"`
 		OIDC        int64  `json:"oidc"`
 		UniqueUsers int64  `json:"unique_users"`
+		ActiveUsers int64  `json:"active_users"`
 	} `json:"login_months"`
 }
 
@@ -80,9 +82,12 @@ func getUsers(t *testing.T, h http.Handler, cookie *http.Cookie, query string) u
 func seedUserAccounts(f *fakeDB) {
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	lastLogin := time.Date(2026, 8, 10, 12, 30, 0, 0, time.UTC)
+	// Active after the last sign-in: the session outlived the month.
+	lastActive := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
 	f.userAccounts = []store.UserAccountInfo{
 		{ID: uuid.New(), Username: "alice", Role: "admin", AuthSource: "local",
-			Status: "active", CreatedAt: &created, LoginCount: 7, LastLoginAt: &lastLogin},
+			Status: "active", CreatedAt: &created, LoginCount: 7, LastLoginAt: &lastLogin,
+			LastActiveAt: &lastActive},
 		{ID: uuid.New(), Username: "bob", Role: "viewer", AuthSource: "oidc",
 			Status: "disabled", CreatedAt: &created},
 		// A deleted identity, reconstructed from login-event snapshots:
@@ -97,7 +102,7 @@ func TestUsersGetShape(t *testing.T) {
 	h := newTestAPI(t, f)
 	seedUserAccounts(f)
 	f.loginMonths = []store.LoginMonthStat{
-		{Month: time.Date(2025, 9, 1, 0, 0, 0, 0, time.UTC), Total: 42, Local: 30, OIDC: 12, UniqueUsers: 6},
+		{Month: time.Date(2025, 9, 1, 0, 0, 0, 0, time.UTC), Total: 42, Local: 30, OIDC: 12, UniqueUsers: 6, ActiveUsers: 9},
 		{Month: time.Date(2025, 10, 1, 0, 0, 0, 0, time.UTC)},
 	}
 	cookie, _ := configLogin(t, h, f, "admin")
@@ -111,12 +116,15 @@ func TestUsersGetShape(t *testing.T) {
 		alice.Status != "active" || alice.LoginCount != 7 || alice.LastLoginAt == nil || alice.CreatedAt == nil {
 		t.Errorf("alice = %+v", alice)
 	}
+	if alice.LastActiveAt == nil || !alice.LastActiveAt.After(*alice.LastLoginAt) {
+		t.Errorf("alice last_active_at = %v, want after last sign-in", alice.LastActiveAt)
+	}
 	if bob.Status != "disabled" || bob.LoginCount != 0 {
 		t.Errorf("bob = %+v", bob)
 	}
 	// Never-logged-in must serialize as an explicit null, not a zero time.
-	if bob.LastLoginAt != nil {
-		t.Errorf("bob last_login_at = %v, want null", bob.LastLoginAt)
+	if bob.LastLoginAt != nil || bob.LastActiveAt != nil {
+		t.Errorf("bob last_login_at = %v last_active_at = %v, want null", bob.LastLoginAt, bob.LastActiveAt)
 	}
 	// Deleted identities keep counts and last-known fields but have no
 	// users row, hence a null created_at.
@@ -128,7 +136,7 @@ func TestUsersGetShape(t *testing.T) {
 		t.Fatalf("login_months = %d, want 2", len(res.LoginMonths))
 	}
 	sep := res.LoginMonths[0]
-	if sep.Month != "2025-09" || sep.Total != 42 || sep.Local != 30 || sep.OIDC != 12 || sep.UniqueUsers != 6 {
+	if sep.Month != "2025-09" || sep.Total != 42 || sep.Local != 30 || sep.OIDC != 12 || sep.UniqueUsers != 6 || sep.ActiveUsers != 9 {
 		t.Errorf("september bucket = %+v", sep)
 	}
 	if empty := res.LoginMonths[1]; empty.Month != "2025-10" || empty.Total != 0 {

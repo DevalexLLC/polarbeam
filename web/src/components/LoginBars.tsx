@@ -19,15 +19,39 @@ const CHART_H = 80
 const BASELINE = CHART_H - 2
 const MAX_BAR = CHART_H - 8
 
-// 12 monthly sign-in totals as stacked bars, local under SSO (hand-rolled
-// SVG — uPlot is for real charts). The hover card is fixed-position like
-// HealthStrip's: the chart sits inside a card that would clip an absolute
-// child near the top edge.
-export default function LoginBars({ months }: { months: LoginMonth[] }) {
+// Which monthly series the chart shows: sign-ins (stacked local under SSO)
+// or active users (people who made any request that month — a session
+// outlives a month boundary, so sign-ins alone undercount usage).
+export type LoginBarsMode = 'active' | 'signins'
+
+function plural(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`
+}
+
+function monthTotal(m: LoginMonth, mode: LoginBarsMode): number {
+  return mode === 'active' ? m.active_users : m.total
+}
+
+function monthCaption(m: LoginMonth, mode: LoginBarsMode): string {
+  if (mode === 'active') {
+    return m.active_users === 0
+      ? 'no activity this month'
+      : `${m.unique_users} signed in · ${plural(m.total, 'sign-in', 'sign-ins')}`
+  }
+  return m.total === 0
+    ? 'no sign-ins this month'
+    : `${m.local} local · ${m.oidc} SSO · ${plural(m.unique_users, 'unique user', 'unique users')}`
+}
+
+// 12 monthly totals as bars (hand-rolled SVG — uPlot is for real charts).
+// The hover card is fixed-position like HealthStrip's: the chart sits
+// inside a card that would clip an absolute child near the top edge.
+export default function LoginBars({ months, mode }: { months: LoginMonth[]; mode: LoginBarsMode }) {
   const [hover, setHover] = useState<{ i: number; x: number; y: number; below: boolean } | null>(null)
   const svgRef = useRef<SVGSVGElement>(null)
-  const max = Math.max(1, ...months.map((m) => m.total))
+  const max = Math.max(1, ...months.map((m) => monthTotal(m, mode)))
   const n = months.length
+  const noun = mode === 'active' ? 'Active users' : 'Sign-ins'
 
   // Hover-only readout mirroring the aggregate aria-label, as on the fleet
   // health strips. The listeners attach natively so the labeled svg stays a
@@ -64,13 +88,20 @@ export default function LoginBars({ months }: { months: LoginMonth[] }) {
         viewBox={`0 0 ${n * SLOT_W} ${CHART_H}`}
         preserveAspectRatio="none"
         role="img"
-        aria-label={`Sign-ins per month: ${months.map((mo) => `${monthLabel(mo, true)} ${mo.total}`).join(', ')}`}
+        aria-label={`${noun} per month: ${months.map((mo) => `${monthLabel(mo, true)} ${monthTotal(mo, mode)}`).join(', ')}`}
       >
         {months.map((mo, i) => {
           const x = i * SLOT_W + (SLOT_W - BAR_W) / 2
-          if (mo.total === 0) {
+          const total = monthTotal(mo, mode)
+          if (total === 0) {
             // A zero month keeps a baseline tick so the axis stays readable.
             return <rect key={mo.month} className="login-bar-zero" x={x} y={BASELINE - 1} width={BAR_W} height={1} />
+          }
+          if (mode === 'active') {
+            const h = (total / max) * MAX_BAR
+            return (
+              <rect key={mo.month} className="login-bar-local" x={x} y={BASELINE - h} width={BAR_W} height={h} rx={1} />
+            )
           }
           const localH = (mo.local / max) * MAX_BAR
           const oidcH = (mo.oidc / max) * MAX_BAR
@@ -102,16 +133,14 @@ export default function LoginBars({ months }: { months: LoginMonth[] }) {
         ))}
       </div>
       <p className="sr-only">
-        {'Sign-ins by month: '}
+        {mode === 'active' ? 'Active users by month: ' : 'Sign-ins by month: '}
         {months
-          .map(
-            (mo) =>
-              `${monthLabel(mo, true)}: ${
-                mo.total === 0
-                  ? 'no sign-ins'
-                  : `${mo.total} total, ${mo.local} local, ${mo.oidc} SSO, ${mo.unique_users} unique ${mo.unique_users === 1 ? 'user' : 'users'}`
-              }`,
-          )
+          .map((mo) => {
+            const total = monthTotal(mo, mode)
+            if (total === 0) return `${monthLabel(mo, true)}: ${mode === 'active' ? 'no activity' : 'no sign-ins'}`
+            const head = mode === 'active' ? plural(total, 'active user', 'active users') : `${total} total`
+            return `${monthLabel(mo, true)}: ${head}, ${monthCaption(mo, mode).replaceAll(' · ', ', ')}`
+          })
           .join('; ')}
         .
       </p>
@@ -125,14 +154,19 @@ export default function LoginBars({ months }: { months: LoginMonth[] }) {
             <b>{monthLabel(m, true)}</b>
           </div>
           <div className="map-tip-value">
-            {m.total}
-            <small> {m.total === 1 ? 'sign-in' : 'sign-ins'}</small>
+            {monthTotal(m, mode)}
+            <small>
+              {' '}
+              {mode === 'active'
+                ? m.active_users === 1
+                  ? 'active user'
+                  : 'active users'
+                : m.total === 1
+                  ? 'sign-in'
+                  : 'sign-ins'}
+            </small>
           </div>
-          <div className="map-tip-caption">
-            {m.total === 0
-              ? 'no sign-ins this month'
-              : `${m.local} local · ${m.oidc} SSO · ${m.unique_users} unique ${m.unique_users === 1 ? 'user' : 'users'}`}
-          </div>
+          <div className="map-tip-caption">{monthCaption(m, mode)}</div>
         </div>
       )}
     </>

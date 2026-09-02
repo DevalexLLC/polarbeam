@@ -776,6 +776,9 @@ export interface UserAccount {
   status: 'active' | 'disabled' | 'deleted'
   login_count: number
   last_login_at: string | null // null = never logged in
+  // Newest dashboard request seen from the account (sampled at the
+  // server's session-touch cadence, so minutes-coarse); null = never.
+  last_active_at: string | null
   created_at: string | null // null = deleted identity
 }
 
@@ -785,6 +788,9 @@ export interface LoginMonth {
   local: number
   oidc: number
   unique_users: number
+  // Distinct people who made any dashboard request in the month, signed in
+  // that month or not — a session outlives a month boundary.
+  active_users: number
 }
 
 export interface UsersResponse {

@@ -464,7 +464,17 @@ func (s *Store) GetSessionByTokenHash(ctx context.Context, tokenHash []byte) (*S
 
 // TouchSession records session activity (rate-limited by the caller).
 func (s *Store) TouchSession(ctx context.Context, id uuid.UUID) error {
-	_, err := s.pool.Exec(ctx, `UPDATE sessions SET last_used_at = now() WHERE id = $1`, id)
+	// One round trip: the session touch also upserts the user's activity
+	// row for the current UTC day, so "active" survives logout and expiry.
+	_, err := s.pool.Exec(ctx, `
+		WITH s AS (
+			UPDATE sessions SET last_used_at = now() WHERE id = $1
+			RETURNING user_id
+		)
+		INSERT INTO user_activity_days (user_id, identity, day)
+		SELECT u.id, `+identityExpr+`, (now() AT TIME ZONE 'UTC')::date
+		  FROM users u JOIN s ON s.user_id = u.id
+		ON CONFLICT (user_id, day) DO UPDATE SET last_seen_at = now()`, id)
 	if err != nil {
 		return fmt.Errorf("touch session: %w", err)
 	}
@@ -491,6 +501,14 @@ func (s *Store) DeleteExpiredSessions(ctx context.Context) (int64, error) {
 	return tag.RowsAffected(), nil
 }
 
+// identityExpr is the SQL for a users row's stable per-person identity —
+// issuer+subject for SSO, username for local — shared by login_events and
+// user_activity_days so the two tables can never disagree on the key.
+// Unit separator, not NUL: Postgres text cannot hold 0x00, and \x1f
+// cannot appear in an issuer URL, so the join is unambiguous.
+const identityExpr = `CASE WHEN auth_source = 'oidc' THEN oidc_issuer || E'\x1f' || oidc_subject
+	                   ELSE username END`
+
 // RecordLogin appends a login audit event, snapshotting everything from
 // the just-authenticated user's row in one statement. The row deliberately
 // has no FK to users, so the audit log survives user deletion; the
@@ -499,15 +517,18 @@ func (s *Store) DeleteExpiredSessions(ctx context.Context) (int64, error) {
 // IdP-driven renames — user_id alone double-counts a deleted-then-
 // reprovisioned SSO user.
 func (s *Store) RecordLogin(ctx context.Context, userID uuid.UUID) error {
-	// Unit separator, not NUL: Postgres text cannot hold 0x00, and \x1f
-	// cannot appear in an issuer URL, so the join is unambiguous.
+	// The login day is also an active day; a fresh session's last_used_at
+	// is now(), so the touch path would not record it for touchInterval.
 	tag, err := s.pool.Exec(ctx, `
-		INSERT INTO login_events (user_id, identity, username, role, auth_source)
-		SELECT id,
-		       CASE WHEN auth_source = 'oidc' THEN oidc_issuer || E'\x1f' || oidc_subject
-		            ELSE username END,
-		       username, role, auth_source
-		  FROM users WHERE id = $1`, userID)
+		WITH ev AS (
+			INSERT INTO login_events (user_id, identity, username, role, auth_source)
+			SELECT id, `+identityExpr+`, username, role, auth_source
+			  FROM users WHERE id = $1
+			RETURNING user_id, identity
+		)
+		INSERT INTO user_activity_days (user_id, identity, day)
+		SELECT user_id, identity, (now() AT TIME ZONE 'UTC')::date FROM ev
+		ON CONFLICT (user_id, day) DO UPDATE SET last_seen_at = now()`, userID)
 	if err != nil {
 		return fmt.Errorf("record login: %w", err)
 	}
@@ -529,6 +550,9 @@ type UserAccountInfo struct {
 	CreatedAt   *time.Time // nil for deleted identities (not snapshotted)
 	LoginCount  int64
 	LastLoginAt *time.Time // nil = never logged in
+	// LastActiveAt is the newest user_activity_days.last_seen_at for the
+	// account, at the session-touch cadence's resolution; nil = never.
+	LastActiveAt *time.Time
 	// Networks is the scope of a live network-scoped account; nil for
 	// global roles and for deleted identities (scope rows cascade away).
 	Networks []string
@@ -564,6 +588,8 @@ func (s *Store) ListUserAccounts(ctx context.Context, f UserAccountFilter) ([]Us
 			       CASE WHEN u.disabled THEN 'disabled' ELSE 'active' END AS status,
 			       u.created_at::timestamptz AS created_at,
 			       count(e.id) AS login_count, max(e.occurred_at) AS last_login_at,
+			       (SELECT max(a.last_seen_at) FROM user_activity_days a
+			         WHERE a.user_id = u.id) AS last_active_at,
 			       COALESCE((SELECT array_agg(n.name ORDER BY n.name)
 			                   FROM user_networks un JOIN networks n ON n.id = un.network_id
 			                  WHERE un.user_id = u.id), '{}') AS networks
@@ -576,13 +602,16 @@ func (s *Store) ListUserAccounts(ctx context.Context, f UserAccountFilter) ([]Us
 			       (array_agg(e.role ORDER BY e.occurred_at DESC))[1],
 			       (array_agg(e.auth_source ORDER BY e.occurred_at DESC))[1],
 			       'deleted', NULL,
-			       count(*), max(e.occurred_at), '{}'
+			       count(*), max(e.occurred_at),
+			       (SELECT max(a.last_seen_at) FROM user_activity_days a
+			         WHERE a.user_id = e.user_id),
+			       '{}'
 			  FROM login_events e
 			 WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = e.user_id)
 			 GROUP BY e.user_id
 		)
 		SELECT id, username, role, auth_source, status, created_at,
-		       login_count, last_login_at, networks, count(*) OVER ()
+		       login_count, last_login_at, last_active_at, networks, count(*) OVER ()
 		  FROM accounts
 		 WHERE ($1 = '' OR username ILIKE '%' || $1 || '%')
 		   AND ($2 = '' OR role = $2)
@@ -602,7 +631,7 @@ func (s *Store) ListUserAccounts(ctx context.Context, f UserAccountFilter) ([]Us
 		var a UserAccountInfo
 		var networks []string
 		if err := rows.Scan(&a.ID, &a.Username, &a.Role, &a.AuthSource, &a.Status,
-			&a.CreatedAt, &a.LoginCount, &a.LastLoginAt, &networks, &total); err != nil {
+			&a.CreatedAt, &a.LoginCount, &a.LastLoginAt, &a.LastActiveAt, &networks, &total); err != nil {
 			return nil, 0, fmt.Errorf("list user accounts: %w", err)
 		}
 		if a.Status != "deleted" {
@@ -652,6 +681,10 @@ type LoginMonthStat struct {
 	Local       int64
 	OIDC        int64
 	UniqueUsers int64
+	// ActiveUsers is the count of distinct identities with at least one
+	// user_activity_days row in the month — people who used the dashboard,
+	// whether or not they signed in that month.
+	ActiveUsers int64
 }
 
 // MonthlyLoginStats returns zero-filled per-month login totals for the most
@@ -671,7 +704,10 @@ func (s *Store) MonthlyLoginStats(ctx context.Context, months int) ([]LoginMonth
 		       count(e.id),
 		       count(e.id) FILTER (WHERE e.auth_source = 'local'),
 		       count(e.id) FILTER (WHERE e.auth_source = 'oidc'),
-		       count(DISTINCT e.identity)
+		       count(DISTINCT e.identity),
+		       (SELECT count(DISTINCT a.identity) FROM user_activity_days a
+		         WHERE a.day >= months.m::date
+		           AND a.day <  (months.m + interval '1 month')::date)
 		  FROM months
 		  LEFT JOIN login_events e
 		    ON e.occurred_at >= (months.m AT TIME ZONE 'UTC')
@@ -686,7 +722,7 @@ func (s *Store) MonthlyLoginStats(ctx context.Context, months int) ([]LoginMonth
 	var stats []LoginMonthStat
 	for rows.Next() {
 		var st LoginMonthStat
-		if err := rows.Scan(&st.Month, &st.Total, &st.Local, &st.OIDC, &st.UniqueUsers); err != nil {
+		if err := rows.Scan(&st.Month, &st.Total, &st.Local, &st.OIDC, &st.UniqueUsers, &st.ActiveUsers); err != nil {
 			return nil, fmt.Errorf("monthly login stats: %w", err)
 		}
 		// generate_series over a naive UTC timestamp scans with an

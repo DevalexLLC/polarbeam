@@ -101,7 +101,7 @@ export const SETTINGS_TABS: SettingsTabDef[] = [
     group: 'access',
     href: '#/settings?section=access&subsection=users',
     label: 'Users',
-    intro: 'Dashboard accounts across local and single sign-on, with sign-in activity.',
+    intro: 'Dashboard accounts across local and single sign-on, with sign-in and usage activity.',
     need: 'adminWrite',
   },
   {
