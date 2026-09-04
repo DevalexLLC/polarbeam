@@ -307,9 +307,12 @@ td.users-actions .inline-confirm:disabled {
 .state-panel p {
   margin: 0;
 }
-.state-error h1,
-.state-error h2 {
-  color: var(--status-down);
+
+/* A failed page is a message, not an alarm: title-sized, body ink. */
+.state-panel h1,
+.state-panel h2 {
+  font-size: 1.15rem;
+  color: var(--ink);
 }
 
 .state-actions {
@@ -344,7 +347,8 @@ td.users-actions .inline-confirm:disabled {
 .incident-card {
   padding-inline: 0;
 }
-.incident-card > .card-head {
+.incident-card > .card-head,
+.incident-card > .card-foot {
   padding-inline: 1.25rem;
 }
 
@@ -442,10 +446,8 @@ td.users-actions .inline-confirm:disabled {
 
 .incident-detail-head {
   color: var(--ink-3);
-  font-size: 0.75rem;
+  font-size: 0.78rem;
   font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
 }
 
 .incident-instance {
@@ -484,7 +486,7 @@ td.users-actions .inline-confirm:disabled {
   font-weight: 650;
 }
 
-.incident-route-links .eyebrow {
+.incident-route-links .label {
   flex-basis: 100%;
 }
 

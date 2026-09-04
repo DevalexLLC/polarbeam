@@ -27,7 +27,7 @@ function PasswordField({
   const [show, setShow] = useState(false)
   return (
     <label className="threshold-field">
-      <span className="eyebrow">{label}</span>
+      <span className="label">{label}</span>
       <span className="threshold-input password-field">
         <input
           type={show ? 'text' : 'password'}

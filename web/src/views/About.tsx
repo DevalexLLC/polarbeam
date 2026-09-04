@@ -14,7 +14,6 @@ export default function About({ version }: { version: string }) {
     <>
       <div className="page-head page-head-primary">
         <div>
-          <div className="eyebrow">About</div>
           {/* The mark rides the page title so the product is named once, at
               the top; the cards below carry their own section headings. */}
           <h1 className="about-title">

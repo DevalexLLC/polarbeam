@@ -31,10 +31,10 @@ function HopDiff({ oldHops, newHops }: { oldHops: Hop[]; newHops: Hop[] }) {
       <table className="hop-diff">
         <thead>
           <tr>
-            <th className="eyebrow">ttl</th>
-            <th className="eyebrow">change</th>
-            <th className="eyebrow">old path</th>
-            <th className="eyebrow">new path</th>
+            <th className="label">ttl</th>
+            <th className="label">change</th>
+            <th className="label">old path</th>
+            <th className="label">new path</th>
           </tr>
         </thead>
         <tbody>
@@ -188,7 +188,6 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
       label: 'Source',
       sortKey: 'source',
       priority: 'identity',
-      className: 'mono',
       render: (event) => event.src_site || 'deleted source',
     },
     {
@@ -196,7 +195,6 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
       label: 'Destination',
       sortKey: 'destination',
       priority: 'identity',
-      className: 'mono',
       render: (event) => <DestinationCell e={event} />,
     },
     {
@@ -227,7 +225,6 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
       key: 'network',
       label: 'Network',
       priority: 'secondary',
-      className: 'mono',
       render: (event) => event.network || 'unavailable',
     },
   ]
@@ -255,13 +252,11 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
     <>
       <div className="page-head page-head-primary">
         <div>
-          <div className="eyebrow">Operations</div>
           <h1>Routes</h1>
-          <p>Traceroute changes that may explain latency shifts and connectivity failures.</p>
         </div>
         <div className="chips">
           <span className="chip">
-            in window <span className="mono">{scopeTotal}</span>
+            In window <span className="mono">{scopeTotal}</span>
           </span>
         </div>
       </div>
@@ -331,13 +326,9 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
       <div className="card">
         <div className="card-head">
           <div>
-            <span className="eyebrow">Change log</span>
             <h2>Path changes</h2>
           </div>
-          <span className="hint">
-            Traceroutes run on a slower cadence than other probes
-            {error ? ' · refresh failed, showing last data' : ''}
-          </span>
+          {error ? <span className="hint">Refresh failed, showing last data</span> : null}
         </div>
         <DataTable
           label="Path changes"
@@ -373,6 +364,7 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
             render: (event) => <EventDetails e={event} />,
           }}
         />
+        <p className="card-foot">Traceroutes run on a slower cadence than other probes.</p>
       </div>
     </>
   )

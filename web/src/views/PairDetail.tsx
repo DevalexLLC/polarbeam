@@ -60,7 +60,7 @@ function DirectionCard({ title, s, dir }: { title: string; s: DirectionSummary; 
           {fmtLatencyParts(s.latency.avg_us).value}
           <span className="unit"> {fmtLatencyParts(s.latency.avg_us).unit}</span>
         </span>
-        <span className="eyebrow">avg {latencyAxisLabel(s.latency_source).replace(' (ms)', '')}</span>
+        <span className="label">avg {latencyAxisLabel(s.latency_source).replace(' (ms)', '')}</span>
       </div>
       <dl>
         <div>
@@ -143,9 +143,9 @@ function DirectionCard({ title, s, dir }: { title: string; s: DirectionSummary; 
 function PathList({ src, dst, dir, paths }: { src: string; dst: string; dir: 'a' | 'b'; paths: CurrentPath[] }) {
   return (
     <div className={'path-current' + (isWidePath(paths) ? ' path-current-wide' : '')}>
-      <h2>
+      <h3>
         <span className={'swatch series-' + dir} /> {src} → {dst}
-      </h2>
+      </h3>
       {paths.length === 0 ? (
         <p className="muted">No traceroute yet. Traces run on a slower cadence.</p>
       ) : (
@@ -198,9 +198,9 @@ function PathList({ src, dst, dir, paths }: { src: string; dst: string; dir: 'a'
 function MtuList({ title, dir, mtus }: { title: string; dir: 'a' | 'b'; mtus: CurrentPathMtu[] }) {
   return (
     <div className="path-current">
-      <h2>
+      <h3>
         <span className={'swatch series-' + dir} /> {title}
-      </h2>
+      </h3>
       {mtus.length === 0 ? (
         <p className="muted">No path MTU measurement yet.</p>
       ) : (
@@ -349,7 +349,7 @@ export default function PairDetail({
       const value =
         metric === 'loss'
           ? (_u: uPlot, v: number) => (v == null ? '—' : `${v.toFixed(1)}%`)
-          : (_u: uPlot, v: number) => (v == null ? '—' : v.toFixed(3))
+          : (_u: uPlot, v: number) => (v == null ? '—' : fmtLatency(v * 1000))
       const chartSeries: uPlot.Series[] =
         metric === 'loss'
           ? [{}, { label: 'loss %', stroke, width: 2, spanGaps: false, value }]
@@ -431,13 +431,12 @@ export default function PairDetail({
     <>
       <div className="page-head page-head-primary">
         <div>
-          <div className="eyebrow">
+          <div className="breadcrumb">
             <a href={inheritRouteNetwork('#/')}>Overview</a> / Pair detail
           </div>
           <h1>
             {a} ⇄ {b}
           </h1>
-          <p>Directional health, measurements, and current network paths.</p>
         </div>
         <span className="sub">
           {bucketLabel}
@@ -476,26 +475,26 @@ export default function PairDetail({
 
       <div className="card">
         <div className="card-head">
-          <span className="eyebrow">Current path</span>
-          <span className="hint">latest complete traceroute per direction</span>
+          <h2>Current path</h2>
         </div>
         <div className="path-pair">
           <PathList src={a} dst={b} dir="a" paths={paths?.a_to_b.paths ?? []} />
           <PathList src={b} dst={a} dir="b" paths={paths?.b_to_a.paths ?? []} />
         </div>
+        <p className="card-foot">The latest complete traceroute in each direction.</p>
       </div>
 
       <div className="card">
         <div className="card-head">
-          <span className="eyebrow">Path MTU</span>
-          <span className="hint">
-            largest IP packet each direction carries without fragmentation (bytes incl. IP header)
-          </span>
+          <h2>Path MTU</h2>
         </div>
         <div className="path-pair">
           <MtuList title={`${a} → ${b}`} dir="a" mtus={mtus?.a_to_b.mtus ?? []} />
           <MtuList title={`${b} → ${a}`} dir="b" mtus={mtus?.b_to_a.mtus ?? []} />
         </div>
+        <p className="card-foot">
+          The largest IP packet each direction carries without fragmentation, in bytes including the IP header.
+        </p>
       </div>
 
       {directions.map(({ key, dir, chart, title }) => {

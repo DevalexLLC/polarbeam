@@ -209,7 +209,6 @@ export default function EnrollmentPanel({
       <section className="card settings-card config-card">
         <div className="card-head">
           <div>
-            <span className="eyebrow">Agent enrollment</span>
             <h2>Join tokens</h2>
           </div>
           <span className="hint">Refreshes every 30s</span>
@@ -220,7 +219,7 @@ export default function EnrollmentPanel({
         </p>
         {canWrite && (
           <div className="config-form">
-            <h3 className="eyebrow">Issue token</h3>
+            <h3 className="label">Issue token</h3>
             {siteNames.length === 0 ? (
               <div className="empty-state">
                 <strong>No sites yet</strong>
@@ -233,7 +232,7 @@ export default function EnrollmentPanel({
             ) : (
               <div className="config-form-grid">
                 <label className="threshold-field">
-                  <span className="eyebrow">Site</span>
+                  <span className="label">Site</span>
                   <span className="threshold-input">
                     <select
                       value={site}
@@ -252,7 +251,7 @@ export default function EnrollmentPanel({
                 </label>
                 <PlaneField choice={plane} value={network} onChange={setNetwork} disabled={creating} />
                 <label className="threshold-field">
-                  <span className="eyebrow">Valid for</span>
+                  <span className="label">Valid for</span>
                   <span className="threshold-input">
                     <select
                       value={ttlMS}

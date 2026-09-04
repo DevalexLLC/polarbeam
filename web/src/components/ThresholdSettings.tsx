@@ -161,7 +161,7 @@ export default function ThresholdSettingsPanel({
 
   const field = (label: string, unit: string, key: keyof Draft) => (
     <label className="threshold-field">
-      <span className="eyebrow">{label}</span>
+      <span className="label">{label}</span>
       <span className="threshold-input">
         <input
           type="text"

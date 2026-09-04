@@ -320,7 +320,7 @@ export default function ProbesPanel({
     if (editID !== probe.id || !editDraft) return null
     return (
       <div className="config-form" id={`probe-editor-${probe.id}-${surface}`} tabIndex={-1}>
-        <h3 className="eyebrow">
+        <h3 className="label">
           Edit {probe.type} · {assignmentLabel(probe)}
           <span className="hint"> — type, assignment, and network are fixed; delete and re-create to re-target</span>
         </h3>
@@ -377,15 +377,15 @@ export default function ProbesPanel({
       <section className="card settings-card config-card">
         <div className="card-head">
           <div>
-            <span className="eyebrow">Measurement workload</span>
             <h2>Probes</h2>
           </div>
-          <span className="hint">Changes reach agents within ~30s · refreshes every 30s</span>
+          <span className="hint">Refreshes every 30s</span>
         </div>
         <p className="section-intro">
           Direct probes run from every agent on the probe's network at a site against one target; mesh templates expand
           over every ordered pair of member sites, pairing only agents on the mesh's network. Type, assignment, and
           network are fixed once created — cadence, params, and enabled state edit in place so history stays continuous.
+          Changes reach agents within about 30 seconds.
         </p>
         {rowError && (
           <ul className="error threshold-errors">

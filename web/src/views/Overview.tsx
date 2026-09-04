@@ -202,9 +202,7 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
     <>
       <div className="page-head page-head-primary">
         <div>
-          <div className="eyebrow">Operations</div>
           <h1>Overview</h1>
-          <p>Current health across sites, monitored directions, and the agent fleet.</p>
         </div>
         <div className="page-actions">
           <span className="freshness">Updated {fmtAgo(updatedAt?.toISOString() ?? null)}</span>

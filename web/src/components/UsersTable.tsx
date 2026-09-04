@@ -61,9 +61,7 @@ export default function UsersTable({
           {users.map((u) => (
             <Fragment key={u.id}>
               <tr>
-                <td data-label="Username" className="mono">
-                  {u.username}
-                </td>
+                <td data-label="Username">{u.username}</td>
                 {/* Was `role === 'admin' ? 'Admin' : 'Viewer'`, which
                 labelled every scoped role "Viewer" — including a
                 network admin. */}
@@ -180,7 +178,7 @@ export default function UsersTable({
                 <tr className="config-edit-row">
                   <td colSpan={10}>
                     <div className="config-form">
-                      <h3 className="eyebrow">Networks · {u.username}</h3>
+                      <h3 className="label">Networks · {u.username}</h3>
                       <NetworkPicker
                         all={networks}
                         value={scopeEdit.networks}

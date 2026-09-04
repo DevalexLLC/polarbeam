@@ -175,7 +175,7 @@ export default function UserCreateDialog({
             </p>
             <div className="config-form-grid">
               <label className="threshold-field">
-                <span className="eyebrow">Username</span>
+                <span className="label">Username</span>
                 <span className="threshold-input">
                   <input
                     type="text"
@@ -188,7 +188,7 @@ export default function UserCreateDialog({
                 </span>
               </label>
               <label className="threshold-field">
-                <span className="eyebrow">Role</span>
+                <span className="label">Role</span>
                 <span className="threshold-input">
                   <select
                     value={newRole}
@@ -219,7 +219,7 @@ export default function UserCreateDialog({
                 aria-label="Networks"
                 aria-describedby={createSummary.describedby}
               >
-                <span className="eyebrow">Networks</span>
+                <span className="label">Networks</span>
                 <NetworkPicker all={networks} value={newNetworks} disabled={creating} onChange={setNewNetworks} />
               </div>
             )}

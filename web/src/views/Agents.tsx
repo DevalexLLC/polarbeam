@@ -447,7 +447,6 @@ export default function Agents({
             key: 'network',
             label: 'Network',
             priority: 'secondary' as const,
-            className: 'mono',
             render: (row: AgentInfo) => row.network,
           },
         ]
@@ -459,7 +458,7 @@ export default function Agents({
       className: 'mono',
       render: (row) => row.probe_address || '—',
     },
-    { key: 'version', label: 'Version', priority: 'secondary', className: 'mono', render: (row) => row.version || '—' },
+    { key: 'version', label: 'Version', priority: 'secondary', render: (row) => row.version || '—' },
     {
       key: 'last_seen',
       label: 'Last seen',
@@ -514,24 +513,22 @@ export default function Agents({
     <>
       <div className="page-head page-head-primary">
         <div>
-          <div className="eyebrow">Operations</div>
           <h1>Agents</h1>
-          <p>Connection, probe, certificate, configuration, and spool health.</p>
         </div>
         <div className="chips">
           <span className="chip">
-            enrolled <span className="mono">{fleetSummary.total}</span>
+            Enrolled <span className="mono">{fleetSummary.total}</span>
           </span>
           <span className="chip">
             {down > 0 && <span className="dot swatch status-down" />}
-            down <span className="mono">{down}</span>
+            Down <span className="mono">{down}</span>
           </span>
           <span className="chip">
             {degraded > 0 && <span className="dot swatch status-degraded" />}
-            degraded <span className="mono">{degraded}</span>
+            Degraded <span className="mono">{degraded}</span>
           </span>
           <span className="chip">
-            results lost <span className="mono">{dropsTotal.toLocaleString()}</span>
+            Results lost <span className="mono">{dropsTotal.toLocaleString()}</span>
           </span>
         </div>
       </div>
@@ -619,12 +616,9 @@ export default function Agents({
       <div className="card">
         <div className="card-head">
           <div>
-            <span className="eyebrow">Fleet inventory</span>
             <h2>Enrolled agents</h2>
           </div>
-          <span className="hint">
-            Spool drops are lifetime totals{error ? ' · refresh failed, showing last data' : ''}
-          </span>
+          {error ? <span className="hint">Refresh failed, showing last data</span> : null}
         </div>
         <DataTable
           label="Enrolled agents"
@@ -671,6 +665,7 @@ export default function Agents({
             ),
           }}
         />
+        <p className="card-foot">Spool drops are lifetime totals.</p>
       </div>
     </>
   )

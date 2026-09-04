@@ -262,7 +262,7 @@ export default function TargetsPanel({
 
   const field = (label: string, key: keyof Draft, placeholder: string, locked = false) => (
     <label className="threshold-field">
-      <span className="eyebrow">{label}</span>
+      <span className="label">{label}</span>
       <span className="threshold-input">
         <input
           type="text"
@@ -288,7 +288,6 @@ export default function TargetsPanel({
       <section className="card settings-card config-card">
         <div className="card-head">
           <div>
-            <span className="eyebrow">Probe destinations</span>
             <h2>Targets</h2>
           </div>
           <span className="hint">Refreshes every 30s</span>
@@ -391,7 +390,7 @@ export default function TargetsPanel({
         />
         {canWrite && (
           <div className="config-form">
-            <h3 className="eyebrow">{editing ? `Edit ${draft?.name}` : 'Add target'}</h3>
+            <h3 className="label">{editing ? `Edit ${draft?.name}` : 'Add target'}</h3>
             <div className="config-form-grid">
               {field('Name', 'name', 'unique handle, e.g. pg-primary', editing)}
               {field('Address', 'address', 'host or IP (tcp/tls/icmp/dns/ntp)')}

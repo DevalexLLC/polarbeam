@@ -103,7 +103,6 @@ export default function MeshesPanel({
       <section className="card settings-card config-card">
         <div className="card-head">
           <div>
-            <span className="eyebrow">Full-mesh groups</span>
             <h2>Mesh groups</h2>
           </div>
           <span className="hint">Refreshes every 30s</span>
@@ -222,10 +221,10 @@ export default function MeshesPanel({
         )}
         {canWrite && (
           <div className="config-form">
-            <h3 className="eyebrow">Create mesh</h3>
+            <h3 className="label">Create mesh</h3>
             <div className="config-form-grid">
               <label className="threshold-field">
-                <span className="eyebrow">Name</span>
+                <span className="label">Name</span>
                 <span className="threshold-input">
                   <input
                     type="text"

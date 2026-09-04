@@ -95,7 +95,6 @@ export default function NetworkThresholdsPanel({
     <section className="card settings-card config-card">
       <div className="card-head">
         <div>
-          <span className="eyebrow">Per-network defaults</span>
           <h2>Network thresholds</h2>
         </div>
       </div>
@@ -186,7 +185,7 @@ export default function NetworkThresholdsPanel({
                     <tr className="config-edit-row">
                       <td colSpan={canWrite ? 7 : 6}>
                         <div className="config-form">
-                          <h3 className="eyebrow">Edit defaults · {d.network}</h3>
+                          <h3 className="label">Edit defaults · {d.network}</h3>
                           <ThresholdOverrideForm
                             url={networkThresholdURL(d.network)}
                             resource={`Network thresholds for ${d.network}`}
@@ -230,7 +229,7 @@ export default function NetworkThresholdsPanel({
             </button>
           ) : (
             <>
-              <h3 className="eyebrow">
+              <h3 className="label">
                 New network defaults
                 <span className="hint"> — applies to every pair on that plane without its own override</span>
               </h3>

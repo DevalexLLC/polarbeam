@@ -135,7 +135,7 @@ function SourceCard({ s, label, pairHref }: { s: TargetSourceSummary; label: str
           {fmtLatencyParts(s.latency.avg_us).value}
           <span className="unit"> {fmtLatencyParts(s.latency.avg_us).unit}</span>
         </span>
-        <span className="eyebrow">avg {latencyAxisLabel(s.latency_source).replace(' (ms)', '')}</span>
+        <span className="label">avg {latencyAxisLabel(s.latency_source).replace(' (ms)', '')}</span>
       </div>
       <dl>
         <div>
@@ -439,7 +439,7 @@ export default function TargetDetail({
       const value =
         metric === 'loss'
           ? (_u: uPlot, v: number) => (v == null ? '—' : `${v.toFixed(1)}%`)
-          : (_u: uPlot, v: number) => (v == null ? '—' : v.toFixed(3))
+          : (_u: uPlot, v: number) => (v == null ? '—' : fmtLatency(v * 1000))
       const chartSeries: uPlot.Series[] =
         metric === 'loss'
           ? [{}, { label: 'loss %', stroke, width: 2, spanGaps: false, value }]
@@ -490,7 +490,7 @@ export default function TargetDetail({
       grid: { stroke: c.grid, width: 1 },
       ticks: { stroke: c.grid, width: 1 },
     }
-    const value = (_u: uPlot, v: number) => (v == null ? '—' : v.toFixed(3))
+    const value = (_u: uPlot, v: number) => (v == null ? '—' : fmtLatency(v * 1000))
     return {
       height: 230,
       series: [
@@ -569,15 +569,14 @@ export default function TargetDetail({
     <>
       <div className="page-head page-head-primary">
         <div>
-          <div className="eyebrow">
+          <div className="breadcrumb">
             <a href={targetInventoryHref()}>Targets</a> / Target detail
           </div>
           <h1>{title}</h1>
           <p>
             {addressLabel && <span className="mono">{addressLabel}</span>}
             {addressLabel ? ' · ' : ''}
-            {target.kind === 'external' ? 'external target' : 'agent target'} · health, measurements, and stage timings
-            from every probing site.
+            {target.kind === 'external' ? 'external target' : 'agent target'}
           </p>
         </div>
         <span className="sub">
@@ -643,17 +642,21 @@ export default function TargetDetail({
 
           <div className="card">
             <div className="card-head">
-              <span className="eyebrow">Probe health</span>
-              <span className="hint">per probe series, last 24 h — click a slot for its failures</span>
+              <h2>Probe health</h2>
             </div>
             {health && shownHealthProbes.length > 0 ? (
-              <StripRows
-                probes={shownHealthProbes}
-                bucketS={health.bucket_s || 1800}
-                multiNetwork={multiNetwork}
-                selectedProbe={selectedProbe}
-                onSelectProbe={setSelectedProbe}
-              />
+              <>
+                <StripRows
+                  probes={shownHealthProbes}
+                  bucketS={health.bucket_s || 1800}
+                  multiNetwork={multiNetwork}
+                  selectedProbe={selectedProbe}
+                  onSelectProbe={setSelectedProbe}
+                />
+                <p className="card-foot">
+                  One strip per probe series over the last 24 hours. Click a slot to see its failures.
+                </p>
+              </>
             ) : (
               <div className="empty-state">
                 <strong>No probe series yet</strong>
@@ -665,8 +668,7 @@ export default function TargetDetail({
           {shownPathSources.some((s) => s.paths.length > 0) && (
             <div className="card">
               <div className="card-head">
-                <span className="eyebrow">Current path</span>
-                <span className="hint">latest complete traceroute per probing site</span>
+                <h2>Current path</h2>
               </div>
               <div className="path-pair">
                 {shownPathSources
@@ -676,9 +678,9 @@ export default function TargetDetail({
                       key={srcKey(s.site, s.network)}
                       className={'path-current' + (isWidePath(s.paths) ? ' path-current-wide' : '')}
                     >
-                      <h2>
+                      <h3>
                         <span className="swatch series-a" /> {srcLabel(s.site, s.network)} → {title}
-                      </h2>
+                      </h3>
                       <PathGraph
                         mode="current"
                         source={srcLabel(s.site, s.network)}
@@ -716,6 +718,7 @@ export default function TargetDetail({
                     </div>
                   ))}
               </div>
+              <p className="card-foot">The latest complete traceroute from each probing site.</p>
             </div>
           )}
 

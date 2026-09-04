@@ -294,7 +294,7 @@ export default function OIDCSettingsPanel({
     opts: { type?: string; hint?: string } = {},
   ) => (
     <label className="threshold-field">
-      <span className="eyebrow">{label}</span>
+      <span className="label">{label}</span>
       <span className="threshold-input">
         <input
           type={opts.type ?? 'text'}
@@ -331,7 +331,6 @@ export default function OIDCSettingsPanel({
       <section className="card settings-card config-card">
         <div className="card-head">
           <div>
-            <span className="eyebrow">Single sign-on</span>
             <h2>OpenID Connect</h2>
           </div>
           <span className="hint">Refreshes every 30s</span>
@@ -391,7 +390,7 @@ export default function OIDCSettingsPanel({
             {textField('Role claim', 'roleClaim', 'groups')}
           </div>
           <label className="threshold-field oidc-admin-values">
-            <span className="eyebrow">Admin values (one per line)</span>
+            <span className="label">Admin values (one per line)</span>
             <textarea
               value={current.adminValues}
               placeholder={'polarbeam-admins'}
@@ -411,7 +410,7 @@ export default function OIDCSettingsPanel({
             aria-label="Network role rules"
             aria-describedby={formSummary.describedby}
           >
-            <span className="eyebrow">Network role rules</span>
+            <span className="label">Network role rules</span>
             <span className="hint">
               Ordered mappings from the same role claim to a network-scoped role. Every matching rule contributes: the
               strongest role wins and its networks are unioned, so one user in two tenants' admin groups administers
@@ -499,7 +498,7 @@ export default function OIDCSettingsPanel({
             </button>
           </div>
           <label className="threshold-field">
-            <span className="eyebrow">Unmatched users</span>
+            <span className="label">Unmatched users</span>
             <span className="threshold-input">
               <select
                 value={current.unmatchedRole}
@@ -517,7 +516,7 @@ export default function OIDCSettingsPanel({
             </span>
           </label>
           <label className="threshold-field oidc-capem">
-            <span className="eyebrow">Identity provider CA (PEM, optional)</span>
+            <span className="label">Identity provider CA (PEM, optional)</span>
             <textarea
               value={current.caPem}
               placeholder="-----BEGIN CERTIFICATE-----  (only for private PKI; leave empty to use system roots)"

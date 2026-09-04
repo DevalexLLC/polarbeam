@@ -26,7 +26,6 @@ export default function FleetAgentsCard({
     <section className="card overview-fleet">
       <div className="card-head">
         <div>
-          <span className="eyebrow">Fleet</span>
           <h2>Agents</h2>
         </div>
         <a className="text-link" href={inheritRouteNetwork('#/agents')}>
@@ -44,7 +43,9 @@ export default function FleetAgentsCard({
             <thead>
               <tr>
                 <th scope="col">Agent</th>
-                <th scope="col">Last update</th>
+                <th scope="col" className="fleet-seen">
+                  Last update
+                </th>
                 <th scope="col">24 h health</th>
                 <th scope="col" className="fleet-uptime">
                   Uptime

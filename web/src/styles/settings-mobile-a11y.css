@@ -23,8 +23,10 @@
   gap: 0.2rem;
 }
 
-.settings-nav-group .eyebrow {
+.settings-nav-group .label {
   padding: 0 0.65rem 0.25rem;
+  color: var(--ink-3);
+  font-size: 0.75rem;
 }
 
 .settings-sidebar a {
@@ -143,7 +145,7 @@
   border-top: 1px solid var(--border);
 }
 
-.config-form h3.eyebrow {
+.config-form h3.label {
   margin: 0 0 0.6rem;
 }
 
@@ -343,10 +345,8 @@ button.path-toggle:hover {
   gap: 1rem;
   margin-bottom: 0.75rem;
   color: var(--ink-3);
-  font-size: 0.75rem;
+  font-size: 0.78rem;
   font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
 }
 
 .mobile-nav-drawer nav {

@@ -38,10 +38,8 @@ table.events th {
   padding: 0.45rem 0.8rem;
   border-bottom: 1px solid var(--border);
   color: var(--ink-3);
-  font-size: 0.75rem;
+  font-size: 0.78rem;
   font-weight: 650;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
   white-space: nowrap;
 }
 
@@ -208,10 +206,9 @@ table.hop-diff td {
   border: 1px solid var(--status-degraded);
   border-radius: 999px;
   color: var(--status-degraded);
-  font-size: 0.75rem;
+  font-size: 0.78rem;
   font-weight: 650;
   text-align: center;
-  text-transform: uppercase;
 }
 
 .hop-added .change-badge {
@@ -266,7 +263,7 @@ tr.hop-changed td {
   grid-column: 1 / -1;
 }
 
-.path-current h2 {
+.path-current h3 {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -427,9 +424,8 @@ tr.hop-changed td {
 }
 
 .pg-key {
-  font-size: 0.75rem;
+  font-size: 0.78rem;
   font-weight: 650;
-  text-transform: uppercase;
   padding: 0.08rem 0.4rem;
   border-radius: 999px;
   border: 1px dashed var(--status-down);
@@ -589,10 +585,8 @@ ol.hops li {
     content: attr(data-label);
     color: var(--ink-3);
     font-family: var(--sans);
-    font-size: 0.75rem;
+    font-size: 0.78rem;
     font-weight: 650;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
   }
 
   table.agents td:last-child,

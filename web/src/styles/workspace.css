@@ -22,10 +22,6 @@
   color: var(--ink-2);
 }
 
-.page-head-primary .eyebrow a {
-  color: inherit;
-}
-
 .card-head h2,
 .settings-card h2 {
   margin: 0.2rem 0 0;
@@ -212,10 +208,8 @@ button.stat-card {
 
 .stat-label {
   color: var(--ink-3);
-  font-size: 0.75rem;
+  font-size: 0.78rem;
   font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
 }
 
 .stat-card > strong {
@@ -306,7 +300,7 @@ button.stat-card {
 .fleet-scroll {
   flex: 1 1 0;
   min-height: 12rem;
-  overflow-y: auto;
+  overflow: auto;
 }
 
 table.fleet-table {
@@ -323,11 +317,9 @@ table.fleet-table th {
   border-bottom: 1px solid var(--border);
   background: var(--surface);
   color: var(--ink-3);
-  font-size: 0.75rem;
+  font-size: 0.78rem;
   font-weight: 650;
-  letter-spacing: 0.07em;
   text-align: left;
-  text-transform: uppercase;
   white-space: nowrap;
 }
 
@@ -444,6 +436,28 @@ td.fleet-uptime {
 
 td.fleet-uptime {
   font-weight: 650;
+}
+
+/* Phone widths: the strip's intrinsic width (one viewBox unit per slot)
+   would push the table past the card, so columns are fixed and the
+   freshness column yields its room to the strip. */
+@media (max-width: 480px) {
+  table.fleet-table {
+    table-layout: fixed;
+  }
+  table.fleet-table th:first-child {
+    width: 7.5rem;
+  }
+  table.fleet-table td:first-child {
+    overflow-wrap: anywhere;
+  }
+  th.fleet-uptime,
+  td.fleet-uptime {
+    width: 4.2rem;
+  }
+  .fleet-seen {
+    display: none;
+  }
 }
 
 /* Partial 24 h coverage: the ratio only describes the measured span, so it

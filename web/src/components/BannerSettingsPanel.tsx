@@ -141,7 +141,6 @@ export default function BannerSettingsPanel({
       <section className="card settings-card config-card">
         <div className="card-head">
           <div>
-            <span className="eyebrow">Marking</span>
             <h2>Screen banner</h2>
           </div>
           <span className="hint">Refreshes every 30s</span>
@@ -183,7 +182,7 @@ export default function BannerSettingsPanel({
             </span>
           </label>
           <label className="threshold-field">
-            <span className="eyebrow">Banner text</span>
+            <span className="label">Banner text</span>
             <span className="threshold-input">
               <input
                 type="text"
