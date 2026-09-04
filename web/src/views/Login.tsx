@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { ApiError, apiPost } from '../api'
 import LogoMark from '../components/LogoMark'
+import LoginMesh from '../components/LoginMesh'
 import type { LoginResponse } from '../types'
 
 // The OIDC start/callback endpoints report failures as short codes in the
@@ -70,24 +71,22 @@ export default function Login({ sso, onLogin }: { sso: boolean; onLogin: (res: L
   return (
     <div className="login-wrap">
       <section className="login-context" aria-label="Product introduction">
-        {/* Marketing copy, not a section heading: the page's outline is the
-            always-visible brand h1 in the form (this panel hides <900px). */}
-        <p className="login-headline">
-          See the
-          <br />
-          network clearly.
-        </p>
-        <p>
-          Monitor inter-site connectivity, correlate incidents, and investigate directional performance from one control
-          plane.
-        </p>
+        {/* A still of the operations map fills the panel: what the dashboard
+            shows, in the dashboard's own marks. The copy is a caption, not a
+            heading — the panel hides below 900px, so the page's outline is
+            the brand h1 in the form. */}
+        <LoginMesh />
+        <div className="login-context-copy">
+          <p className="login-context-title">Both directions of every link.</p>
+          <p>Latency, loss, and route changes between your sites, measured from each end.</p>
+        </div>
       </section>
       <form className="login-card" onSubmit={submit} aria-busy={busy}>
         <div className="login-mark">
           <LogoMark className="logo-mark logo-mark-login" />
           <h1>PolarBEAM</h1>
         </div>
-        <p className="login-sub">Sign in to the PolarBEAM control plane.</p>
+        <p className="login-sub">Sign in to continue.</p>
         <label className="label">
           Username
           {/* Sign-in is this page's only purpose and this is its first field,

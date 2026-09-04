@@ -79,28 +79,27 @@ button.linklike:hover {
 
 /* ---- login ---- */
 
+/* Split screen: the operations map fills a night panel on the left, the
+   form has the surface on the right. The two halves meet with no gutter. */
 .login-wrap {
   min-height: 100dvh;
   display: grid;
-  place-items: center;
-  background: var(--bg);
+  grid-template-columns: minmax(0, 1.2fr) minmax(24rem, 0.8fr);
+  background: var(--surface);
 }
 
 .login-card {
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  width: min(340px, 92vw);
-  padding: 2.2rem 2rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
+  width: min(22rem, 100%);
+  margin: auto;
+  padding: 2.5rem 1.5rem;
 }
 
 .login-mark {
   display: flex;
   align-items: center;
-  justify-content: center;
   gap: 0.6rem;
   margin-bottom: 0.4rem;
 }
@@ -117,7 +116,6 @@ button.linklike:hover {
 }
 
 .login-sub {
-  text-align: center;
   margin: -0.6rem 0 0.4rem;
 }
 
