@@ -488,10 +488,14 @@ export default function PairDetail({
         <div className="card-head">
           <h2>Path MTU</h2>
         </div>
-        <div className="path-pair">
-          <MtuList title={`${a} → ${b}`} dir="a" mtus={mtus?.a_to_b.mtus ?? []} />
-          <MtuList title={`${b} → ${a}`} dir="b" mtus={mtus?.b_to_a.mtus ?? []} />
-        </div>
+        {(mtus?.a_to_b.mtus.length ?? 0) === 0 && (mtus?.b_to_a.mtus.length ?? 0) === 0 ? (
+          <p className="muted">No path MTU measurement yet in either direction.</p>
+        ) : (
+          <div className="path-pair">
+            <MtuList title={`${a} → ${b}`} dir="a" mtus={mtus?.a_to_b.mtus ?? []} />
+            <MtuList title={`${b} → ${a}`} dir="b" mtus={mtus?.b_to_a.mtus ?? []} />
+          </div>
+        )}
         <p className="card-foot">
           The largest IP packet each direction carries without fragmentation, in bytes including the IP header.
         </p>
