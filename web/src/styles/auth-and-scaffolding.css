@@ -80,14 +80,19 @@ button.linklike:hover {
 /* ---- login ---- */
 
 /* Split screen: the operations map fills a night panel on the left, the
-   form has the surface on the right. The two halves meet with no gutter. */
+   form has the surface on the right. The two halves meet with no gutter.
+   The form panel is a true side column — a bounded width, not a share of
+   the viewport — so the map takes whatever is left and the form never
+   floats in a field of empty surface on wide screens. */
 .login-wrap {
   min-height: 100dvh;
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(24rem, 0.8fr);
+  grid-template-columns: minmax(0, 1fr) clamp(26rem, 32vw, 30rem);
   background: var(--surface);
 }
 
+/* The form stack sits on an 8px rhythm: every gap, margin, and control
+   height is a multiple of 0.5rem so the column reads as one grid. */
 .login-card {
   display: flex;
   flex-direction: column;
@@ -100,8 +105,8 @@ button.linklike:hover {
 .login-mark {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  margin-bottom: 0.4rem;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
 }
 
 .logo-mark-login {
@@ -115,18 +120,15 @@ button.linklike:hover {
   letter-spacing: 0.01em;
 }
 
-.login-sub {
-  margin: -0.6rem 0 0.4rem;
-}
-
 .login-card label {
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
+  gap: 0.5rem;
 }
 
 .login-card input {
-  padding: 0.55rem 0.65rem;
+  padding: 0.5rem 0.75rem;
+  line-height: 1.5;
   font-family: var(--mono);
   font-size: 0.95rem;
   color: var(--ink);
@@ -173,7 +175,8 @@ button.linklike:hover {
 
 .login-card button[type='submit'] {
   margin-top: 0.5rem;
-  padding: 0.6rem;
+  padding: 0.625rem;
+  line-height: 1.5;
   font: inherit;
   font-weight: 600;
   color: var(--accent-ink);
@@ -193,8 +196,8 @@ button.linklike:hover {
 .login-divider {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  margin: 0.35rem 0;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
   color: var(--muted);
   font-size: 0.78rem;
 }
@@ -207,7 +210,8 @@ button.linklike:hover {
 }
 
 .login-card .sso-button {
-  padding: 0.6rem;
+  padding: 0.625rem;
+  line-height: 1.5;
   font: inherit;
   font-weight: 600;
   color: var(--ink);
@@ -225,8 +229,8 @@ button.linklike:hover {
    Separated from the button above so it reads as card footer rather than as
    part of the submit control. */
 .login-legal {
-  margin: 1.1rem 0 0;
-  padding-top: 0.9rem;
+  margin: 1rem 0 0;
+  padding-top: 1rem;
   border-top: 1px solid var(--border);
   text-align: center;
   color: var(--ink-3);

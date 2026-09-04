@@ -70,23 +70,18 @@ export default function Login({ sso, onLogin }: { sso: boolean; onLogin: (res: L
 
   return (
     <div className="login-wrap">
-      <section className="login-context" aria-label="Product introduction">
-        {/* A still of the operations map fills the panel: what the dashboard
-            shows, in the dashboard's own marks. The copy is a caption, not a
-            heading — the panel hides below 900px, so the page's outline is
-            the brand h1 in the form. */}
+      {/* A still of the operations map fills the panel: what the dashboard
+          shows, in the dashboard's own marks, with no caption — the map is
+          the statement. Purely decorative, so it is hidden from assistive
+          tech; the page's outline is the brand h1 in the form. */}
+      <div className="login-context" aria-hidden="true">
         <LoginMesh />
-        <div className="login-context-copy">
-          <p className="login-context-title">Both directions of every link.</p>
-          <p>Latency, loss, and route changes between your sites, measured from each end.</p>
-        </div>
-      </section>
+      </div>
       <form className="login-card" onSubmit={submit} aria-busy={busy}>
         <div className="login-mark">
           <LogoMark className="logo-mark logo-mark-login" />
           <h1>PolarBEAM</h1>
         </div>
-        <p className="login-sub">Sign in to continue.</p>
         <label className="label">
           Username
           {/* Sign-in is this page's only purpose and this is its first field,
