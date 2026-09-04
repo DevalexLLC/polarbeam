@@ -36,7 +36,6 @@ export default function ConnectivityCard({
     <section className="card overview-connectivity" id="connectivity">
       <div className="card-head">
         <div>
-          <span className="eyebrow">Topology</span>
           <h2>Connectivity</h2>
         </div>
         <div className="card-head-actions">

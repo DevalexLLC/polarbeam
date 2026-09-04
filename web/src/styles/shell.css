@@ -47,7 +47,7 @@
 }
 
 .ui-banner {
-  /* The .eyebrow engraved-label treatment, centered in a slim band.
+  /* The .label engraved-label treatment, centered in a slim band.
      Block + line-height (not flex) so text-overflow can ellipsize. */
   position: sticky;
   z-index: 60; /* above .topbar (50), below .skip-link (100) */
@@ -154,10 +154,8 @@
   min-width: 40px;
   padding: 0 0.7rem;
   border-radius: 999px;
-  font-size: 0.75rem;
+  font-size: 0.78rem;
   font-weight: 650;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 
 .theme-toggle-icon {
@@ -242,10 +240,8 @@
 
 .user-menu-identity span {
   color: var(--ink-3);
-  font-size: 0.75rem;
+  font-size: 0.78rem;
   font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 /* One ordered claim-to-role mapping per row: value, role, the networks it
@@ -424,10 +420,8 @@
   display: block;
   padding: 0.5rem 0.75rem 0.35rem;
   color: var(--ink-3);
-  font-size: 0.75rem;
+  font-size: 0.78rem;
   font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .topbar-filter-popover button {

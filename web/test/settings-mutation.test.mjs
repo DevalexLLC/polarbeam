@@ -134,7 +134,7 @@ test('probe state toggles preflight the same full state they write', async () =>
 
 test('mesh create leaves duplicate-name classification to the server', async () => {
   const source = await readFile(new URL('../src/components/MeshesPanel.tsx', import.meta.url), 'utf8')
-  const create = source.slice(source.indexOf('<h3 className="eyebrow">Create mesh</h3>'))
+  const create = source.slice(source.indexOf('<h3 className="label">Create mesh</h3>'))
   assert.doesNotMatch(create, /checkForConflict/)
   assert.match(create, /apiPost\('\/api\/v1\/config\/meshes'/)
 })

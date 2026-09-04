@@ -83,8 +83,7 @@ button.linklike:hover {
   min-height: 100dvh;
   display: grid;
   place-items: center;
-  background:
-    radial-gradient(600px 320px at 50% 30%, color-mix(in srgb, #e8b93b 7%, transparent), transparent 70%), var(--bg);
+  background: var(--bg);
 }
 
 .login-card {
@@ -109,21 +108,6 @@ button.linklike:hover {
 .logo-mark-login {
   width: 52px;
   height: 52px;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .logo-mark-login {
-    animation: mark-breathe 4s ease-in-out infinite;
-  }
-  @keyframes mark-breathe {
-    0%,
-    100% {
-      filter: drop-shadow(0 0 2px color-mix(in srgb, #ffd166 35%, transparent));
-    }
-    50% {
-      filter: drop-shadow(0 0 6px color-mix(in srgb, #ffd166 70%, transparent));
-    }
-  }
 }
 
 .login-mark h1 {
@@ -214,9 +198,7 @@ button.linklike:hover {
   gap: 0.6rem;
   margin: 0.35rem 0;
   color: var(--muted);
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 0.78rem;
 }
 
 .login-divider::before,

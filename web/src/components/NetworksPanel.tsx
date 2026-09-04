@@ -169,7 +169,7 @@ export default function NetworksPanel({
 
   const field = (label: string, key: keyof Draft, placeholder: string, locked = false) => (
     <label className="threshold-field">
-      <span className="eyebrow">{label}</span>
+      <span className="label">{label}</span>
       <span className="threshold-input">
         <input
           type="text"
@@ -195,7 +195,6 @@ export default function NetworksPanel({
       <section className="card settings-card config-card">
         <div className="card-head">
           <div>
-            <span className="eyebrow">Connectivity planes</span>
             <h2>Networks</h2>
           </div>
           <span className="hint">Refreshes every 30s</span>
@@ -260,7 +259,7 @@ export default function NetworksPanel({
         />
         {canWrite && (
           <div className="config-form" ref={editForm} tabIndex={-1}>
-            <h3 className="eyebrow">{editing ? `Edit ${draft?.name}` : 'Add network'}</h3>
+            <h3 className="label">{editing ? `Edit ${draft?.name}` : 'Add network'}</h3>
             <div className="config-form-grid">
               {field('Name', 'name', 'unique handle, e.g. mgmt', editing)}
               {field('Display name', 'display_name', 'e.g. Management')}

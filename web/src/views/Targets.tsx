@@ -96,7 +96,6 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
       label: 'Target',
       sortKey: 'name',
       priority: 'identity',
-      className: 'mono',
       render: (target) => (
         <a href={targetDetailHref(target.id)}>
           {target.kind === 'agent' ? (target.agent_site ?? target.name) : target.name}
@@ -136,14 +135,12 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
       key: 'from',
       label: 'Probed from',
       priority: 'secondary',
-      className: 'mono',
       render: (target) => target.probing_sites.join(', ') || '—',
     },
     {
       key: 'network',
       label: 'Network',
       priority: 'secondary',
-      className: 'mono',
       render: (target) => target.network || 'all networks',
     },
     {
@@ -159,20 +156,18 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
     <>
       <div className="page-head page-head-primary">
         <div>
-          <div className="eyebrow">Operations</div>
           <h1>Targets</h1>
-          <p>Everything the fleet probes: external destinations and the sites' own agents.</p>
         </div>
         <div className="chips">
           <span className="chip">
-            external <span className="mono">{externalCount}</span>
+            External <span className="mono">{externalCount}</span>
           </span>
           <span className="chip">
-            site destinations <span className="mono">{siteCount}</span>
+            Site destinations <span className="mono">{siteCount}</span>
           </span>
           <span className="chip">
             {troubledCount > 0 && <span className="dot swatch status-down" />}
-            with incidents <span className="mono">{troubledCount}</span>
+            With incidents <span className="mono">{troubledCount}</span>
           </span>
         </div>
       </div>
@@ -232,10 +227,8 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
       <div className="card">
         <div className="card-head">
           <div>
-            <span className="eyebrow">Probe destinations</span>
             <h2>Target inventory</h2>
           </div>
-          <span className="hint">status reflects open incidents · admins manage external targets in Settings</span>
         </div>
         <DataTable
           label="Operational targets"
@@ -269,6 +262,7 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
             desktop: false,
           }}
         />
+        <p className="card-foot">Status reflects open incidents. Admins manage external targets in Settings.</p>
       </div>
     </>
   )

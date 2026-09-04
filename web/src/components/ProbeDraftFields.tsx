@@ -24,7 +24,7 @@ export default function ProbeDraftFields({
     placeholder = '',
   ) => (
     <label className="threshold-field">
-      <span className="eyebrow">{label}</span>
+      <span className="label">{label}</span>
       <span className="threshold-input">
         <input
           type="text"
@@ -70,7 +70,7 @@ export default function ProbeDraftFields({
           if (spec.kind === 'enum') {
             return (
               <label key={spec.key} className="threshold-field">
-                <span className="eyebrow">{label}</span>
+                <span className="label">{label}</span>
                 <span className="threshold-input">
                   <select
                     value={draft.params[spec.key] ?? ''}
@@ -93,7 +93,7 @@ export default function ProbeDraftFields({
           if (spec.kind === 'int') {
             return (
               <label key={spec.key} className="threshold-field">
-                <span className="eyebrow">{label}</span>
+                <span className="label">{label}</span>
                 <span className="threshold-input">
                   <input
                     type="text"
@@ -115,7 +115,7 @@ export default function ProbeDraftFields({
           }
           return (
             <label key={spec.key} className="threshold-field">
-              <span className="eyebrow">{label}</span>
+              <span className="label">{label}</span>
               <span className="threshold-input">
                 <input
                   type="text"

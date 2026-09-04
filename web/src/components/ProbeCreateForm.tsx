@@ -105,13 +105,13 @@ export default function ProbeCreateForm({
 
   return (
     <div className="config-form">
-      <h3 className="eyebrow">Add probe</h3>
+      <h3 className="label">Add probe</h3>
       <div className="config-form-grid">
         {/* A <label> would be wrong here: this field holds a button
             group, not a form control, so there is nothing for the
             label to name. The group carries its own accessible name. */}
         <div className="threshold-field">
-          <span className="eyebrow">Assignment</span>
+          <span className="label">Assignment</span>
           <span
             className="control-group config-mode"
             role="group"
@@ -147,7 +147,7 @@ export default function ProbeCreateForm({
           </span>
         </div>
         <label className="threshold-field">
-          <span className="eyebrow">Type</span>
+          <span className="label">Type</span>
           <span className="threshold-input">
             <select
               value={createDraft.type}
@@ -167,7 +167,7 @@ export default function ProbeCreateForm({
         </label>
         {createDraft.mode === 'mesh' ? (
           <label className="threshold-field">
-            <span className="eyebrow">Mesh group</span>
+            <span className="label">Mesh group</span>
             <span className="threshold-input">
               <select
                 value={createDraft.mesh}
@@ -187,7 +187,7 @@ export default function ProbeCreateForm({
         ) : (
           <>
             <label className="threshold-field">
-              <span className="eyebrow">Site</span>
+              <span className="label">Site</span>
               <span className="threshold-input">
                 <select
                   value={createDraft.site}
@@ -205,7 +205,7 @@ export default function ProbeCreateForm({
               </span>
             </label>
             <label className="threshold-field">
-              <span className="eyebrow">Target</span>
+              <span className="label">Target</span>
               <span className="threshold-input">
                 <select
                   value={createDraft.target}

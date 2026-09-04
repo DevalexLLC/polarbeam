@@ -70,7 +70,6 @@ export default function Login({ sso, onLogin }: { sso: boolean; onLogin: (res: L
   return (
     <div className="login-wrap">
       <section className="login-context" aria-label="Product introduction">
-        <LogoMark className="logo-mark login-context-mark" />
         {/* Marketing copy, not a section heading: the page's outline is the
             always-visible brand h1 in the form (this panel hides <900px). */}
         <p className="login-headline">See the network clearly.</p>
@@ -78,12 +77,6 @@ export default function Login({ sso, onLogin }: { sso: boolean; onLogin: (res: L
           Monitor inter-site connectivity, correlate incidents, and investigate directional performance from one control
           plane.
         </p>
-        <div className="login-signals" aria-hidden="true">
-          <span />
-          <span />
-          <span />
-          <span />
-        </div>
       </section>
       <form className="login-card" onSubmit={submit} aria-busy={busy}>
         <div className="login-mark">
@@ -91,7 +84,7 @@ export default function Login({ sso, onLogin }: { sso: boolean; onLogin: (res: L
           <h1>PolarBEAM</h1>
         </div>
         <p className="login-sub">Sign in to the PolarBEAM control plane.</p>
-        <label className="eyebrow">
+        <label className="label">
           Username
           {/* Sign-in is this page's only purpose and this is its first field,
               so focusing it costs no orientation and saves every operator a
@@ -107,7 +100,7 @@ export default function Login({ sso, onLogin }: { sso: boolean; onLogin: (res: L
           />
           {/* oxlint-enable jsx-a11y/no-autofocus */}
         </label>
-        <label className="eyebrow">
+        <label className="label">
           Password
           <span className="password-field">
             <input

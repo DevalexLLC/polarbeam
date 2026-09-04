@@ -275,7 +275,6 @@ export default function UsersPanel({
       <section className="card settings-card config-card">
         <div className="card-head">
           <div>
-            <span className="eyebrow">Usage</span>
             <h2>Last 12 months</h2>
           </div>
           <FilterGroup
@@ -315,7 +314,6 @@ export default function UsersPanel({
       <section className="card settings-card config-card">
         <div className="card-head">
           <div>
-            <span className="eyebrow">Accounts</span>
             <h2>Dashboard users</h2>
           </div>
           <UserCreateDialog

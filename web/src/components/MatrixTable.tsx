@@ -112,7 +112,7 @@ export default function MatrixTable({
         <table className="matrix">
           <thead>
             <tr>
-              <th className="corner eyebrow" scope="col">
+              <th className="corner label" scope="col">
                 source ↓<br />
                 destination →
               </th>

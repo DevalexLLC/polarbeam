@@ -177,14 +177,37 @@ body {
   outline-offset: 2px;
 }
 
-/* Structure labels: the instrument's engraved text. */
-.eyebrow {
+/* Structure labels: field names, sub-section titles, table corners. One
+   quiet sentence-case style; the surrounding layout carries hierarchy. */
+.label {
   font-family: var(--sans);
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+h3.label {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+  color: var(--ink);
+}
+
+/* Detail pages: the way back, one level up. */
+.breadcrumb {
+  font-size: 0.8rem;
   color: var(--ink-3);
+}
+
+.breadcrumb a {
+  color: inherit;
+}
+
+/* A card's explanatory sentence, set after the content it explains. */
+.card-foot {
+  max-width: 60rem;
+  margin: 0.9rem 0 0;
+  color: var(--ink-3);
+  font-size: 0.8rem;
 }
 
 .mono {

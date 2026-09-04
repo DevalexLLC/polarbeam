@@ -92,7 +92,7 @@ function InvestigationLinks({ event, win }: { event: OutageEvent; win: Window })
         {targetLink}
       </div>
       <div className="incident-route-links">
-        <span className="eyebrow">Related route changes</span>
+        <span className="label">Related route changes</span>
         {event.route_events.length === 0 ? (
           <span className="hint">No related route changes within 15 minutes of opening or resolution.</span>
         ) : (
@@ -355,9 +355,7 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
     <>
       <div className="page-head page-head-primary">
         <div>
-          <div className="eyebrow">Operations</div>
           <h1>Incidents</h1>
-          <p>Correlated failures requiring attention, followed by resolved history.</p>
         </div>
         <div className="chips">
           <span className={'chip' + (activeCount > 0 ? ' chip-alert' : '')}>
@@ -429,18 +427,8 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
         <section className="card chart-card incident-timeline-card">
           <div className="card-head">
             <div>
-              <span className="eyebrow">Last {timeline.win}</span>
               <h2>Incident timeline</h2>
             </div>
-            <span className="hint">
-              {/* The 500 cap is applied server-side BEFORE the network
-                  filter, so the hint watches the unfiltered count. */}
-              Height: incidents per slice · color: kind · muted: resolved · click a bar to filter
-              {data.outages.filter((o) => o.closed_at != null).length >= 500
-                ? ' · oldest resolved past 500 omitted'
-                : ''}
-              {data.truncated ? ' · oldest open incidents omitted (server cap)' : ''}
-            </span>
           </div>
           <IncidentTimeline
             events={events}
@@ -449,13 +437,22 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
             selected={bucket}
             onSelect={(value) => setSelectedSlice(value ?? 0)}
           />
+          <p className="card-foot">
+            {/* The 500 cap is applied server-side BEFORE the network
+                filter, so the note watches the unfiltered count. */}
+            Each bar counts the incidents in its slice, colored by kind, with resolved ones muted. Click a bar to filter
+            the list below.
+            {data.outages.filter((o) => o.closed_at != null).length >= 500
+              ? ' Resolved incidents past the newest 500 are omitted.'
+              : ''}
+            {data.truncated ? ' The oldest open incidents are omitted (server cap).' : ''}
+          </p>
         </section>
       )}
 
       <section className="card incident-card">
         <div className="card-head">
           <div>
-            <span className="eyebrow">Correlated by state, probe, and error</span>
             <h2>
               {filter === 'active'
                 ? 'Active incident groups'
@@ -477,12 +474,7 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
               <span aria-hidden="true">×</span>
               <span className="sr-only">Clear time filter</span>
             </button>
-          ) : (
-            <span className="hint">
-              Failing opens after 3 failures · degraded after 3 critical-threshold breaches · both resolve after 3 clean
-              successes
-            </span>
-          )}
+          ) : null}
         </div>
         {groups.length === 0 ? (
           <div className="empty-state">
@@ -522,6 +514,10 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
             />
           ))
         )}
+        <p className="card-foot">
+          A failing group opens after 3 consecutive failures of one probe series and a degraded group after 3
+          consecutive critical-threshold breaches. Both resolve after 3 consecutive clean results.
+        </p>
       </section>
     </>
   )

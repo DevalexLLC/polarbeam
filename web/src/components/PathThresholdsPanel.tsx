@@ -135,7 +135,7 @@ export default function PathThresholdsPanel({
 
   const siteSelect = (value: string, set: (v: string) => void, label: string) => (
     <label className="threshold-field">
-      <span className="eyebrow">{label}</span>
+      <span className="label">{label}</span>
       <span className="threshold-input">
         <select
           value={value}
@@ -158,7 +158,6 @@ export default function PathThresholdsPanel({
     <section className="card settings-card config-card">
       <div className="card-head">
         <div>
-          <span className="eyebrow">Per-pair exceptions</span>
           <h2>Path threshold overrides</h2>
         </div>
       </div>
@@ -261,7 +260,7 @@ export default function PathThresholdsPanel({
                       <tr className="config-edit-row">
                         <td colSpan={canWrite ? 7 : 6}>
                           <div className="config-form">
-                            <h3 className="eyebrow">
+                            <h3 className="label">
                               Edit override · {o.a} ↔ {o.b}
                               {o.network !== '' ? ` · network ${o.network}` : ''}
                             </h3>
@@ -308,7 +307,7 @@ export default function PathThresholdsPanel({
             </button>
           ) : (
             <>
-              <h3 className="eyebrow">
+              <h3 className="label">
                 New override
                 <span className="hint"> — one override covers both directions of the pair</span>
               </h3>

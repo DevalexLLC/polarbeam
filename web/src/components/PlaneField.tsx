@@ -47,7 +47,7 @@ export default function PlaneField({
   if (choice.kind === 'fixed') {
     return (
       <label className="threshold-field">
-        <span className="eyebrow">{label}</span>
+        <span className="label">{label}</span>
         <span className="threshold-input">
           <span className="chip">{choice.plane}</span>
           {hint && <span className="hint">{hint}</span>}
@@ -57,7 +57,7 @@ export default function PlaneField({
   }
   return (
     <label className="threshold-field">
-      <span className="eyebrow">{label}</span>
+      <span className="label">{label}</span>
       <span className="threshold-input">
         <select
           value={value}

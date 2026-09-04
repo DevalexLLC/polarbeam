@@ -289,7 +289,7 @@ export default function SitesPanel({
 
   const field = (label: string, key: keyof Draft, placeholder: string, locked = false) => (
     <label className="threshold-field">
-      <span className="eyebrow">{label}</span>
+      <span className="label">{label}</span>
       <span className="threshold-input">
         <input
           type="text"
@@ -315,7 +315,6 @@ export default function SitesPanel({
       <section className="card settings-card config-card">
         <div className="card-head">
           <div>
-            <span className="eyebrow">Locations</span>
             <h2>Sites</h2>
           </div>
           <span className="hint">Refreshes every 30s</span>
@@ -403,7 +402,7 @@ export default function SitesPanel({
         />
         {canWrite && (
           <div className="config-form">
-            <h3 className="eyebrow">{editing ? `Edit ${draft?.name}` : 'Add site'}</h3>
+            <h3 className="label">{editing ? `Edit ${draft?.name}` : 'Add site'}</h3>
             <div className="config-form-grid">
               {field('Name', 'name', 'unique handle, e.g. nyc', editing)}
               {field('Display name', 'display_name', 'e.g. New York')}

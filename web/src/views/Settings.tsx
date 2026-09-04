@@ -3,7 +3,7 @@ import type { Caps } from '../caps'
 import { planeChoice } from '../plane'
 import { inheritRouteNetwork, navigateRouteHash } from '../routeState'
 import { useRouteParam } from '../useRouteState'
-import { SETTINGS_GROUPS, SETTINGS_TABS, visibleTabs } from '../settingsTabs'
+import { SETTINGS_GROUPS, visibleTabs } from '../settingsTabs'
 import type { SettingsTab } from '../settingsTabs'
 import BannerSettingsPanel from '../components/BannerSettingsPanel'
 import EnrollmentPanel from '../components/EnrollmentPanel'
@@ -74,9 +74,7 @@ export default function Settings({
     <>
       <div className="page-head page-head-primary">
         <div>
-          <div className="eyebrow">Administration</div>
           <h1>Settings</h1>
-          <p>{SETTINGS_TABS.find((t) => t.tab === tab)?.intro}</p>
         </div>
       </div>
       <div className="settings-mobile-picker">
@@ -109,7 +107,7 @@ export default function Settings({
             const children = tabs.filter((item) => item.group === group.group)
             return children.length === 0 ? null : (
               <div className="settings-nav-group" key={group.group}>
-                <div className="eyebrow">{group.label}</div>
+                <div className="label">{group.label}</div>
                 {children.map((item) => (
                   <a
                     key={item.tab}
@@ -196,7 +194,6 @@ export default function Settings({
               <section className="card settings-card">
                 <div className="card-head">
                   <div>
-                    <span className="eyebrow">Health classification</span>
                     <h2>Connectivity thresholds</h2>
                   </div>
                 </div>
