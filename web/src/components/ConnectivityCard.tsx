@@ -1,7 +1,9 @@
+import { useMemo } from 'react'
 import MatrixTable from './MatrixTable'
 import RadioButtonGroup from './RadioButtonGroup'
 import TopologySites from './TopologySites'
 import WorldMap from './WorldMap'
+import { buildSiteLinks } from '../mapLinks'
 import type { ThresholdResolver } from '../severity'
 import type { SiteTopology } from '../siteTopology'
 import type { TopologyMode } from '../topologyMode'
@@ -32,6 +34,7 @@ export default function ConnectivityCard({
   mode: ConnectivityMode
   onModeChange: (mode: ConnectivityMode) => void
 }) {
+  const links = useMemo(() => buildSiteLinks(cells, thresholds), [cells, thresholds])
   return (
     <section className="card overview-connectivity" id="connectivity">
       <div className="card-head">
@@ -58,7 +61,7 @@ export default function ConnectivityCard({
       {mode === 'sites' ? (
         <TopologySites topology={topology} />
       ) : mode === 'map' ? (
-        <WorldMap topology={topology} />
+        <WorldMap topology={topology} links={links} />
       ) : (
         <MatrixTable sites={sites} cells={cells} thresholds={thresholds} />
       )}

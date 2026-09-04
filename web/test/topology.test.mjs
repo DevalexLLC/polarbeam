@@ -13,6 +13,7 @@ import {
   zoomMapViewportAt,
 } from '../src/mapViewport.ts'
 import { declutter } from '../src/mapLayout.ts'
+import { BEAM_GAP, beamGeometry, buildSiteLinks } from '../src/mapLinks.ts'
 import { SEVERITY_LABEL } from '../src/severity.ts'
 import { buildSiteTopology, rankSiteTopology, topologyUrgentSites } from '../src/siteTopology.ts'
 import { resolveTopologyMode } from '../src/topologyMode.ts'
@@ -250,4 +251,37 @@ test('PathGraph label size stays in the same fixed coordinate system as its widt
   assert.match(graph, /const CHAR_W = 7\.3/)
   assert.match(styles, /\.path-graph \.pg-label[\s\S]*font-size: 12px/)
   assert.match(styles, /\.path-graph \.pg-sub[\s\S]*font-size: 12px/)
+})
+
+test('site links fold both directions of a pair and grade each on its own', () => {
+  const cell = (src, dst, status) => ({ ...topologyCell(dst, status), src })
+  const links = buildSiteLinks(
+    [cell('lon', 'nyc', 'ok'), cell('nyc', 'lon', 'degraded'), cell('syd', 'lon', 'stale'), cell('nyc', 'nyc', 'ok')],
+    () => null,
+  )
+  // Canonical a < b keys, name-ordered regardless of response order; a
+  // self-pair never becomes a beam.
+  assert.deepEqual(
+    links.map(({ a, b, ab, ba }) => [a, b, ab, ba]),
+    [
+      ['lon', 'nyc', 'ok', 'warn'],
+      ['lon', 'syd', null, 'stale'],
+    ],
+  )
+})
+
+test('beam geometry parts the two directions and stops at each bubble', () => {
+  const from = { x: 0, y: 0, r: 10 }
+  const to = { x: 100, y: 0, r: 20 }
+  const ab = beamGeometry(from, to, 1)
+  const ba = beamGeometry(from, to, -1)
+  // Each stroke clears its origin and destination bubbles.
+  assert.ok(ab.x1 > from.r && ab.x2 < 100 - to.r)
+  // The strokes sit on opposite sides of the center line, one gap apart.
+  assert.ok(Math.abs(Math.abs(ab.y1 - ba.y1) - 2 * BEAM_GAP) < 1e-9)
+  assert.ok(ab.y1 * ba.y1 < 0)
+  // b→a runs toward a, so its arrowhead end is the low-x end.
+  assert.ok(ba.x2 < ba.x1)
+  // Touching bubbles leave no room for a legible beam.
+  assert.equal(beamGeometry(from, { x: 32, y: 0, r: 20 }, 1), null)
 })

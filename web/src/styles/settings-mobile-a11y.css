@@ -616,6 +616,21 @@ button.linklike {
     background: var(--surface);
   }
 
+  /* The sign-in still is decorative and would keep its own palette under a
+     caption forced to CanvasText; the panel keeps its words and drops the
+     picture. */
+  .login-mesh {
+    display: none;
+  }
+
+  /* Beams recede by opacity in normal modes; forced colors keep the island's
+     palette but every direction must be fully visible. */
+  .map-beam,
+  .map-focus .map-beams > g:not(.lit) .map-beam {
+    opacity: 1;
+    stroke-width: 1.8;
+  }
+
   .swatch {
     border: 1px solid CanvasText;
   }
@@ -644,5 +659,16 @@ button.linklike {
   :root[data-theme='dark'] {
     --ink-3: var(--ink-2);
     --border: var(--border-strong);
+  }
+
+  /* Healthy and stale beams are translucent by design (a quiet mesh reads
+     as a faint lattice); more contrast means every direction at full ink. */
+  .map-beam {
+    opacity: 1;
+    stroke-width: 1.6;
+  }
+
+  .map-focus .map-beams > g:not(.lit) .map-beam {
+    opacity: 0.4;
   }
 }

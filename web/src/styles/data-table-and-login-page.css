@@ -302,39 +302,63 @@ table.data-table tbody tr:last-child > td {
   padding: 0.5rem 0.65rem;
 }
 
-/* Login is part of the product, not an isolated utility form. */
-.login-wrap {
-  grid-template-columns: minmax(22rem, 31rem) minmax(22rem, 26rem);
-  justify-content: center;
-  gap: clamp(3rem, 6vw, 5rem);
-  padding: 2rem;
-}
-
+/* The night panel is an instrument in both themes: it pins the dark
+   palette so the map reads the same on a light dashboard, while the form
+   panel follows the theme. Scoped overrides only — the :root token blocks
+   the contrast gate measures are untouched. */
 .login-context {
+  position: relative;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  justify-content: flex-end;
+  overflow: hidden;
+  padding: clamp(2rem, 5vw, 4rem);
+  color: #eef2f6;
+  background: #0b0e12;
+  --accent: #818cf8;
+  --status-degraded: #ffc247;
+  --status-down: #ff6b72;
+  --status-stale: #8a897f;
+  --map-dot: #2c333d;
 }
 
-.login-context .login-headline {
-  margin: 0 0 1rem;
-  color: var(--ink);
-  font-size: clamp(2.5rem, 4vw, 3.8rem);
-  /* Was a heading; the paragraph keeps its rendered weight. */
-  font-weight: 700;
-  line-height: 1;
-  letter-spacing: -0.04em;
-}
-.login-context p {
-  max-width: 34rem;
-  margin: 0;
-  color: var(--ink-2);
-  font-size: 1rem;
-}
-.login-card {
+/* Sign-in still: the same marks, no interaction, covering the panel. */
+.login-mesh {
+  position: absolute;
+  inset: 0;
   width: 100%;
-  padding: 2.4rem;
-  box-shadow: 0 10px 30px rgb(0 0 0 / 0.08);
+  height: 100%;
+}
+
+/* A scrim under the caption so it stays legible over the map. */
+.login-context::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, rgb(11 14 18 / 0.88) 0%, rgb(11 14 18 / 0.45) 30%, transparent 55%);
+  pointer-events: none;
+}
+
+.login-context-copy {
+  position: relative;
+  z-index: 1;
+  max-width: 34rem;
+}
+
+.login-context-title {
+  margin: 0 0 0.6rem;
+  font-size: clamp(1.6rem, 2.4vw, 2.2rem);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+
+.login-context-copy p:not(.login-context-title) {
+  max-width: 30rem;
+  margin: 0;
+  color: #b3bcc7;
+  font-size: 1rem;
+  text-wrap: pretty;
 }
 .login-sub {
   margin: -0.35rem 0 0.5rem;
@@ -366,17 +390,17 @@ table.data-table tbody tr:last-child > td {
   }
 }
 
-@media (max-width: 900px) {
+/* The breakpoint is in em so it scales with the user's text size along with
+   the form column's 24rem minimum: at 200% text the split gives way at
+   1920px, not at 900px with a 133px map panel. */
+@media (max-width: 60em) {
   .login-wrap {
     grid-template-columns: 1fr;
-    padding: 1rem;
   }
   .login-context {
     display: none;
   }
   .login-card {
-    max-width: 24rem;
-    margin: auto;
     padding: 2rem 1.4rem;
   }
 }

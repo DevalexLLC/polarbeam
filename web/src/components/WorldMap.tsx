@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
-import { MAP_DOTS, MAP_VIEW_H, MAP_VIEW_W } from '../assets/mapGeo'
+import { MAP_VIEW_H, MAP_VIEW_W } from '../assets/mapGeo'
 import { fmtLatency } from '../format'
 import { projectMap } from '../geo'
 import {
@@ -15,7 +15,10 @@ import {
   type MapViewport,
 } from '../mapViewport'
 import { inheritRouteNetwork } from '../routeState'
+import MapBeams, { BeamMarkers } from './MapBeams'
+import { DOT_GRID_D } from '../mapDots'
 import { bubbleRadius, declutter, type DeclutterNode } from '../mapLayout'
+import type { BeamEnd, SiteLink } from '../mapLinks'
 import { SEVERITY_LABEL, type Severity } from '../severity'
 import type { SiteTopology } from '../siteTopology'
 
@@ -36,14 +39,6 @@ function useMapTargetPixels(): number {
   return large ? 44 : 24
 }
 
-// The dot-matrix landmass: one path of zero-length round-capped segments,
-// computed once — the geometry never changes at runtime.
-let dotGrid = ''
-for (let i = 0; i < MAP_DOTS.length; i += 2) {
-  dotGrid += `M${MAP_DOTS[i]} ${MAP_DOTS[i + 1]}h.01`
-}
-const DOT_GRID_D = dotGrid
-
 interface PlacedSite {
   topology: SiteTopology
   x: number // display center after declutter — markers AND the info card use this
@@ -55,7 +50,7 @@ interface PlacedSite {
   displaced: boolean // shifted far enough to warrant an anchor mark
 }
 
-export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
+export default function WorldMap({ topology, links }: { topology: SiteTopology[]; links: SiteLink[] }) {
   const [pinned, setPinned] = useState<string | null>(null)
   const [hovered, setHovered] = useState<string | null>(null)
   const [viewport, setViewport] = useState<MapViewport>(FULL_MAP_VIEWPORT)
@@ -70,6 +65,7 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
   const shellRef = useRef<HTMLDivElement>(null)
   const cardRef = useRef<HTMLDivElement>(null)
   const hintId = useId()
+  const beamMarkerId = useId()
   const targetPixels = useMapTargetPixels()
   const targetRadius = mapHitRadius(targetPixels, renderedMapWidth || MAP_VIEW_W)
   const drag = useRef<{
@@ -143,6 +139,13 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
     const placedEntries = withCoords.map((entry) => layoutByName.get(entry.site.name)!)
     return { placed: placedEntries, unplaced: missingCoordinates }
   }, [targetRadius, topology])
+
+  // Beam endpoints follow the DISPLAY positions, so a decluttered bubble's
+  // beams stay attached to the bubble, not to the empty city behind it.
+  const beamEnds = useMemo(
+    () => new Map<string, BeamEnd>(placed.map((p) => [p.topology.site.name, { x: p.x, y: p.y, r: p.r }])),
+    [placed],
+  )
 
   useEffect(() => {
     const svg = svgRef.current
@@ -505,7 +508,8 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
   // The card anchors to the DISPLAY position, not the raw projection — a
   // decluttered bubble may sit a nudge away from its city, and the card
   // must stay attached to the bubble the pointer is on.
-  const shown = placed.find((p) => p.topology.site.name === (hovered ?? pinned)) ?? null
+  const focusSite = hovered ?? pinned
+  const shown = placed.find((p) => p.topology.site.name === focusSite) ?? null
   const shownSite = shown ? shown.topology.site : null
   const shownPoint = shown ? { x: shown.x, y: shown.y } : null
   const shownStats = shown ? shown.topology.stats : null
@@ -527,7 +531,7 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
             over it, so browse mode reads them as ordinary buttons. */}
         <svg
           ref={svgRef}
-          className={'worldmap' + (dragging ? ' map-dragging' : '')}
+          className={'worldmap' + (dragging ? ' map-dragging' : '') + (focusSite ? ' map-focus' : '')}
           viewBox={`${viewport.x} ${viewport.y} ${viewport.width} ${viewport.height}`}
           role="img"
           aria-label={`World map of ${placed.length} monitored ${placed.length === 1 ? 'site' : 'sites'}, ${zoomPercent}% zoom.`}
@@ -545,7 +549,14 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
               setPinned(null)
             }}
           />
+          <BeamMarkers id={beamMarkerId} />
           <path className="map-dotgrid" d={DOT_GRID_D} />
+          {/* Every measured direction, drawn from its origin's bubble to its
+              destination's and graded on its own. Healthy beams recede so a
+              quiet mesh reads as a faint lattice and only trouble stands
+              out; hovering or pinning a site lifts its beams and dims the
+              rest. */}
+          <MapBeams links={links} ends={beamEnds} markerId={beamMarkerId} lit={focusSite} />
           {/* A nudged bubble no longer sits exactly on its city; the anchor
               dot keeps the map honest about the true projected location.
               Decorative only (each site's aria-label already names it), and
@@ -705,10 +716,16 @@ export default function WorldMap({ topology }: { topology: SiteTopology[] }) {
           )}
       </div>
       {legend}
-      <p className="hint map-keys-hint" id={hintId}>
-        Focus the map, then pan with the arrow keys, zoom with + and −, press F to fit all sites, 0 to reset. Drag to
-        pan; scroll or pinch to zoom. Tab moves through site markers.
-      </p>
+      {/* The controls stay documented for the svg's aria-describedby (a
+          closed disclosure's text still resolves) without occupying two
+          lines of every Overview. */}
+      <details className="map-help">
+        <summary>Map controls</summary>
+        <p className="hint" id={hintId}>
+          Focus the map, then pan with the arrow keys, zoom with + and −, press F to fit all sites, 0 to reset. Drag to
+          pan; scroll or pinch to zoom. Tab moves through site markers.
+        </p>
+      </details>
       {missingStrip}
     </>
   )

@@ -185,8 +185,103 @@ button.map-marker {
   margin-left: auto;
 }
 
-.map-keys-hint {
+/* Keyboard and pointer controls, folded behind a disclosure. */
+.map-help {
   margin: 0.5rem 0 0;
+}
+
+.map-help > summary {
+  display: inline-block;
+  padding: 0.15rem 0;
+  color: var(--ink-3);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+  list-style: none;
+}
+
+.map-help > summary::-webkit-details-marker {
+  display: none;
+}
+
+.map-help > summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 0.35rem;
+  transition: transform 120ms ease;
+}
+
+.map-help[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.map-help > p {
+  margin: 0.25rem 0 0;
+}
+
+/* Directional beams: one stroke per measured direction, graded like the
+   bubbles. Healthy beams are thin and translucent so a quiet mesh is a faint
+   lattice; degraded and down beams thicken and go opaque. Stale runs dashed
+   because "no data" is a gap, not a line. */
+.map-beam {
+  --beam: var(--status-stale);
+  fill: none;
+  stroke: var(--beam);
+  stroke-width: 1;
+  stroke-linecap: butt;
+  opacity: 0.38;
+  pointer-events: none;
+  transition: opacity 140ms ease;
+}
+
+.map-beam.sev-ok {
+  --beam: var(--accent);
+}
+
+.map-beam.sev-stale {
+  stroke-dasharray: 3 3;
+  opacity: 0.5;
+}
+
+.map-beam.sev-warn,
+.map-beam.sev-crit {
+  --beam: var(--status-degraded);
+  stroke-width: 1.8;
+  opacity: 0.95;
+}
+
+.map-beam.sev-crit {
+  stroke-width: 2.2;
+}
+
+.map-beam.sev-down {
+  --beam: var(--status-down);
+  stroke-width: 2.4;
+  opacity: 1;
+}
+
+/* Arrowheads cannot read their line's stroke, so each severity has its own
+   marker colored to match. */
+.map-beam-arrow {
+  fill: var(--status-stale);
+}
+
+.map-beam-arrow.sev-ok {
+  fill: var(--accent);
+}
+
+.map-beam-arrow.sev-warn,
+.map-beam-arrow.sev-crit {
+  fill: var(--status-degraded);
+}
+
+.map-beam-arrow.sev-down {
+  fill: var(--status-down);
+}
+
+/* A hovered or pinned site lifts its own beams; the rest recede. */
+.map-focus .map-beams > g:not(.lit) .map-beam {
+  opacity: 0.1;
 }
 
 /* Site info card, template style: name + status, headline value, severity
