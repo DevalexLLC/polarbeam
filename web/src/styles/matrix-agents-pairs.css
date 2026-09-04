@@ -103,7 +103,7 @@ table.matrix td.cell > a:hover {
   gap: 0.3rem;
   color: var(--ink-2);
   font-size: 0.75rem;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .cell-status .dot {
@@ -237,7 +237,7 @@ table.agents tr:last-child td {
   padding: 0.3rem 0.85rem;
   font: inherit;
   font-size: 0.83rem;
-  font-weight: 550;
+  font-weight: 500;
   border: 1px solid transparent;
   border-radius: calc(var(--radius) - 3px);
   background: transparent;
@@ -296,7 +296,7 @@ table.agents tr:last-child td {
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
   font-size: 1.7rem;
-  font-weight: 650;
+  font-weight: 600;
   line-height: 1;
 }
 
@@ -355,7 +355,7 @@ table.agents tr:last-child td {
 
 .check-chip strong {
   color: var(--ink);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 /* A chip that is a link (pair detail → target detail) keeps the chip look;
@@ -394,19 +394,19 @@ a.check-chip:hover {
 
 .status-text-ok {
   color: var(--status-ok);
-  font-weight: 650;
+  font-weight: 600;
 }
 .status-text-degraded {
   color: var(--status-degraded);
-  font-weight: 650;
+  font-weight: 600;
 }
 .status-text-down {
   color: var(--status-down);
-  font-weight: 650;
+  font-weight: 600;
 }
 .status-text-stale {
   color: var(--ink-3);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .chart-card {
@@ -438,7 +438,7 @@ a.check-chip:hover {
 }
 
 .chart-investigation-mode {
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .chart-investigation-mode.active {

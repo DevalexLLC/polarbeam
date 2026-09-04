@@ -29,7 +29,7 @@ table.data-table th {
   color: var(--ink-3);
   background: var(--surface);
   font-size: 0.78rem;
-  font-weight: 650;
+  font-weight: 600;
   text-align: left;
   white-space: nowrap;
 }
@@ -98,7 +98,7 @@ table.data-table tbody tr:last-child > td {
   color: var(--accent);
   background: transparent;
   font: inherit;
-  font-weight: 650;
+  font-weight: 600;
   cursor: pointer;
 }
 
@@ -226,7 +226,7 @@ table.data-table tbody tr:last-child > td {
     margin-bottom: 0.12rem;
     color: var(--ink-3);
     font-size: 0.78rem;
-    font-weight: 650;
+    font-weight: 600;
   }
 
   .data-table-mobile-field > div {
@@ -317,7 +317,6 @@ table.data-table tbody tr:last-child > td {
 }
 
 .login-context .login-headline {
-  max-width: 14ch;
   margin: 0 0 1rem;
   color: var(--ink);
   font-size: clamp(2.5rem, 4vw, 3.8rem);
@@ -354,8 +353,16 @@ table.data-table tbody tr:last-child > td {
   .fleet-scroll {
     max-height: 420px;
   }
+  /* Two by two: the hairline grid needs its second row ruled. */
   .stat-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .stat-card:nth-child(odd) {
+    padding-left: 0.15rem;
+    border-left: 0;
+  }
+  .stat-card:nth-child(n + 3) {
+    border-top: 1px solid var(--border);
   }
 }
 
@@ -438,8 +445,10 @@ table.data-table tbody tr:last-child > td {
 }
 
 @media (max-width: 640px) {
-  .stat-grid {
-    grid-template-columns: 1fr;
+  /* Two cells share the width, so the context line wraps instead of
+     ellipsizing mid-word. */
+  .stat-context {
+    white-space: normal;
   }
   .overview-main-row {
     display: block;

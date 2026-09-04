@@ -10,7 +10,7 @@ This product includes third-party software. The polarbeam-server and
 polarbeam-agent binaries are statically linked and embed the Go standard
 library and the Go modules vendored under vendor/; polarbeam-server
 additionally embeds the built dashboard, which bundles third-party
-JavaScript packages and the JetBrains Mono webfont. All of their licenses
+JavaScript packages and the IBM Plex Sans and JetBrains Mono webfonts. All of their licenses
 and attribution notices are reproduced in full in the accompanying
 THIRD-PARTY-NOTICES file, which is distributed alongside this NOTICE in
 every release artifact.

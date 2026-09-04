@@ -147,32 +147,19 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
   if (pinnedEventID) params.set('q', pinnedEventID)
   else if (queryParam.trim()) params.set('q', queryParam.trim())
   const requestURL = '/api/v1/path-events?' + params.toString()
-  const scopeParams = new URLSearchParams({ window: win, limit: '1', offset: '0', sort: 'time', order: 'desc' })
-  if (network) scopeParams.set('network', network)
-  const scopeURL = '/api/v1/path-events?' + scopeParams.toString()
-  const needsScopeRequest = Boolean(pinnedEventID || queryParam.trim())
 
-  // scopeURL and needsScopeRequest derive from inputs already encoded in
-  // requestURL (window, network, q), so the request URL alone is the key.
   const {
     data: snapshot,
     error,
     loadedKey,
     reload,
-  } = usePolledResource(
-    () => {
-      const inventoryRequest = apiGet<PathEventsResponse>(requestURL)
-      const scopeRequest = needsScopeRequest ? apiGet<PathEventsResponse>(scopeURL) : inventoryRequest
-      return Promise.all([inventoryRequest, scopeRequest]).then(([res, scope]) => ({
-        res,
-        scopeTotal: scope.page?.total ?? scope.events.length,
-      }))
-    },
-    { key: requestURL, onAuthError, logLabel: 'routes' },
-  )
-  const data = snapshot?.res ?? null
+  } = usePolledResource(() => apiGet<PathEventsResponse>(requestURL), {
+    key: requestURL,
+    onAuthError,
+    logLabel: 'routes',
+  })
+  const data = snapshot ?? null
   reconcilePin(Boolean(data?.events.some((event) => event.id === expandedEvent)))
-  const scopeTotal = snapshot?.scopeTotal ?? 0
   const loadedRequestURL = typeof loadedKey === 'string' ? loadedKey : ''
 
   const events = data?.events ?? []
@@ -253,11 +240,6 @@ export default function Paths({ onAuthError }: { onAuthError: (err: unknown) => 
       <div className="page-head page-head-primary">
         <div>
           <h1>Routes</h1>
-        </div>
-        <div className="chips">
-          <span className="chip">
-            In window <span className="mono">{scopeTotal}</span>
-          </span>
         </div>
       </div>
 

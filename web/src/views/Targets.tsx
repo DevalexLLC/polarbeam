@@ -158,18 +158,6 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
         <div>
           <h1>Targets</h1>
         </div>
-        <div className="chips">
-          <span className="chip">
-            External <span className="mono">{externalCount}</span>
-          </span>
-          <span className="chip">
-            Site destinations <span className="mono">{siteCount}</span>
-          </span>
-          <span className="chip">
-            {troubledCount > 0 && <span className="dot swatch status-down" />}
-            With incidents <span className="mono">{troubledCount}</span>
-          </span>
-        </div>
       </div>
 
       {error !== null && (
@@ -229,6 +217,10 @@ export default function Targets({ onAuthError }: { onAuthError: (err: unknown) =
           <div>
             <h2>Target inventory</h2>
           </div>
+          <span className="hint">
+            {externalCount} external, {siteCount} site {siteCount === 1 ? 'destination' : 'destinations'},{' '}
+            {troubledCount} with {troubledCount === 1 ? 'an incident' : 'incidents'}
+          </span>
         </div>
         <DataTable
           label="Operational targets"

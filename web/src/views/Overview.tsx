@@ -228,16 +228,7 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
             {availableSites}
             <small> / {shownSites.length}</small>
           </strong>
-          <span className="stat-context">
-            <span className="stat-badge">
-              {shownSites.length === 0
-                ? 'No sites'
-                : availableSites === shownSites.length
-                  ? 'All live'
-                  : `${shownSites.length - availableSites} unavailable`}
-            </span>
-            Sites with a live agent
-          </span>
+          <span className="stat-context">Sites with a live agent</span>
         </a>
         <button
           type="button"
@@ -252,16 +243,7 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
             {healthyDirections}
             <small> / {totalDirections}</small>
           </strong>
-          <span className="stat-context">
-            <span className="stat-badge">
-              {totalDirections === 0
-                ? 'No probes'
-                : healthyDirections === totalDirections
-                  ? 'All healthy'
-                  : `${totalDirections - healthyDirections} not healthy`}
-            </span>
-            Latest probe horizon
-          </span>
+          <span className="stat-context">Latest probe horizon</span>
         </button>
         <a
           className={'stat-card ' + (activeGroups.length > 0 ? 'stat-critical' : 'stat-good')}
@@ -272,7 +254,6 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
               incidents; a "+" marks every derived figure as a floor. */}
           <strong>{outages.truncated ? `${activeGroups.length}+` : activeGroups.length}</strong>
           <span className="stat-context">
-            <span className="stat-badge">{activeGroups.length > 0 ? 'Active' : 'Clear'}</span>
             {active.length === 0
               ? 'No active incidents'
               : `${activeTargetCount}${outages.truncated ? '+' : ''} affected ${activeTargetCount === 1 ? 'target' : 'targets'}`}
@@ -284,10 +265,7 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
         >
           <span className="stat-label">Agents needing attention</span>
           <strong>{attention.length}</strong>
-          <span className="stat-context">
-            <span className="stat-badge">{attention.length > 0 ? 'Attention' : 'All healthy'}</span>
-            Probe, certificate, or spool health
-          </span>
+          <span className="stat-context">Probe, certificate, or spool health</span>
         </a>
       </section>
 

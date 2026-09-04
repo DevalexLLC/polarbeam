@@ -156,43 +156,46 @@ relative-luminance contrast; `color-mix` backgrounds are resolved in
 srgb gamma space exactly as browsers resolve them.
 
 Mind the two thin margins — light `--status-crit` on `--surface` (4.53)
-and dark `--status-ok` on `--status-ok-bg` (4.52): any change to a
-surface or a status-bg mix percentage must re-clear them.
+and dark `--status-ok` on `--status-ok-bg` (4.54, which is why the dark
+ok mix is 14% rather than 16%): any change to a surface or a status-bg
+mix percentage must re-clear them.
 
 | Pair (fg on bg) | Bar | Light | Dark |
 |---|---|---|---|
-| `--ink` on `--bg` | 4.5:1 | 16.55 | 18.00 |
-| `--ink` on `--surface` | 4.5:1 | 17.72 | 16.73 |
-| `--ink` on `--surface-2` | 4.5:1 | 16.12 | 15.28 |
-| `--ink-2` on `--bg` | 4.5:1 | 7.22 | 9.83 |
-| `--ink-2` on `--surface` | 4.5:1 | 7.73 | 9.13 |
-| `--ink-2` on `--surface-2` | 4.5:1 | 7.03 | 8.35 |
-| `--ink-3` on `--bg` | 4.5:1 | 4.86 | 7.72 |
-| `--ink-3` on `--surface` | 4.5:1 | 5.20 | 7.17 |
-| `--ink-3` on `--surface-2` | 4.5:1 | 4.74 | 6.56 |
+| `--ink` on `--bg` | 4.5:1 | 16.33 | 17.19 |
+| `--ink` on `--surface` | 4.5:1 | 18.51 | 16.00 |
+| `--ink` on `--surface-2` | 4.5:1 | 16.95 | 14.71 |
+| `--ink-2` on `--bg` | 4.5:1 | 6.77 | 10.07 |
+| `--ink-2` on `--surface` | 4.5:1 | 7.68 | 9.37 |
+| `--ink-2` on `--surface-2` | 4.5:1 | 7.03 | 8.61 |
+| `--ink-3` on `--bg` | 4.5:1 | 4.93 | 7.57 |
+| `--ink-3` on `--surface` | 4.5:1 | 5.59 | 7.05 |
+| `--ink-3` on `--surface-2` | 4.5:1 | 5.12 | 6.48 |
 | `--accent-ink` on `--accent` | 4.5:1 | 6.29 | 6.28 |
-| `--accent` on `--surface` | 4.5:1 | 6.29 | 6.16 |
-| `--accent` on `--bg` | 4.5:1 | 5.87 | 6.63 |
-| `--status-ok` on `--surface` | 4.5:1 | 5.90 | 5.48 |
-| `--status-ok` on `--status-ok-bg` | 4.5:1 | 5.13 | 4.52 |
-| `--status-degraded` on `--surface` | 4.5:1 | 5.54 | 11.43 |
-| `--status-degraded` on `--status-degraded-bg` | 4.5:1 | 5.02 | 8.77 |
-| `--status-down` on `--surface` | 4.5:1 | 6.52 | 6.65 |
-| `--status-down` on `--status-down-bg` | 4.5:1 | 5.47 | 5.75 |
-| `--status-stale` on `--surface` | 4.5:1 | 5.21 | 5.22 |
-| `--status-stale` on `--status-stale-bg` | 4.5:1 | 4.74 | 4.77 |
-| `--status-warn` on `--surface` | 4.5:1 | 5.54 | 11.43 |
-| `--status-crit` on `--surface` | 4.5:1 | 4.53 | 5.92 |
-| `--focus` on `--bg` | 3:1 | 4.17 | 6.63 |
-| `--focus` on `--surface` | 3:1 | 4.47 | 6.16 |
-| `--series-a` on `--surface` | 3:1 | 4.42 | 5.05 |
-| `--series-b` on `--surface` | 3:1 | 3.94 | 4.66 |
-| `--chart-local` on `--surface` | 3:1 | 6.29 | 5.82 |
-| `--chart-oidc` on `--surface` | 3:1 | 3.94 | 4.66 |
-| `--strip-nodata` on `--surface` | 3:1 | 3.71 | 3.64 |
-| `--strip-nodata` on `--surface-2` | 3:1 | 3.37 | 3.33 |
-| `--control-border` on `--surface` | 3:1 | 3.42 | 3.64 |
-| `--control-border` on `--surface-2` | 3:1 | 3.11 | 3.33 |
+| `--accent` on `--surface` | 4.5:1 | 6.29 | 6.03 |
+| `--accent` on `--bg` | 4.5:1 | 5.55 | 6.48 |
+| `--status-ok` on `--surface` | 4.5:1 | 5.90 | 5.36 |
+| `--status-ok` on `--status-ok-bg` | 4.5:1 | 5.13 | 4.54 |
+| `--status-degraded` on `--surface` | 4.5:1 | 5.54 | 11.19 |
+| `--status-degraded` on `--status-degraded-bg` | 4.5:1 | 5.02 | 8.54 |
+| `--status-down` on `--surface` | 4.5:1 | 6.52 | 6.51 |
+| `--status-down` on `--status-down-bg` | 4.5:1 | 5.49 | 5.67 |
+| `--status-degraded` on `--bg` | 4.5:1 | 4.89 | 12.03 |
+| `--status-down` on `--bg` | 4.5:1 | 5.75 | 7.00 |
+| `--status-stale` on `--surface` | 4.5:1 | 5.21 | 5.11 |
+| `--status-stale` on `--status-stale-bg` | 4.5:1 | 4.77 | 4.70 |
+| `--status-warn` on `--surface` | 4.5:1 | 5.54 | 11.19 |
+| `--status-crit` on `--surface` | 4.5:1 | 4.53 | 5.80 |
+| `--focus` on `--bg` | 3:1 | 3.94 | 6.48 |
+| `--focus` on `--surface` | 3:1 | 4.47 | 6.03 |
+| `--series-a` on `--surface` | 3:1 | 4.42 | 4.95 |
+| `--series-b` on `--surface` | 3:1 | 3.94 | 4.56 |
+| `--chart-local` on `--surface` | 3:1 | 6.29 | 5.70 |
+| `--chart-oidc` on `--surface` | 3:1 | 3.94 | 4.56 |
+| `--strip-nodata` on `--surface` | 3:1 | 3.59 | 4.07 |
+| `--strip-nodata` on `--surface-2` | 3:1 | 3.29 | 3.75 |
+| `--control-border` on `--surface` | 3:1 | 3.59 | 4.07 |
+| `--control-border` on `--surface-2` | 3:1 | 3.29 | 3.75 |
 
 Light darkens `--status-ok` and `--status-stale` for text duty on white;
 the dark block overrides them back to the brighter originals suited to

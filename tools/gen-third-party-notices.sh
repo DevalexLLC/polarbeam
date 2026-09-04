@@ -15,7 +15,8 @@
 #      licenses come from the COMMITTED web/THIRD-PARTY-LICENSES, because
 #      node_modules is gitignored and absent from the offline build;
 #      `make web` regenerates it next to the dist rebuild.
-#   4. Bundled webfont — web/dist/fonts ships JetBrains Mono under the OFL.
+#   4. Bundled webfonts — web/dist/fonts ships IBM Plex Sans and JetBrains
+#      Mono, each under its own OFL 1.1 notice.
 #
 # Offline by construction: every input is either committed to the repo or
 # part of the Go toolchain already required to build. Deterministic:
@@ -52,7 +53,7 @@ Affero General Public License, version 3 only — see LICENSE and NOTICE.
 The polarbeam-server and polarbeam-agent binaries are statically linked.
 They embed the Go standard library and the third-party Go modules listed
 below; polarbeam-server additionally embeds the built dashboard, which
-bundles the JavaScript packages and webfont listed at the end. Each
+bundles the JavaScript packages and webfonts listed at the end. Each
 component's license, and its own attribution notice where one exists, is
 reproduced in full.
 
@@ -154,16 +155,23 @@ spa_body="$(sed -n '/^-\{80\}$/,$p' "$SPA")"
 }
 printf '\n%s\n' "$spa_body" >>"$tmp"
 
-# ---- 4. Bundled webfont ----------------------------------------------------
-FONT_LICENSE="${ROOT}/web/public/fonts/OFL.txt"
-[ -f "$FONT_LICENSE" ] || {
-    echo "notices: FATAL — ${FONT_LICENSE#"${ROOT}/"} is missing" >&2
-    echo "notices: web/dist/fonts ships JetBrains Mono and the OFL must accompany it" >&2
-    exit 1
-}
-section "Bundled webfont"
-printf '\nJetBrains Mono (web/dist/fonts/*.woff2)\n\n[web/public/fonts/OFL.txt]\n\n' >>"$tmp"
-cat "$FONT_LICENSE" >>"$tmp"
+# ---- 4. Bundled webfonts ---------------------------------------------------
+# Each face carries its own OFL text because the license names the
+# Reserved Font Name and copyright holder; one generic copy would not.
+section "Bundled webfonts"
+while IFS='|' read -r font_name font_files font_license; do
+    font_path="${ROOT}/${font_license}"
+    [ -f "$font_path" ] || {
+        echo "notices: FATAL — ${font_license} is missing" >&2
+        echo "notices: web/dist/fonts ships ${font_name} and its OFL must accompany it" >&2
+        exit 1
+    }
+    printf '\n%s (web/dist/fonts/%s)\n\n[%s]\n\n' "$font_name" "$font_files" "$font_license" >>"$tmp"
+    cat "$font_path" >>"$tmp"
+done <<'FONTS'
+IBM Plex Sans|IBMPlexSans-*.woff2|web/public/fonts/OFL-IBMPlexSans.txt
+JetBrains Mono|JetBrainsMono-*.woff2|web/public/fonts/OFL.txt
+FONTS
 
 mv "$tmp" "$OUT"
 # mktemp creates 0600 and mv preserves it. Git only tracks the executable

@@ -411,7 +411,7 @@ td.users-actions .inline-confirm:disabled {
   gap: 0.35rem;
   color: var(--accent);
   font-size: 0.76rem;
-  font-weight: 650;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -483,7 +483,7 @@ td.users-actions .inline-confirm:disabled {
 .incident-resource-links a,
 .incident-route-links a {
   color: var(--accent);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .incident-route-links .label {

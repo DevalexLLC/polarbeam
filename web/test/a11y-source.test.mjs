@@ -296,6 +296,10 @@ const CONTRAST_PAIRS = [
   ['status-degraded', 'status-degraded-bg', 4.5],
   ['status-down', 'surface', 4.5],
   ['status-down', 'status-down-bg', 4.5],
+  // Overview stat figures paint warning/critical status directly on the
+  // page ground, not on a surface.
+  ['status-degraded', 'bg', 4.5],
+  ['status-down', 'bg', 4.5],
   ['status-stale', 'surface', 4.5],
   ['status-stale', 'status-stale-bg', 4.5],
   ['status-warn', 'surface', 4.5],

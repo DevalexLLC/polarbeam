@@ -115,13 +115,13 @@
   place-items: center;
   padding-inline: 0.75rem;
   border-radius: var(--radius);
-  font-weight: 550;
+  font-weight: 500;
 }
 
 .topnav a.active {
   color: var(--ink);
   background: var(--surface-2);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .topbar-right {
@@ -155,7 +155,7 @@
   padding: 0 0.7rem;
   border-radius: 999px;
   font-size: 0.78rem;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .theme-toggle-icon {
@@ -233,7 +233,7 @@
 .user-menu-identity strong {
   overflow: hidden;
   font-size: 0.85rem;
-  font-weight: 650;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -241,7 +241,7 @@
 .user-menu-identity span {
   color: var(--ink-3);
   font-size: 0.78rem;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 /* One ordered claim-to-role mapping per row: value, role, the networks it
@@ -421,7 +421,7 @@
   padding: 0.5rem 0.75rem 0.35rem;
   color: var(--ink-3);
   font-size: 0.78rem;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .topbar-filter-popover button {
