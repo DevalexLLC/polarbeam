@@ -384,11 +384,8 @@ a.check-chip:hover {
 
 .metric-source {
   margin-left: auto;
-  padding: 0.15rem 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--ink-2);
-  font-size: 0.75rem;
+  color: var(--ink-3);
+  font-size: 0.8rem;
   font-weight: 500;
 }
 
@@ -438,12 +435,19 @@ a.check-chip:hover {
 }
 
 .chart-investigation-mode {
-  font-weight: 600;
+  padding-left: 0;
+  border-color: transparent;
+  color: var(--ink-3);
+  background: transparent;
+  font-weight: 500;
 }
 
 .chart-investigation-mode.active {
-  color: var(--accent);
+  padding-left: 0.7rem;
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  color: var(--accent);
+  background: var(--surface);
+  font-weight: 600;
 }
 
 .chart-investigation-controls .secondary-button {
@@ -471,9 +475,78 @@ a.check-chip:hover {
   font-size: inherit;
 }
 
-/* uPlot chrome follows the theme */
-.u-legend {
-  color: var(--ink-2);
+/* uPlot's live legend, restyled as a readout row: series names in the UI
+   face, values in tabular mono so they hold width as the cursor moves, a
+   short colored bar for each series instead of a square swatch. */
+.uplot .u-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 1.25rem;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  color: var(--ink-3);
+  font-family: var(--sans);
   font-size: 0.78rem;
+  text-align: left;
+}
+
+/* Only the table body dissolves; each row stays one flex item so a series
+   name and its value never wrap onto different lines. */
+.uplot .u-legend tbody {
+  display: contents;
+}
+
+.uplot .u-legend .u-series {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+}
+
+.uplot .u-series > * {
+  padding: 0;
+}
+
+.uplot .u-legend th {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: 500;
+}
+
+.uplot .u-inline.u-live th::after {
+  content: none;
+}
+
+/* uPlot paints a stroke-only series' color through the marker's inline
+   border, not its background, so the bar IS the border: a 3px top edge. */
+.uplot .u-legend .u-marker {
+  width: 12px;
+  height: 0;
+  margin: 0;
+  border-style: solid;
+  border-width: 3px 0 0 !important;
+  border-radius: 2px;
+  background: transparent !important;
+}
+
+.uplot .u-legend .u-value {
+  color: var(--ink);
   font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  min-width: 4ch;
+}
+
+/* The time series is a caption, not a value: no marker, quieter figure. */
+.uplot .u-series:first-child .u-marker {
+  display: none;
+}
+
+.uplot .u-series:first-child .u-value {
+  color: var(--ink-2);
+}
+
+.uplot .u-legend .u-off > * {
+  opacity: 0.35;
 }

@@ -95,11 +95,34 @@ table.data-table tbody tr:last-child > td {
   gap: 0.5rem;
   padding: 0.2rem 0.35rem;
   border: 0;
-  color: var(--accent);
+  color: var(--ink-2);
   background: transparent;
   font: inherit;
-  font-weight: 600;
+  font-weight: 500;
   cursor: pointer;
+}
+
+table.data-table tr:hover .data-table-disclosure,
+.data-table-disclosure:hover,
+.data-table-disclosure:focus-visible,
+.data-table-disclosure[aria-expanded='true'] {
+  color: var(--accent);
+}
+
+/* Links inside table cells: ink with a quiet underline, so the subject
+   column reads as text first and as a link on approach. */
+table.data-table td a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+table.data-table td a:hover,
+table.data-table td a:focus-visible {
+  color: var(--accent);
+  text-decoration-color: currentColor;
 }
 
 .data-table-detail-row > td,
