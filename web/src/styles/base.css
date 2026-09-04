@@ -7,17 +7,19 @@
 :root {
   color-scheme: light;
 
-  --bg: #f7f7f8;
+  /* Cool "polar" neutrals: a blue-grey ground, white surfaces, blue-black
+     ink. Every pair below is measured in docs/accessibility.md. */
+  --bg: #eef1f4;
   --surface: #ffffff;
-  --surface-2: #f4f4f5;
-  --border: #e4e4e7;
-  --border-strong: #d4d4d8;
+  --surface-2: #f3f5f8;
+  --border: #d9dee5;
+  --border-strong: #c3cad3;
   /* Form-control boundaries need the 3:1 non-text bar (WCAG 1.4.11); the
      decorative hairlines above deliberately stay lighter. */
-  --control-border: #8a8a93;
-  --ink: #18181b;
-  --ink-2: #52525b;
-  --ink-3: #6c6c74;
+  --control-border: #7f8893;
+  --ink: #0f1419;
+  --ink-2: #4a5462;
+  --ink-3: #5e6976;
   --accent: #4f46e5;
   --accent-ink: #ffffff;
   --focus: #6366f1;
@@ -56,10 +58,10 @@
 
   /* Fleet-strip "no data" fill: a meaningful mark, so it cannot reuse the
      1.3:1 --border hairline — it holds its own 3:1 grey. */
-  --strip-nodata: #84848d;
+  --strip-nodata: #7f8893;
 
-  --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', 'JetBrains Mono', Consolas, monospace;
-  --sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, monospace;
+  --sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
 
   --radius: 8px;
   --radius-lg: 12px;
@@ -70,12 +72,12 @@
   --control-target: 40px;
   --minimum-target: 24px;
 
-  /* Cards get a whisper of elevation on light surfaces; dark relies on
-     borders alone (shadows read as mud on near-black). */
-  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.05);
+  /* Cards are hairline-bounded in both themes; the cool ground already
+     separates them from the page, and a shadow on top reads as a kit. */
+  --shadow-card: none;
 
   /* Dot-matrix map (theme-aware, unlike the old forced-dark shell). */
-  --map-dot: #a1a1aa;
+  --map-dot: #a3adb8;
 }
 
 /* The resolved scheme is stamped on <html> by public/theme-init.js before
@@ -85,15 +87,15 @@
 :root[data-theme='dark'] {
   color-scheme: dark;
 
-  --bg: #0a0a0c;
-  --surface: #141417;
-  --surface-2: #1d1d21;
-  --border: #27272b;
-  --border-strong: #3b3b41;
-  --control-border: #6e6e77;
-  --ink: #f4f4f5;
-  --ink-2: #b6b6bf;
-  --ink-3: #a1a1aa;
+  --bg: #0b0e12;
+  --surface: #13171c;
+  --surface-2: #1b1f25;
+  --border: #262b33;
+  --border-strong: #39414b;
+  --control-border: #6f7986;
+  --ink: #eef2f6;
+  --ink-2: #b3bcc7;
+  --ink-3: #9aa3ae;
   --accent: #818cf8;
   --accent-ink: #101024;
   --focus: #818cf8;
@@ -112,19 +114,54 @@
   --status-down: #ff6b72;
   --status-crit: #f0692e;
 
-  --status-ok-bg: color-mix(in srgb, #0ca30c 16%, var(--surface));
+  /* 14% (not 16%) because the cooler surface lifts the mix's luminance;
+     ok-on-ok-bg is the thinnest dark margin in the contrast table. */
+  --status-ok-bg: color-mix(in srgb, #0ca30c 14%, var(--surface));
   --status-degraded-bg: color-mix(in srgb, #fab219 14%, var(--surface));
   --status-down-bg: color-mix(in srgb, #d03b3b 17%, var(--surface));
   --status-stale-bg: var(--surface-2);
 
-  --strip-nodata: #6e6e77;
+  --strip-nodata: #6f7986;
 
   --shadow-card: none;
-  --map-dot: #3a3a42;
+  --map-dot: #39414b;
 }
 
-/* JetBrains Mono, vendored in web/public/fonts (OFL — license alongside).
-   Used by the operations map; nothing is fetched at runtime. */
+/* Both faces are vendored in web/public/fonts with their OFL texts alongside;
+   nothing is fetched at runtime. IBM Plex Sans carries the interface,
+   JetBrains Mono the identifiers and figures. */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('/fonts/IBMPlexSans-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('/fonts/IBMPlexSans-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('/fonts/IBMPlexSans-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('/fonts/IBMPlexSans-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 @font-face {
   font-family: 'JetBrains Mono';
   src: url('/fonts/JetBrainsMono-Light.woff2') format('woff2');

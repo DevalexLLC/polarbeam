@@ -23,7 +23,7 @@
 .topnav a.active {
   color: var(--ink);
   background: var(--surface-2);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 /* Outage / event tables share the agents-table bones. */
@@ -39,7 +39,7 @@ table.events th {
   border-bottom: 1px solid var(--border);
   color: var(--ink-3);
   font-size: 0.78rem;
-  font-weight: 650;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -74,7 +74,7 @@ tr.outage-open td:first-child {
   padding: 0.1rem 0.5rem;
   border-radius: 999px;
   font-size: 0.75rem;
-  font-weight: 650;
+  font-weight: 600;
   white-space: nowrap;
   border: 1px solid var(--border-strong);
   color: var(--ink-2);
@@ -207,7 +207,7 @@ table.hop-diff td {
   border-radius: 999px;
   color: var(--status-degraded);
   font-size: 0.78rem;
-  font-weight: 650;
+  font-weight: 600;
   text-align: center;
 }
 
@@ -241,7 +241,7 @@ table.hop-diff td {
 
 tr.hop-changed td {
   background: var(--status-degraded-bg);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .path-pair {
@@ -425,7 +425,7 @@ tr.hop-changed td {
 
 .pg-key {
   font-size: 0.78rem;
-  font-weight: 650;
+  font-weight: 600;
   padding: 0.08rem 0.4rem;
   border-radius: 999px;
   border: 1px dashed var(--status-down);
@@ -586,7 +586,7 @@ ol.hops li {
     color: var(--ink-3);
     font-family: var(--sans);
     font-size: 0.78rem;
-    font-weight: 650;
+    font-weight: 600;
   }
 
   table.agents td:last-child,

@@ -153,7 +153,11 @@ test('debounced route values drive inventory requests and linked rows keep scope
     assert.match(source, /const \[queryParam\] = useRouteParam\('q'\)/)
     assert.match(source, /queryParam\.trim\(\)/)
     assert.doesNotMatch(source, /else if \(query\.trim\(\)\) params\.set\('q'/)
-    assert.match(source, /needsScopeRequest/)
     assert.match(source, /data-table-context/)
   }
+  // Only the Agents view still needs the unfiltered scope request: it feeds
+  // the health filter counts. Routes shows nothing scope-wide, so a search
+  // there must not issue a second capped query.
+  assert.match(readFileSync(new URL('../src/views/Agents.tsx', import.meta.url), 'utf8'), /needsScopeRequest/)
+  assert.doesNotMatch(readFileSync(new URL('../src/views/Paths.tsx', import.meta.url), 'utf8'), /needsScopeRequest/)
 })

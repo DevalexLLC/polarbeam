@@ -407,9 +407,6 @@ export default function Agents({
     )
 
   const fleetSummary = scopeSummary ?? summary
-  const down = fleetSummary.offline
-  const degraded = fleetSummary.degraded
-  const dropsTotal = fleetSummary.dropped_results
   const attention = fleetSummary.attention
   const healthy = fleetSummary.total - attention
   const multiNetwork = networks.length > 1
@@ -514,22 +511,6 @@ export default function Agents({
       <div className="page-head page-head-primary">
         <div>
           <h1>Agents</h1>
-        </div>
-        <div className="chips">
-          <span className="chip">
-            Enrolled <span className="mono">{fleetSummary.total}</span>
-          </span>
-          <span className="chip">
-            {down > 0 && <span className="dot swatch status-down" />}
-            Down <span className="mono">{down}</span>
-          </span>
-          <span className="chip">
-            {degraded > 0 && <span className="dot swatch status-degraded" />}
-            Degraded <span className="mono">{degraded}</span>
-          </span>
-          <span className="chip">
-            Results lost <span className="mono">{dropsTotal.toLocaleString()}</span>
-          </span>
         </div>
       </div>
 

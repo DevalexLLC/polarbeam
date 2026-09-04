@@ -72,7 +72,11 @@ export default function Login({ sso, onLogin }: { sso: boolean; onLogin: (res: L
       <section className="login-context" aria-label="Product introduction">
         {/* Marketing copy, not a section heading: the page's outline is the
             always-visible brand h1 in the form (this panel hides <900px). */}
-        <p className="login-headline">See the network clearly.</p>
+        <p className="login-headline">
+          See the
+          <br />
+          network clearly.
+        </p>
         <p>
           Monitor inter-site connectivity, correlate incidents, and investigate directional performance from one control
           plane.

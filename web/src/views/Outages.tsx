@@ -283,9 +283,6 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
   const activeEvents = events.filter((o) => o.closed_at == null)
   const activeCount = activeEvents.length
   const resolvedCount = events.length - activeCount
-  // The API emits one event per failing series (probe × direction), so a
-  // target failing on two probes is two events but one affected target.
-  const activeTargetCount = new Set(activeEvents.map(target)).size
   // Selection is time-addressed (bucket start ms) so a poll that shifts the
   // grid keeps filtering the same slice; it only clears once the bucket
   // leaves the window entirely — the HealthStrip pinned-slot reasoning.
@@ -356,15 +353,6 @@ export default function Outages({ onAuthError }: { onAuthError: (err: unknown) =
       <div className="page-head page-head-primary">
         <div>
           <h1>Incidents</h1>
-        </div>
-        <div className="chips">
-          <span className={'chip' + (activeCount > 0 ? ' chip-alert' : '')}>
-            {activeCount > 0 && <span className="dot swatch status-down" />}Active targets{' '}
-            <span className="mono">{activeTargetCount}</span>
-          </span>
-          <span className="chip">
-            In window <span className="mono">{events.length}</span>
-          </span>
         </div>
       </div>
 

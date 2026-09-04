@@ -136,7 +136,7 @@
 .text-link {
   color: var(--accent);
   font-size: 0.8rem;
-  font-weight: 650;
+  font-weight: 600;
   text-decoration: none;
 }
 
@@ -170,27 +170,37 @@ table.events td a:hover,
   color: var(--status-down);
 }
 
+/* Health summary: one annunciator strip between the title and the map.
+   Cells share hairlines instead of boxes — the boxes below hold the content
+   these figures summarize. A warning or critical figure takes its status
+   color; a healthy one stays in ink, so a quiet strip means a quiet
+   network. */
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.85rem;
-  margin-bottom: 1.25rem;
+  margin-bottom: 1.5rem;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
 }
 
 .stat-card {
-  position: relative;
   display: flex;
   min-width: 0;
   flex-direction: column;
-  justify-content: center;
-  padding: 0.85rem 1.1rem;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  gap: 0.15rem;
+  padding: 0.85rem 1.1rem 0.9rem;
+  border: 0;
   color: var(--ink);
-  background: var(--surface);
-  box-shadow: var(--shadow-card);
+  background: transparent;
   text-decoration: none;
+}
+
+.stat-card + .stat-card {
+  border-left: 1px solid var(--border);
+}
+
+.stat-card:first-child {
+  padding-left: 0.15rem;
 }
 
 /* Tiles render as <a> or <button> (the directions tile flips the
@@ -201,65 +211,46 @@ button.stat-card {
   cursor: pointer;
 }
 
-.stat-card:hover {
-  border-color: var(--border-strong);
-  transform: translateY(-1px);
+.stat-card:hover .stat-label,
+.stat-card:focus-visible .stat-label {
+  color: var(--accent);
 }
 
 .stat-label {
   color: var(--ink-3);
-  font-size: 0.78rem;
-  font-weight: 700;
+  font-size: 0.8rem;
+  font-weight: 600;
 }
 
 .stat-card > strong {
-  margin: 0.15rem 0;
-  font-size: 1.6rem;
-  font-weight: 700;
+  font-size: 1.7rem;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
-  line-height: 1.2;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
 }
 
 .stat-card > strong small {
   color: var(--ink-3);
-  font-size: 0.9rem;
+  font-size: 0.95rem;
   font-weight: 500;
+  letter-spacing: 0;
+}
+
+.stat-warning > strong {
+  color: var(--status-degraded);
+}
+
+.stat-critical > strong {
+  color: var(--status-down);
 }
 
 .stat-context {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
   overflow: hidden;
   color: var(--ink-2);
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* The badge carries each tile's semantic accent (the value it grades, per
-   the accents-reflect-the-value rule), template comparison-pill style. */
-.stat-badge {
-  flex: none;
-  padding: 0.06rem 0.45rem;
-  border-radius: 999px;
-  color: var(--ink-2);
-  background: var(--surface-2);
-  font-size: 0.75rem;
-  font-weight: 650;
-}
-
-.stat-good .stat-badge {
-  color: var(--status-ok);
-  background: var(--status-ok-bg);
-}
-.stat-warning .stat-badge {
-  color: var(--status-degraded);
-  background: var(--status-degraded-bg);
-}
-.stat-critical .stat-badge {
-  color: var(--status-down);
-  background: var(--status-down-bg);
 }
 
 /* Overview's main row: connectivity card (map/matrix) left at ≥50% width,
@@ -318,7 +309,7 @@ table.fleet-table th {
   background: var(--surface);
   color: var(--ink-3);
   font-size: 0.78rem;
-  font-weight: 650;
+  font-weight: 600;
   text-align: left;
   white-space: nowrap;
 }
@@ -356,7 +347,7 @@ table.fleet-table tbody tr:hover td {
 table.fleet-table td strong {
   display: block;
   font-size: 0.83rem;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 /* The plane chip on a fleet row (multi-network installs only): the shared
@@ -435,7 +426,7 @@ td.fleet-uptime {
 }
 
 td.fleet-uptime {
-  font-weight: 650;
+  font-weight: 600;
 }
 
 /* Phone widths: the strip's intrinsic width (one viewBox unit per slot)
@@ -464,7 +455,7 @@ td.fleet-uptime {
    must not carry the same visual confidence as a fully-covered figure. */
 .fleet-uptime-partial {
   color: var(--ink-3);
-  font-weight: 550;
+  font-weight: 500;
 }
 
 /* Per-probe 24 h detail under an expanded Agents row: one labeled strip per
@@ -525,7 +516,7 @@ td.fleet-uptime {
   text-align: right;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .probe-strip-error {
