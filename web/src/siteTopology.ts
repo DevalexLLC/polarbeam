@@ -66,21 +66,74 @@ function newStats(): SiteTopologyStats {
   }
 }
 
+// A direction src→dst is a property of the path, not of either endpoint,
+// so a site's color is an attribution rather than a reachability fold: an
+// unhealthy direction is charged to the endpoint where unhealthy directions
+// concentrate (the one with more of them), and to both on a tie. One origin
+// with a bad egress lights one bubble instead of the whole map, a broken
+// ingress lights the same one, and a single bad path — or a lone bad
+// direction, where the evidence cannot tell — still colors both ends.
+// Stale directions are attributed the same way among themselves; absent
+// data is never evidence for a fault, and it never clears an end either.
+// The per-site stats keep the plain fold of everything touching the
+// site, which is that site's own view.
+type EvidenceClass = 'fault' | 'stale'
+
+function evidenceClass(severity: Severity): EvidenceClass | null {
+  if (severity === 'ok') return null
+  return severity === 'stale' ? 'stale' : 'fault'
+}
+
+function attributeSeverity(cells: { src: string; dst: string; severity: Severity }[]): Map<string, Severity> {
+  const counts: Record<EvidenceClass, Map<string, number>> = { fault: new Map(), stale: new Map() }
+  for (const cell of cells) {
+    const cls = evidenceClass(cell.severity)
+    if (cls === null) continue
+    for (const name of [cell.src, cell.dst]) {
+      counts[cls].set(name, (counts[cls].get(name) ?? 0) + 1)
+    }
+  }
+  const severities = new Map<string, Severity>()
+  const charge = (name: string, severity: Severity) => {
+    const previous = severities.get(name)
+    severities.set(name, previous === undefined ? severity : worseSiteSeverity(previous, severity))
+  }
+  for (const cell of cells) {
+    const cls = evidenceClass(cell.severity)
+    if (cls === null) {
+      charge(cell.src, 'ok')
+      charge(cell.dst, 'ok')
+      continue
+    }
+    const src = counts[cls].get(cell.src) ?? 0
+    const dst = counts[cls].get(cell.dst) ?? 0
+    if (src >= dst) charge(cell.src, cell.severity)
+    if (dst >= src) charge(cell.dst, cell.severity)
+    // A graded fault was measured, so its uncharged end is reachable and
+    // healthy unless something else charges it. A stale direction proves
+    // nothing about either end; an end left uncharged has no data.
+    if (cls === 'fault') {
+      if (src < dst) charge(cell.src, 'ok')
+      if (dst < src) charge(cell.dst, 'ok')
+    }
+  }
+  return severities
+}
+
 export function buildSiteTopology(
   sites: Site[],
   cells: MatrixCell[],
   thresholds: ThresholdResolver,
   urgentSites: ReadonlySet<string> = new Set(),
 ): SiteTopology[] {
-  const severities = new Map<string, Severity>()
   const statsBySite = new Map<string, SiteTopologyStats>()
   for (const site of sites) statsBySite.set(site.name, newStats())
 
+  const graded: { src: string; dst: string; severity: Severity }[] = []
   for (const cell of cells) {
     const severity = cellSeverity(cell, thresholds)
+    graded.push({ src: cell.src, dst: cell.dst, severity })
     for (const name of [cell.src, cell.dst]) {
-      const previous = severities.get(name)
-      severities.set(name, previous === undefined ? severity : worseSiteSeverity(previous, severity))
       const stats = statsBySite.get(name)
       if (stats) {
         stats.directions++
@@ -99,6 +152,7 @@ export function buildSiteTopology(
       }
     }
   }
+  const severities = attributeSeverity(graded)
 
   const byPair = new Map<string, { x: string; y: string; cells: MatrixCell[] }>()
   for (const cell of cells) {

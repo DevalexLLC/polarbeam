@@ -84,6 +84,125 @@ test('a degraded direction outranks missing data and an active incident outranks
   assert.equal(urgent.find(({ site }) => site.name === 'source').severity, 'down')
 })
 
+const meshSites = (...names) =>
+  names.map((name) => ({ name, display_name: name, location: '', latitude: null, longitude: null }))
+
+const direction = (src, dst, status) => ({
+  src,
+  dst,
+  status,
+  latency_us: null,
+  latency_source: '',
+  loss_pct: null,
+  as_of: '',
+  probes: [],
+  networks: [],
+})
+
+const severityOf = (topology, name) => topology.find(({ site }) => site.name === name).severity
+
+test('an unhealthy direction is charged to the end where unhealthy directions concentrate', () => {
+  const sites = meshSites('colorado', 'a', 'b', 'c')
+  const healthyBack = ['a', 'b', 'c'].map((peer) => direction(peer, 'colorado', 'ok'))
+
+  // Colorado's egress degrades: only Colorado goes amber, not every peer.
+  const egress = buildSiteTopology(
+    sites,
+    [...['a', 'b', 'c'].map((peer) => direction('colorado', peer, 'degraded')), ...healthyBack],
+    () => null,
+  )
+  assert.equal(severityOf(egress, 'colorado'), 'warn')
+  for (const peer of ['a', 'b', 'c']) assert.equal(severityOf(egress, peer), 'ok')
+
+  // The mirror: Colorado's ingress fails from everywhere. Same answer, not the inverse.
+  const ingress = buildSiteTopology(
+    sites,
+    [
+      ...['a', 'b', 'c'].map((peer) => direction(peer, 'colorado', 'down')),
+      ...['a', 'b', 'c'].map((peer) => direction('colorado', peer, 'ok')),
+    ],
+    () => null,
+  )
+  assert.equal(severityOf(ingress, 'colorado'), 'down')
+  for (const peer of ['a', 'b', 'c']) assert.equal(severityOf(ingress, peer), 'ok')
+
+  // The uncharged end still contributes to the per-site direction stats.
+  const a = egress.find(({ site }) => site.name === 'a').stats
+  assert.equal(a.directions, 2)
+  assert.deepEqual(a.dirCounts, { ok: 1, warn: 1, crit: 0, down: 0, stale: 0 })
+})
+
+test('ambiguous evidence still colors both ends of a bad direction', () => {
+  const sites = meshSites('x', 'y', 'z')
+  const healthyRest = [
+    direction('x', 'z', 'ok'),
+    direction('z', 'x', 'ok'),
+    direction('y', 'z', 'ok'),
+    direction('z', 'y', 'ok'),
+  ]
+
+  // One path bad in both directions: two each, tie, both amber.
+  const path = buildSiteTopology(
+    sites,
+    [direction('x', 'y', 'degraded'), direction('y', 'x', 'degraded'), ...healthyRest],
+    () => null,
+  )
+  assert.equal(severityOf(path, 'x'), 'warn')
+  assert.equal(severityOf(path, 'y'), 'warn')
+  assert.equal(severityOf(path, 'z'), 'ok')
+
+  // A lone bad direction: one each, tie, both amber.
+  const lone = buildSiteTopology(
+    sites,
+    [direction('x', 'y', 'degraded'), direction('y', 'x', 'ok'), ...healthyRest],
+    () => null,
+  )
+  assert.equal(severityOf(lone, 'x'), 'warn')
+  assert.equal(severityOf(lone, 'y'), 'warn')
+  assert.equal(severityOf(lone, 'z'), 'ok')
+})
+
+test('stale directions concentrate among themselves and never weigh a fault', () => {
+  const sites = meshSites('colorado', 'a', 'x', 'y')
+  const topology = buildSiteTopology(
+    sites,
+    [
+      // One bad direction between a and Colorado: a tie on fault evidence.
+      direction('a', 'colorado', 'degraded'),
+      direction('colorado', 'a', 'ok'),
+      // a has no data with x or y. That must not tip the fault onto a.
+      direction('a', 'x', 'stale'),
+      direction('x', 'a', 'stale'),
+      direction('a', 'y', 'stale'),
+      direction('y', 'a', 'stale'),
+    ],
+    () => null,
+  )
+  assert.equal(severityOf(topology, 'colorado'), 'warn')
+  assert.equal(severityOf(topology, 'a'), 'warn')
+  // The stale fan concentrates on a, and a stale direction clears nothing:
+  // x and y are left without data rather than marked healthy.
+  assert.equal(severityOf(topology, 'x'), 'stale')
+  assert.equal(severityOf(topology, 'y'), 'stale')
+
+  // A quiet agent: its outbound goes stale everywhere, its peers stay healthy.
+  const quiet = buildSiteTopology(
+    meshSites('colorado', 'a', 'x'),
+    [
+      direction('colorado', 'a', 'stale'),
+      direction('colorado', 'x', 'stale'),
+      direction('a', 'colorado', 'ok'),
+      direction('x', 'colorado', 'ok'),
+      direction('a', 'x', 'ok'),
+      direction('x', 'a', 'ok'),
+    ],
+    () => null,
+  )
+  assert.equal(severityOf(quiet, 'colorado'), 'stale')
+  assert.equal(severityOf(quiet, 'a'), 'ok')
+  assert.equal(severityOf(quiet, 'x'), 'ok')
+})
+
 test('only offline state and agent-offline incidents make topology urgent', () => {
   const urgent = topologyUrgentSites(
     ['offline-site'],
