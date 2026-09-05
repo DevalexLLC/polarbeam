@@ -134,9 +134,38 @@ test('probe state toggles preflight the same full state they write', async () =>
 
 test('mesh create leaves duplicate-name classification to the server', async () => {
   const source = await readFile(new URL('../src/components/MeshesPanel.tsx', import.meta.url), 'utf8')
-  const create = source.slice(source.indexOf('<h3 className="label">Create mesh</h3>'))
+  const create = source.slice(source.indexOf('title="Create mesh"'))
   assert.doesNotMatch(create, /checkForConflict/)
   assert.match(create, /apiPost\('\/api\/v1\/config\/meshes'/)
+})
+
+test('inventory panels open their Add/Edit forms from the card header in a dialog', async () => {
+  const dialogs = ['TargetsPanel.tsx', 'SitesPanel.tsx', 'NetworksPanel.tsx', 'MeshesPanel.tsx', 'ProbeCreateForm.tsx']
+  const headers = ['TargetsPanel.tsx', 'SitesPanel.tsx', 'NetworksPanel.tsx', 'MeshesPanel.tsx', 'ProbesPanel.tsx']
+  for (const file of dialogs) {
+    const source = await readFile(new URL(`../src/components/${file}`, import.meta.url), 'utf8')
+    assert.match(source, /<SettingsFormDialog/, file)
+    assert.doesNotMatch(source, /<\/DataTable>[\s\S]*className="config-form"/, `${file} keeps a form under its table`)
+  }
+  for (const file of headers) {
+    const source = await readFile(new URL(`../src/components/${file}`, import.meta.url), 'utf8')
+    assert.match(source, /className="card-head-actions"/, file)
+  }
+  // A modal editor cannot reach the provider's conflict toast (the page is
+  // inert behind the dialog), so it renders the notice and the confirmed
+  // reload itself, from the hook's `conflict` state.
+  const hook = await readFile(new URL('../src/settingsMutation.tsx', import.meta.url), 'utf8')
+  assert.match(hook, /conflict: \(label: string, reload: \(\) => void\) => \(\) => void/)
+  assert.match(hook, /setConflict\(\{ message: /)
+  for (const file of ['TargetsPanel.tsx', 'SitesPanel.tsx', 'NetworksPanel.tsx']) {
+    const source = await readFile(new URL(`../src/components/${file}`, import.meta.url), 'utf8')
+    assert.match(source, /\{guard\.conflict && \(/, file)
+    assert.match(source, /onClick=\{guard\.conflict\.reload\}/, file)
+  }
+  // Sites: the site= route param selects and scrolls to a row; only a
+  // gesture opens the modal editor.
+  const sites = await readFile(new URL('../src/components/SitesPanel.tsx', import.meta.url), 'utf8')
+  assert.doesNotMatch(sites, /if \(!editing \|\| draft\?\.name !== selected\.name\)/)
 })
 
 test('one-time secrets name their irreversible discard consequence', async () => {

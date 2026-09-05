@@ -50,7 +50,9 @@ interface SettingsMutationContextValue {
   success: (message: string) => void
   error: (message: string, action?: { label: string; run: () => void }) => void
   confirm: (request: ConfirmationRequest) => void
-  conflict: (label: string, reload: () => void) => void
+  // Returns the action that opens the confirmed reload, so an editor
+  // inside a modal <dialog> (where the toast is inert) can offer it too.
+  conflict: (label: string, reload: () => void) => () => void
   clearNotifications: () => void
   guardAction: (action: () => void) => void
 }
@@ -108,17 +110,19 @@ export function SettingsMutationProvider({ children }: { children: ReactNode }) 
   }, [])
   const conflict = useCallback(
     (label: string, reload: () => void) => {
+      const askReload = () =>
+        confirm({
+          action: 'Reload server version',
+          resource: label,
+          consequence: 'This discards your local edits and replaces them with the latest server version.',
+          confirmLabel: 'Reload',
+          onConfirm: reload,
+        })
       error(`${label} changed on the server. Your changes were not saved.`, {
         label: 'Reload server version',
-        run: () =>
-          confirm({
-            action: 'Reload server version',
-            resource: label,
-            consequence: 'This discards your local edits and replaces them with the latest server version.',
-            confirmLabel: 'Reload',
-            onConfirm: reload,
-          }),
+        run: askReload,
       })
+      return askReload
     },
     [confirm, error],
   )
@@ -382,19 +386,33 @@ export function useConcurrentSettingsDraft<T>({
   wasEditing.current = editing
   const dirty = editing && current !== null && serverSnapshotChanged(baseline.current, current)
   const release = useSettingsDraft(id, label, dirty, discard)
+  // The last preflight conflict, for editors that render inside a modal
+  // <dialog>: the provider's toast (and its reload action) sits outside
+  // the dialog and is inert while it is open, so the editor shows the
+  // notice and the same confirmed reload itself. Cleared when the editor
+  // closes, when a later preflight passes, and when the reload is applied.
+  const [conflict, setConflict] = useState<{ message: string; reload: () => void } | null>(null)
+  useEffect(() => {
+    if (!editing) setConflict(null)
+  }, [editing])
 
   const checkForConflict = useCallback(
     async (fetchLatest: () => Promise<T>): Promise<boolean> => {
       const latest = await fetchLatest()
-      if (!serverSnapshotChanged(baseline.current, latest)) return true
-      feedback.conflict(label, () => {
+      if (!serverSnapshotChanged(baseline.current, latest)) {
+        setConflict(null)
+        return true
+      }
+      const askReload = feedback.conflict(label, () => {
         baseline.current = latest
+        setConflict(null)
         reload(latest)
       })
+      setConflict({ message: `${label} changed on the server. Your changes were not saved.`, reload: askReload })
       return false
     },
     [feedback, label, reload],
   )
 
-  return { dirty, checkForConflict, release }
+  return { dirty, checkForConflict, release, conflict }
 }

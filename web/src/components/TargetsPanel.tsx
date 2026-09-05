@@ -15,6 +15,7 @@ import type { TargetsConfigResponse, TargetConfig } from '../types'
 import ConfirmButton from './ConfirmButton'
 import DataTable, { type DataTableColumn } from './DataTable'
 import PlaneField from './PlaneField'
+import SettingsFormDialog from './SettingsFormDialog'
 import SettingsPageError from './SettingsPageError'
 
 const TARGET_PAGE = 25
@@ -191,6 +192,20 @@ export default function TargetsPanel({
     setDraft(draftFrom(t))
   }
 
+  // The dialog is open exactly while a draft exists, so opening, Cancel, a
+  // route-guard discard, and a conflict reload all go through the draft.
+  const openCreate = () => {
+    setEditing(false)
+    setFormErrors([])
+    setDraft(blankDraft())
+  }
+
+  const cancel = () => {
+    setDraft(null)
+    setEditing(false)
+    setFormErrors([])
+  }
+
   const pageMeta = data?.page ?? { limit: TARGET_PAGE, offset: 0, total: data?.targets.length ?? 0, has_more: false }
   const pageCount = Math.max(1, Math.ceil(pageMeta.total / TARGET_PAGE))
   useEffect(() => {
@@ -290,8 +305,73 @@ export default function TargetsPanel({
           <div>
             <h2>Targets</h2>
           </div>
-          <span className="hint">Refreshes every 30s</span>
+          <div className="card-head-actions">
+            <span className="hint">Refreshes every 30s</span>
+            {canWrite && (
+              <button type="button" className="primary" onClick={openCreate}>
+                Add target
+              </button>
+            )}
+          </div>
         </div>
+        <SettingsFormDialog
+          open={draft !== null}
+          title={editing ? `Edit ${draft?.name}` : 'Add target'}
+          busy={saving}
+          onClose={cancel}
+        >
+          <div className="config-form">
+            <div className="config-form-grid">
+              {field('Name', 'name', 'unique handle, e.g. pg-primary', editing)}
+              {field('Address', 'address', 'host or IP (tcp/tls/icmp/dns/ntp)')}
+              {field('Port', 'port', 'for tcp/tls probes (ntp defaults to 123)')}
+              {field('URL', 'url', 'full URL for http probes')}
+              {/* Ownership is fixed at creation: it decides who may edit the
+                row, so changing it on an existing target would be a
+                privilege transfer rather than an edit. */}
+              {!editing && (
+                <PlaneField
+                  choice={plane}
+                  value={draft?.network ?? initialPlane(plane)}
+                  onChange={(v) => setDraft((d) => ({ ...(d ?? blankDraft()), network: v }))}
+                  disabled={saving}
+                  label="Owner"
+                  hint="all networks publishes it to every plane; a network makes it that tenant's"
+                />
+              )}
+            </div>
+            {formErrors.length > 0 && (
+              <ul className="error threshold-errors" id={summary.id} ref={summary.ref} tabIndex={-1}>
+                {formErrors.map((e) => (
+                  <li key={e}>{e}</li>
+                ))}
+              </ul>
+            )}
+            {guard.conflict && (
+              <div className="inline-alert" role="alert">
+                <strong>{guard.conflict.message}</strong>{' '}
+                <button type="button" className="linklike" disabled={saving} onClick={guard.conflict.reload}>
+                  Reload server version
+                </button>
+              </div>
+            )}
+            <div className="threshold-foot">
+              <span className="hint">New probes can use this target as soon as it is saved.</span>
+              <span className="threshold-actions">
+                <button type="button" className="secondary-button" disabled={saving} onClick={cancel}>
+                  Cancel
+                </button>
+                <button
+                  className="primary"
+                  onClick={save}
+                  disabled={saving || !draft || !guard.dirty || (!editing && !planeReady(plane))}
+                >
+                  {saving ? 'Saving…' : editing ? 'Save changes' : 'Add target'}
+                </button>
+              </span>
+            </div>
+          </div>
+        </SettingsFormDialog>
         <p className="section-intro">
           External hosts and URLs share this inventory with enrollment-managed agent destinations. A target in use by
           probes cannot be deleted until those probes are removed.
@@ -341,7 +421,7 @@ export default function TargetsPanel({
           emptyDescription={
             query || kind !== 'all'
               ? 'Change the search text or kind filter.'
-              : 'Add an external target below, or enroll an agent.'
+              : 'Add an external target, or enroll an agent.'
           }
           disclosure={{
             expandedKey: expandedRow,
@@ -358,14 +438,10 @@ export default function TargetsPanel({
                   render: (target) =>
                     target.kind === 'external' && canWriteRow(caps, target.network) ? (
                       <>
-                        <button
-                          type="button"
-                          className="secondary-button"
-                          onClick={() => {
-                            setActionRow(null)
-                            startEdit(target)
-                          }}
-                        >
+                        {/* The row menu stays mounted behind the modal (as it
+                            does for Delete's confirm) so closing the dialog
+                            returns focus to this item. */}
+                        <button type="button" className="secondary-button" onClick={() => startEdit(target)}>
                           Edit
                         </button>
                         <ConfirmButton
@@ -388,63 +464,6 @@ export default function TargetsPanel({
               : undefined
           }
         />
-        {canWrite && (
-          <div className="config-form">
-            <h3 className="label">{editing ? `Edit ${draft?.name}` : 'Add target'}</h3>
-            <div className="config-form-grid">
-              {field('Name', 'name', 'unique handle, e.g. pg-primary', editing)}
-              {field('Address', 'address', 'host or IP (tcp/tls/icmp/dns/ntp)')}
-              {field('Port', 'port', 'for tcp/tls probes (ntp defaults to 123)')}
-              {field('URL', 'url', 'full URL for http probes')}
-              {/* Ownership is fixed at creation: it decides who may edit the
-                row, so changing it on an existing target would be a
-                privilege transfer rather than an edit. */}
-              {!editing && (
-                <PlaneField
-                  choice={plane}
-                  value={draft?.network ?? initialPlane(plane)}
-                  onChange={(v) => setDraft((d) => ({ ...(d ?? blankDraft()), network: v }))}
-                  disabled={saving}
-                  label="Owner"
-                  hint="all networks publishes it to every plane; a network makes it that tenant's"
-                />
-              )}
-            </div>
-            {formErrors.length > 0 && (
-              <ul className="error threshold-errors" id={summary.id} ref={summary.ref} tabIndex={-1}>
-                {formErrors.map((e) => (
-                  <li key={e}>{e}</li>
-                ))}
-              </ul>
-            )}
-            <div className="threshold-foot">
-              <span className="hint">New probes can use this target as soon as it is saved.</span>
-              <span className="threshold-actions">
-                {(editing || draft) && (
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    disabled={saving}
-                    onClick={() => {
-                      setDraft(null)
-                      setEditing(false)
-                      setFormErrors([])
-                    }}
-                  >
-                    Cancel
-                  </button>
-                )}
-                <button
-                  className="primary"
-                  onClick={save}
-                  disabled={saving || !draft || !guard.dirty || (!editing && !planeReady(plane))}
-                >
-                  {saving ? 'Saving…' : editing ? 'Save changes' : 'Add target'}
-                </button>
-              </span>
-            </div>
-          </div>
-        )}
       </section>
     </>
   )

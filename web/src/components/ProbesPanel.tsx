@@ -379,7 +379,23 @@ export default function ProbesPanel({
           <div>
             <h2>Probes</h2>
           </div>
-          <span className="hint">Refreshes every 30s</span>
+          <div className="card-head-actions">
+            <span className="hint">Refreshes every 30s</span>
+            {canWrite && (
+              <ProbeCreateForm
+                plane={plane}
+                registry={registry}
+                meshes={meshes}
+                sites={sites}
+                targets={targets}
+                busy={busy}
+                onBusyChange={setBusy}
+                onWarnings={setWarnings}
+                onRefresh={reload}
+                onAuthError={onAuthError}
+              />
+            )}
+          </div>
         </div>
         <p className="section-intro">
           Direct probes run from every agent on the probe's network at a site against one target; mesh templates expand
@@ -445,7 +461,7 @@ export default function ProbesPanel({
           emptyDescription={
             query || mode !== 'all' || enabled !== 'all' || typeFilter !== 'all'
               ? 'Change the search text or filters.'
-              : 'Add one below; agents pick it up within ~30 seconds.'
+              : 'Add one; agents pick it up within ~30 seconds.'
           }
           disclosure={
             canWrite
@@ -499,20 +515,6 @@ export default function ProbesPanel({
               : undefined
           }
         />
-        {canWrite && (
-          <ProbeCreateForm
-            plane={plane}
-            registry={registry}
-            meshes={meshes}
-            sites={sites}
-            targets={targets}
-            busy={busy}
-            onBusyChange={setBusy}
-            onWarnings={setWarnings}
-            onRefresh={reload}
-            onAuthError={onAuthError}
-          />
-        )}
       </section>
     </>
   )

@@ -145,7 +145,11 @@ test('composite widgets keep their menu, group, and dialog semantics', () => {
   assert.match(drawer, /setAttribute\('inert', ''\)/)
   assert.match(drawer, /removeAttribute\('inert'\)/)
 
-  for (const file of ['../src/components/ChangePasswordDialog.tsx', '../src/components/UserCreateDialog.tsx']) {
+  for (const file of [
+    '../src/components/ChangePasswordDialog.tsx',
+    '../src/components/UserCreateDialog.tsx',
+    '../src/components/SettingsFormDialog.tsx',
+  ]) {
     const source = readFileSync(new URL(file, import.meta.url), 'utf8')
     assert.match(source, /<dialog[^>]*\n?[^>]*aria-labelledby=\{/, `${file} dialog is named by its heading`)
   }
