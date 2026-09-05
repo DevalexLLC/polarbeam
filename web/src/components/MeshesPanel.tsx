@@ -121,7 +121,7 @@ export default function MeshesPanel({
             )}
           </div>
         </div>
-        <SettingsFormDialog open={createOpen} title="Create mesh" busy={busy} onClose={closeCreate}>
+        <SettingsFormDialog open={createOpen} title="Create mesh" size="compact" busy={busy} onClose={closeCreate}>
           <div className="config-form">
             <div className="config-form-grid">
               <label className="threshold-field">

@@ -229,11 +229,16 @@ td.users-actions .inline-confirm:disabled {
   margin-top: 1.1rem;
 }
 
-/* Settings Add/Edit dialogs: wide enough for two or three .config-form-grid
-   fields per row, and the form block drops the "separator under the table"
-   chrome it wore when it sat at the foot of the card. */
+/* Settings Add/Edit dialogs: three .config-form-grid columns by default;
+   a form with a field or two opts into the users dialog's compact width.
+   The form block drops the "separator under the table" chrome it wore when
+   it sat at the foot of the card. */
 .settings-form-dialog {
-  width: min(44rem, calc(100vw - 2rem));
+  width: min(40rem, calc(100vw - 2rem));
+}
+
+.settings-form-dialog-compact {
+  width: min(26rem, calc(100vw - 2rem));
 }
 
 .settings-form-dialog .config-form {
@@ -242,15 +247,97 @@ td.users-actions .inline-confirm:disabled {
   border-top: 0;
 }
 
-/* Change-password dialog: stacked full-width fields (the base
-   .threshold-input width is sized for short numeric values) with room for
-   the show/hide toggle. */
-.password-dialog .threshold-field {
+/* Dialog form system. Fields share one column grid so labels and controls
+   line up across rows and every control fills its cell (the card forms'
+   fixed 11rem inputs truncated placeholders and left ragged rows). A
+   one-word unit stays beside its value; a descriptive note goes under the
+   control as .field-note so it cannot push the next column out of line.
+   Full-width members (groups, checkbox params, notices) span every column. */
+.users-dialog .config-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: 0.9rem 1rem;
+  margin-bottom: 0;
+}
+
+.users-dialog .config-form-grid + .config-form-grid,
+.users-dialog .config-form-grid + .threshold-field,
+.users-dialog .threshold-field + .config-form-grid {
+  margin-top: 0.9rem;
+}
+
+.users-dialog .threshold-field {
+  min-width: 0;
+}
+
+.users-dialog .threshold-input {
   width: 100%;
 }
 
-.password-dialog .password-field input {
+.users-dialog .config-form .threshold-input input,
+.users-dialog .threshold-input input,
+.users-dialog .threshold-input select {
+  flex: 1 1 auto;
   width: 100%;
+  min-width: 0;
+}
+
+.users-dialog .threshold-input > .hint {
+  flex: 0 0 auto;
+}
+
+.users-dialog .field-note {
+  display: block;
+  margin-top: 0.1rem;
+}
+
+.users-dialog .config-form-grid > .config-param-check,
+.users-dialog .config-form-grid > .inline-alert,
+.users-dialog .config-form-grid > div[role='group'] {
+  grid-column: 1 / -1;
+}
+
+/* One footer for every dialog: a hairline closes the fields, the form's
+   note sits left and wraps as needed, the actions stay right — Cancel
+   before the primary — and drop below the note only when there is no room. */
+.users-dialog .threshold-foot,
+.users-dialog-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.6rem 1.25rem;
+  margin-top: 1.1rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--border);
+}
+
+.users-dialog .threshold-foot > .hint {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+.users-dialog .threshold-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  margin-left: auto;
+}
+
+/* A field whose note needs the room takes the whole row; spanning a fixed
+   count would mint an implicit column when only one fits (large fonts). */
+.users-dialog .config-form-grid > .field-full {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 560px) {
+  .users-dialog .config-form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Change-password dialog: room for the show/hide toggle inside the field. */
+.password-dialog .password-field input {
   padding-right: 3.8rem;
 }
 

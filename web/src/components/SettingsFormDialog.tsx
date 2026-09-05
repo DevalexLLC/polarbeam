@@ -10,12 +10,16 @@ export default function SettingsFormDialog({
   open,
   title,
   busy = false,
+  size = 'default',
   onClose,
   children,
 }: {
   open: boolean
   title: string
   busy?: boolean
+  // 'compact' for a form with a field or two; the default fits three
+  // grid columns.
+  size?: 'default' | 'compact'
   onClose: () => void
   children: ReactNode
 }) {
@@ -47,7 +51,11 @@ export default function SettingsFormDialog({
   return (
     <dialog
       ref={dialogRef}
-      className="users-dialog settings-form-dialog"
+      className={
+        size === 'compact'
+          ? 'users-dialog settings-form-dialog settings-form-dialog-compact'
+          : 'users-dialog settings-form-dialog'
+      }
       aria-labelledby={titleID}
       onCancel={(event) => {
         event.preventDefault()

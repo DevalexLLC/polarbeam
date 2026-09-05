@@ -14,6 +14,7 @@ export default function PlaneField({
   disabled,
   label = 'Network',
   hint,
+  full = false,
   invalid,
   describedby,
 }: {
@@ -23,6 +24,8 @@ export default function PlaneField({
   disabled?: boolean
   label?: string
   hint?: string
+  // The whole grid row in a dialog form, for a hint too long for one cell.
+  full?: boolean
   // Error-summary wiring (WCAG 3.3.1): applied to the select only — the
   // static shapes have nothing the user can correct.
   invalid?: boolean
@@ -50,13 +53,13 @@ export default function PlaneField({
         <span className="label">{label}</span>
         <span className="threshold-input">
           <span className="chip">{choice.plane}</span>
-          {hint && <span className="hint">{hint}</span>}
         </span>
+        {hint && <span className="hint field-note">{hint}</span>}
       </label>
     )
   }
   return (
-    <label className="threshold-field">
+    <label className={full ? 'threshold-field field-full' : 'threshold-field'}>
       <span className="label">{label}</span>
       <span className="threshold-input">
         <select
@@ -72,8 +75,8 @@ export default function PlaneField({
             </option>
           ))}
         </select>
-        {hint && <span className="hint">{hint}</span>}
       </span>
+      {hint && <span className="hint field-note">{hint}</span>}
     </label>
   )
 }

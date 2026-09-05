@@ -347,11 +347,11 @@ export default function SitesPanel({
         >
           <div className="config-form">
             <div className="config-form-grid">
-              {field('Name', 'name', 'unique handle, e.g. nyc', editing)}
+              {field('Name', 'name', 'e.g. nyc', editing)}
               {field('Display name', 'display_name', 'e.g. New York')}
-              {field('Location', 'location', 'free text, e.g. New York, US')}
-              {field('Latitude', 'latitude', '-90..90, with longitude')}
-              {field('Longitude', 'longitude', '-180..180, with latitude')}
+              {field('Location', 'location', 'e.g. New York, US')}
+              {field('Latitude', 'latitude', '-90 to 90')}
+              {field('Longitude', 'longitude', '-180 to 180')}
             </div>
             {formErrors.length > 0 && (
               <ul className="error threshold-errors" id={summary.id} ref={summary.ref} tabIndex={-1}>

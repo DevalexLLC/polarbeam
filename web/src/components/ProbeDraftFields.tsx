@@ -85,8 +85,8 @@ export default function ProbeDraftFields({
                       </option>
                     ))}
                   </select>
-                  <span className="hint">{spec.hint}</span>
                 </span>
+                <span className="hint field-note">{spec.hint}</span>
               </label>
             )
           }

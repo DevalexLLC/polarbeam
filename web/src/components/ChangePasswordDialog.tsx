@@ -174,7 +174,12 @@ export default function ChangePasswordDialog({
             </ul>
           )}
           <div className="users-dialog-foot">
-            <button type="button" className="linklike" disabled={busy} onClick={() => dialogRef.current?.close()}>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={busy}
+              onClick={() => dialogRef.current?.close()}
+            >
               Cancel
             </button>
             <button type="submit" className="primary" disabled={busy || !current || !next || !confirm}>

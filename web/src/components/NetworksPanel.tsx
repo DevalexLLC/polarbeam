@@ -217,7 +217,7 @@ export default function NetworksPanel({
         >
           <div className="config-form">
             <div className="config-form-grid">
-              {field('Name', 'name', 'unique handle, e.g. mgmt', editing)}
+              {field('Name', 'name', 'e.g. mgmt', editing)}
               {field('Display name', 'display_name', 'e.g. Management')}
             </div>
             {formErrors.length > 0 && (

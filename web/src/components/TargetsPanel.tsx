@@ -275,7 +275,7 @@ export default function TargetsPanel({
     },
   ]
 
-  const field = (label: string, key: keyof Draft, placeholder: string, locked = false) => (
+  const field = (label: string, key: keyof Draft, placeholder: string, locked = false, note?: string) => (
     <label className="threshold-field">
       <span className="label">{label}</span>
       <span className="threshold-input">
@@ -290,6 +290,7 @@ export default function TargetsPanel({
           }}
         />
       </span>
+      {note && <span className="hint field-note">{note}</span>}
     </label>
   )
 
@@ -322,10 +323,10 @@ export default function TargetsPanel({
         >
           <div className="config-form">
             <div className="config-form-grid">
-              {field('Name', 'name', 'unique handle, e.g. pg-primary', editing)}
-              {field('Address', 'address', 'host or IP (tcp/tls/icmp/dns/ntp)')}
-              {field('Port', 'port', 'for tcp/tls probes (ntp defaults to 123)')}
-              {field('URL', 'url', 'full URL for http probes')}
+              {field('Name', 'name', 'e.g. pg-primary', editing)}
+              {field('Address', 'address', 'host or IP', false, 'tcp, tls, icmp, dns, and ntp probes')}
+              {field('Port', 'port', 'e.g. 5432', false, 'tcp and tls probes; ntp defaults to 123')}
+              {field('URL', 'url', 'https://…', false, 'http probes')}
               {/* Ownership is fixed at creation: it decides who may edit the
                 row, so changing it on an existing target would be a
                 privilege transfer rather than an edit. */}
@@ -337,6 +338,7 @@ export default function TargetsPanel({
                   disabled={saving}
                   label="Owner"
                   hint="all networks publishes it to every plane; a network makes it that tenant's"
+                  full
                 />
               )}
             </div>
