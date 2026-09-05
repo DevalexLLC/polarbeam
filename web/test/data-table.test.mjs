@@ -110,11 +110,21 @@ test('a suppressed desktop trigger still renders the expanded panel', () => {
   assert.match(probes, /const focusEditor = useRef<string \| null>\(null\)/)
   assert.match(probes, /if \(selectedProbe !== target\) focusEditor\.current = null/)
 
-  // Networks' Edit action has the same unmounting-menu problem; its
-  // always-mounted form takes focus when the requested draft lands.
-  const networks = readFileSync(new URL('../src/components/NetworksPanel.tsx', import.meta.url), 'utf8')
-  assert.match(networks, /ref=\{editForm\} tabIndex=\{-1\}/)
-  assert.match(networks, /focusForm\.current = true/)
+  // The inventory panels' Edit action opens a modal <dialog> instead. The
+  // row menu stays mounted behind it (DataTable ignores focus and pointer
+  // events inside a dialog), so the platform's focus restoration returns to
+  // the Edit item on close — no hand-rolled focus bookkeeping.
+  const dialog = readFileSync(new URL('../src/components/SettingsFormDialog.tsx', import.meta.url), 'utf8')
+  assert.match(dialog, /dialog\.showModal\(\)/)
+  assert.match(dialog, /dialog\.close\(\)/)
+  assert.match(dialog, /onCancel=/)
+  assert.match(dialog, /if \(!busy\) onClose\(\)/)
+  for (const file of ['NetworksPanel.tsx', 'SitesPanel.tsx', 'TargetsPanel.tsx']) {
+    const source = readFileSync(new URL(`../src/components/${file}`, import.meta.url), 'utf8')
+    assert.match(source, /<SettingsFormDialog/, file)
+    assert.doesNotMatch(source, /setActionRow\(null\)\s*\n\s*startEdit\(/, `${file} closes the row menu before editing`)
+    assert.doesNotMatch(source, /focusForm|editForm/, file)
+  }
 })
 
 test('mobile list hides secondary metadata behind a full-width touch target', () => {

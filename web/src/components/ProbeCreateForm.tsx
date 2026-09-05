@@ -8,10 +8,13 @@ import { initialPlane, networkField, planeReady } from '../plane'
 import { newDraft, paramSpecsFor, type ProbeDraft, validate } from '../probeDraft'
 import PlaneField from './PlaneField'
 import ProbeDraftFields from './ProbeDraftFields'
+import SettingsFormDialog from './SettingsFormDialog'
 
-// The "Add probe" form owns its draft, validation errors, and dirty-draft
-// guard; the panel owns the shared busy flag and the advisory-warnings
-// banner because both are also fed by the edit and enable/disable flows.
+// The "Add probe" trigger plus its dialog. The form owns its draft (the
+// dialog is open exactly while one exists), validation errors, and
+// dirty-draft guard; the panel owns the shared busy flag and the
+// advisory-warnings banner because both are also fed by the edit and
+// enable/disable flows.
 export default function ProbeCreateForm({
   plane,
   registry,
@@ -103,161 +106,175 @@ export default function ProbeCreateForm({
 
   const createDraft = draft ?? newDraft(initialPlane(plane))
 
+  const cancel = () => {
+    setDraft(null)
+    setFormErrors([])
+  }
+
   return (
-    <div className="config-form">
-      <h3 className="label">Add probe</h3>
-      <div className="config-form-grid">
-        {/* A <label> would be wrong here: this field holds a button
+    <>
+      <button type="button" className="primary" onClick={() => setDraft(newDraft(initialPlane(plane)))}>
+        Add probe
+      </button>
+      <SettingsFormDialog open={draft !== null} title="Add probe" busy={busy} onClose={cancel}>
+        <div className="config-form">
+          <div className="config-form-grid">
+            {/* A <label> would be wrong here: this field holds a button
             group, not a form control, so there is nothing for the
             label to name. The group carries its own accessible name. */}
-        <div className="threshold-field">
-          <span className="label">Assignment</span>
-          <span
-            className="control-group config-mode"
-            role="group"
-            aria-label="Probe assignment"
-            aria-describedby={createSummary.describedby}
-          >
-            <button
-              type="button"
-              className={createDraft.mode === 'mesh' ? 'active' : ''}
-              aria-pressed={createDraft.mode === 'mesh'}
-              disabled={busy}
-              onClick={() =>
-                setCreateDraft((d) => ({
-                  ...d,
-                  mode: 'mesh',
-                  params: {},
-                  // A direct-only type (http, ntp) cannot be a mesh template.
-                  type: registry.types.find((t) => t.type === d.type)?.direct_only ? 'icmp' : d.type,
-                }))
-              }
-            >
-              Mesh
-            </button>
-            <button
-              type="button"
-              className={createDraft.mode === 'direct' ? 'active' : ''}
-              aria-pressed={createDraft.mode === 'direct'}
-              disabled={busy}
-              onClick={() => setCreateDraft((d) => ({ ...d, mode: 'direct', params: {} }))}
-            >
-              Direct
-            </button>
-          </span>
-        </div>
-        <label className="threshold-field">
-          <span className="label">Type</span>
-          <span className="threshold-input">
-            <select
-              value={createDraft.type}
-              disabled={busy}
-              aria-describedby={createSummary.describedby}
-              onChange={(e) => setCreateDraft((d) => ({ ...d, type: e.target.value, params: {} }))}
-            >
-              {registry.types
-                .filter((t) => !(createDraft.mode === 'mesh' && t.direct_only))
-                .map((t) => (
-                  <option key={t.type} value={t.type}>
-                    {t.type}
-                  </option>
-                ))}
-            </select>
-          </span>
-        </label>
-        {createDraft.mode === 'mesh' ? (
-          <label className="threshold-field">
-            <span className="label">Mesh group</span>
-            <span className="threshold-input">
-              <select
-                value={createDraft.mesh}
-                disabled={busy}
+            <div className="threshold-field">
+              <span className="label">Assignment</span>
+              <span
+                className="control-group config-mode"
+                role="group"
+                aria-label="Probe assignment"
                 aria-describedby={createSummary.describedby}
-                onChange={(e) => setCreateDraft((d) => ({ ...d, mesh: e.target.value }))}
               >
-                <option value="">pick…</option>
-                {meshes.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
+                <button
+                  type="button"
+                  className={createDraft.mode === 'mesh' ? 'active' : ''}
+                  aria-pressed={createDraft.mode === 'mesh'}
+                  disabled={busy}
+                  onClick={() =>
+                    setCreateDraft((d) => ({
+                      ...d,
+                      mode: 'mesh',
+                      params: {},
+                      // A direct-only type (http, ntp) cannot be a mesh template.
+                      type: registry.types.find((t) => t.type === d.type)?.direct_only ? 'icmp' : d.type,
+                    }))
+                  }
+                >
+                  Mesh
+                </button>
+                <button
+                  type="button"
+                  className={createDraft.mode === 'direct' ? 'active' : ''}
+                  aria-pressed={createDraft.mode === 'direct'}
+                  disabled={busy}
+                  onClick={() => setCreateDraft((d) => ({ ...d, mode: 'direct', params: {} }))}
+                >
+                  Direct
+                </button>
+              </span>
+            </div>
+            <label className="threshold-field">
+              <span className="label">Type</span>
+              <span className="threshold-input">
+                <select
+                  value={createDraft.type}
+                  disabled={busy}
+                  aria-describedby={createSummary.describedby}
+                  onChange={(e) => setCreateDraft((d) => ({ ...d, type: e.target.value, params: {} }))}
+                >
+                  {registry.types
+                    .filter((t) => !(createDraft.mode === 'mesh' && t.direct_only))
+                    .map((t) => (
+                      <option key={t.type} value={t.type}>
+                        {t.type}
+                      </option>
+                    ))}
+                </select>
+              </span>
+            </label>
+            {createDraft.mode === 'mesh' ? (
+              <label className="threshold-field">
+                <span className="label">Mesh group</span>
+                <span className="threshold-input">
+                  <select
+                    value={createDraft.mesh}
+                    disabled={busy}
+                    aria-describedby={createSummary.describedby}
+                    onChange={(e) => setCreateDraft((d) => ({ ...d, mesh: e.target.value }))}
+                  >
+                    <option value="">pick…</option>
+                    {meshes.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
+                </span>
+              </label>
+            ) : (
+              <>
+                <label className="threshold-field">
+                  <span className="label">Site</span>
+                  <span className="threshold-input">
+                    <select
+                      value={createDraft.site}
+                      disabled={busy}
+                      aria-describedby={createSummary.describedby}
+                      onChange={(e) => setCreateDraft((d) => ({ ...d, site: e.target.value }))}
+                    >
+                      <option value="">pick…</option>
+                      {sites.map((s) => (
+                        <option key={s} value={s}>
+                          {s}
+                        </option>
+                      ))}
+                    </select>
+                  </span>
+                </label>
+                <label className="threshold-field">
+                  <span className="label">Target</span>
+                  <span className="threshold-input">
+                    <select
+                      value={createDraft.target}
+                      disabled={busy}
+                      aria-describedby={createSummary.describedby}
+                      onChange={(e) => setCreateDraft((d) => ({ ...d, target: e.target.value }))}
+                    >
+                      <option value="">pick…</option>
+                      {targets.map((t) => (
+                        <option key={t} value={t}>
+                          {t}
+                        </option>
+                      ))}
+                    </select>
+                  </span>
+                </label>
+                <PlaneField
+                  choice={plane}
+                  value={createDraft.network}
+                  onChange={(v) => setCreateDraft((d) => ({ ...d, network: v }))}
+                  disabled={busy}
+                  hint="only this network's agents at the site run it"
+                />
+              </>
+            )}
+          </div>
+          <ProbeDraftFields
+            draft={createDraft}
+            onChange={setCreateDraft}
+            describedby={createSummary.describedby}
+            busy={busy}
+            registry={registry}
+          />
+          {formErrors.length > 0 && (
+            <ul className="error threshold-errors" id={createSummary.id} ref={createSummary.ref} tabIndex={-1}>
+              {formErrors.map((e) => (
+                <li key={e}>{e}</li>
+              ))}
+            </ul>
+          )}
+          <div className="threshold-foot">
+            <span className="hint">Agents at the affected sites start probing within ~30 seconds.</span>
+            <span className="threshold-actions">
+              <button type="button" className="secondary-button" disabled={busy} onClick={cancel}>
+                Cancel
+              </button>
+              <button
+                className="primary"
+                disabled={busy || !draft || !createGuard.dirty || (createDraft.mode === 'direct' && !planeReady(plane))}
+                onClick={create}
+              >
+                {busy ? 'Saving…' : 'Add probe'}
+              </button>
             </span>
-          </label>
-        ) : (
-          <>
-            <label className="threshold-field">
-              <span className="label">Site</span>
-              <span className="threshold-input">
-                <select
-                  value={createDraft.site}
-                  disabled={busy}
-                  aria-describedby={createSummary.describedby}
-                  onChange={(e) => setCreateDraft((d) => ({ ...d, site: e.target.value }))}
-                >
-                  <option value="">pick…</option>
-                  {sites.map((s) => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
-                  ))}
-                </select>
-              </span>
-            </label>
-            <label className="threshold-field">
-              <span className="label">Target</span>
-              <span className="threshold-input">
-                <select
-                  value={createDraft.target}
-                  disabled={busy}
-                  aria-describedby={createSummary.describedby}
-                  onChange={(e) => setCreateDraft((d) => ({ ...d, target: e.target.value }))}
-                >
-                  <option value="">pick…</option>
-                  {targets.map((t) => (
-                    <option key={t} value={t}>
-                      {t}
-                    </option>
-                  ))}
-                </select>
-              </span>
-            </label>
-            <PlaneField
-              choice={plane}
-              value={createDraft.network}
-              onChange={(v) => setCreateDraft((d) => ({ ...d, network: v }))}
-              disabled={busy}
-              hint="only this network's agents at the site run it"
-            />
-          </>
-        )}
-      </div>
-      <ProbeDraftFields
-        draft={createDraft}
-        onChange={setCreateDraft}
-        describedby={createSummary.describedby}
-        busy={busy}
-        registry={registry}
-      />
-      {formErrors.length > 0 && (
-        <ul className="error threshold-errors" id={createSummary.id} ref={createSummary.ref} tabIndex={-1}>
-          {formErrors.map((e) => (
-            <li key={e}>{e}</li>
-          ))}
-        </ul>
-      )}
-      <div className="threshold-foot">
-        <span className="hint">Agents at the affected sites start probing within ~30 seconds.</span>
-        <span className="threshold-actions">
-          <button
-            className="primary"
-            disabled={busy || !draft || !createGuard.dirty || (createDraft.mode === 'direct' && !planeReady(plane))}
-            onClick={create}
-          >
-            {busy ? 'Saving…' : 'Add probe'}
-          </button>
-        </span>
-      </div>
-    </div>
+          </div>
+        </div>
+      </SettingsFormDialog>
+    </>
   )
 }

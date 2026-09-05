@@ -10,6 +10,7 @@ import { useErrorSummary } from '../formErrors'
 import type { SitesConfigResponse, SiteConfig } from '../types'
 import ConfirmButton from './ConfirmButton'
 import DataTable, { type DataTableColumn } from './DataTable'
+import SettingsFormDialog from './SettingsFormDialog'
 import SettingsPageError from './SettingsPageError'
 
 const SITE_PAGE = 25
@@ -200,6 +201,23 @@ export default function SitesPanel({
     setDraft(draftFrom(s))
   }
 
+  // The dialog is open exactly while a draft exists. A row stays selected
+  // only behind its own Edit dialog, so Add clears the route selection first.
+  const openCreate = () => {
+    onSelectedSite('', 'replace')
+    setEditing(false)
+    setFormErrors([])
+    setDraft(emptyDraft)
+  }
+
+  const cancel = () => {
+    setDraft(null)
+    setEditing(false)
+    guard.release()
+    onSelectedSite('')
+    setFormErrors([])
+  }
+
   useEffect(() => {
     if (!selectedSite) {
       scrolledSite.current = null
@@ -216,11 +234,6 @@ export default function SitesPanel({
       onSelectedSite('', 'replace')
       return
     }
-    if (!editing || draft?.name !== selected.name) {
-      setEditing(true)
-      setFormErrors([])
-      setDraft(draftFrom(selected))
-    }
     if (scrolledSite.current !== selectedSite) {
       const surface = window.matchMedia('(max-width: 760px)').matches ? 'mobile' : 'desktop'
       const row = document.getElementById(`settings-site-${selected.id}-${surface}`)
@@ -228,7 +241,7 @@ export default function SitesPanel({
       row.scrollIntoView({ block: 'nearest' })
       scrolledSite.current = selectedSite
     }
-  }, [data, draft?.name, editing, loadedRequestURL, onSelectedSite, pinnedSiteID, requestURL, selectedSite])
+  }, [data, editing, loadedRequestURL, onSelectedSite, pinnedSiteID, requestURL, selectedSite])
 
   const pageMeta = data?.page ?? { limit: SITE_PAGE, offset: 0, total: data?.sites.length ?? 0, has_more: false }
   const pageCount = Math.max(1, Math.ceil(pageMeta.total / SITE_PAGE))
@@ -317,8 +330,59 @@ export default function SitesPanel({
           <div>
             <h2>Sites</h2>
           </div>
-          <span className="hint">Refreshes every 30s</span>
+          <div className="card-head-actions">
+            <span className="hint">Refreshes every 30s</span>
+            {canWrite && (
+              <button type="button" className="primary" onClick={openCreate}>
+                Add site
+              </button>
+            )}
+          </div>
         </div>
+        <SettingsFormDialog
+          open={draft !== null}
+          title={editing ? `Edit ${draft?.name}` : 'Add site'}
+          busy={saving}
+          onClose={cancel}
+        >
+          <div className="config-form">
+            <div className="config-form-grid">
+              {field('Name', 'name', 'e.g. nyc', editing)}
+              {field('Display name', 'display_name', 'e.g. New York')}
+              {field('Location', 'location', 'e.g. New York, US')}
+              {field('Latitude', 'latitude', '-90 to 90')}
+              {field('Longitude', 'longitude', '-180 to 180')}
+            </div>
+            {formErrors.length > 0 && (
+              <ul className="error threshold-errors" id={summary.id} ref={summary.ref} tabIndex={-1}>
+                {formErrors.map((e) => (
+                  <li key={e}>{e}</li>
+                ))}
+              </ul>
+            )}
+            {guard.conflict && (
+              <div className="inline-alert" role="alert">
+                <strong>{guard.conflict.message}</strong>{' '}
+                <button type="button" className="linklike" disabled={saving} onClick={guard.conflict.reload}>
+                  Reload server version
+                </button>
+              </div>
+            )}
+            <div className="threshold-foot">
+              <span className="hint">
+                Coordinates place the site on the Overview map. Clear both fields to remove it from the map.
+              </span>
+              <span className="threshold-actions">
+                <button type="button" className="secondary-button" disabled={saving} onClick={cancel}>
+                  Cancel
+                </button>
+                <button className="primary" onClick={save} disabled={saving || !draft || !guard.dirty}>
+                  {saving ? 'Saving…' : editing ? 'Save changes' : 'Add site'}
+                </button>
+              </span>
+            </div>
+          </div>
+        </SettingsFormDialog>
         <p className="section-intro">
           Agents enroll into a site; meshes and direct probes are assigned by site. A site referenced by agents, meshes,
           or probes cannot be deleted until those references are removed.
@@ -360,7 +424,7 @@ export default function SitesPanel({
           emptyDescription={
             query
               ? 'Change the search text.'
-              : 'Add one below, then issue a join token from the Enrollment tab to enroll its first agent.'
+              : 'Add one, then issue a join token from the Enrollment tab to enroll its first agent.'
           }
           disclosure={{
             expandedKey: expandedRow,
@@ -376,14 +440,10 @@ export default function SitesPanel({
                   label: (site) => `Actions for ${site.name}`,
                   render: (site) => (
                     <>
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={() => {
-                          setActionRow(null)
-                          startEdit(site)
-                        }}
-                      >
+                      {/* The row menu stays mounted behind the modal (as it
+                          does for Delete's confirm) so closing the dialog
+                          returns focus to this item. */}
+                      <button type="button" className="secondary-button" onClick={() => startEdit(site)}>
                         Edit
                       </button>
                       <ConfirmButton
@@ -400,51 +460,6 @@ export default function SitesPanel({
               : undefined
           }
         />
-        {canWrite && (
-          <div className="config-form">
-            <h3 className="label">{editing ? `Edit ${draft?.name}` : 'Add site'}</h3>
-            <div className="config-form-grid">
-              {field('Name', 'name', 'unique handle, e.g. nyc', editing)}
-              {field('Display name', 'display_name', 'e.g. New York')}
-              {field('Location', 'location', 'free text, e.g. New York, US')}
-              {field('Latitude', 'latitude', '-90..90, with longitude')}
-              {field('Longitude', 'longitude', '-180..180, with latitude')}
-            </div>
-            {formErrors.length > 0 && (
-              <ul className="error threshold-errors" id={summary.id} ref={summary.ref} tabIndex={-1}>
-                {formErrors.map((e) => (
-                  <li key={e}>{e}</li>
-                ))}
-              </ul>
-            )}
-            <div className="threshold-foot">
-              <span className="hint">
-                Coordinates place the site on the Overview map. Clear both fields to remove it from the map.
-              </span>
-              <span className="threshold-actions">
-                {(editing || draft) && (
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    disabled={saving}
-                    onClick={() => {
-                      setDraft(null)
-                      setEditing(false)
-                      guard.release()
-                      onSelectedSite('')
-                      setFormErrors([])
-                    }}
-                  >
-                    Cancel
-                  </button>
-                )}
-                <button className="primary" onClick={save} disabled={saving || !draft || !guard.dirty}>
-                  {saving ? 'Saving…' : editing ? 'Save changes' : 'Add site'}
-                </button>
-              </span>
-            </div>
-          </div>
-        )}
       </section>
     </>
   )

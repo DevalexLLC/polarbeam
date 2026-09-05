@@ -202,11 +202,11 @@ export default function UserCreateDialog({
                       </option>
                     ))}
                   </select>
-                  <span className="hint">
-                    {SCOPED_ROLES.has(newRole)
-                      ? 'limited to the networks below; sees nothing outside them'
-                      : 'sees every network'}
-                  </span>
+                </span>
+                <span className="hint field-note">
+                  {SCOPED_ROLES.has(newRole)
+                    ? 'limited to the networks below; sees nothing outside them'
+                    : 'sees every network'}
                 </span>
               </label>
             </div>
@@ -229,7 +229,7 @@ export default function UserCreateDialog({
               </ul>
             )}
             <div className="users-dialog-foot">
-              <button type="button" className="linklike" disabled={creating} onClick={discardCreate}>
+              <button type="button" className="secondary-button" disabled={creating} onClick={discardCreate}>
                 Cancel
               </button>
               <button

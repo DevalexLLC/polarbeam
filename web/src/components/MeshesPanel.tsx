@@ -8,6 +8,7 @@ import type { MeshesConfigResponse, MeshConfig, SitesResponse } from '../types'
 import { usePolledResource } from '../usePolledResource'
 import ConfirmButton from './ConfirmButton'
 import PlaneField from './PlaneField'
+import SettingsFormDialog from './SettingsFormDialog'
 import SettingsPageError from './SettingsPageError'
 
 export default function MeshesPanel({
@@ -43,13 +44,19 @@ export default function MeshesPanel({
   // site picked in each mesh's add-member select, keyed by mesh id
   const [memberPick, setMemberPick] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
+  // A blank create draft is indistinguishable from "closed", so the dialog
+  // carries its own open flag; every close path also clears the draft so no
+  // dirty state survives behind a closed dialog.
+  const [createOpen, setCreateOpen] = useState(false)
   const feedback = useSettingsMutation()
   const newMeshDirty = newName !== '' || newNetworkDraft !== null
-  useSettingsDraft('new-mesh', 'New mesh', newMeshDirty, () => {
+  const closeCreate = () => {
     setNewName('')
     setNewNetwork(null)
     setActionError('')
-  })
+    setCreateOpen(false)
+  }
+  useSettingsDraft('new-mesh', 'New mesh', newMeshDirty, closeCreate)
   useSettingsDraft('mesh-members', 'Mesh membership selection', Object.values(memberPick).some(Boolean), () => {
     setMemberPick({})
     setActionError('')
@@ -105,14 +112,85 @@ export default function MeshesPanel({
           <div>
             <h2>Mesh groups</h2>
           </div>
-          <span className="hint">Refreshes every 30s</span>
+          <div className="card-head-actions">
+            <span className="hint">Refreshes every 30s</span>
+            {canWrite && (
+              <button type="button" className="primary" onClick={() => setCreateOpen(true)}>
+                Create mesh
+              </button>
+            )}
+          </div>
         </div>
+        <SettingsFormDialog open={createOpen} title="Create mesh" size="compact" busy={busy} onClose={closeCreate}>
+          <div className="config-form">
+            <div className="config-form-grid">
+              <label className="threshold-field">
+                <span className="label">Name</span>
+                <span className="threshold-input">
+                  <input
+                    type="text"
+                    value={newName}
+                    placeholder="e.g. core"
+                    disabled={busy}
+                    aria-describedby={summary.describedby}
+                    onChange={(e) => setNewName(e.target.value)}
+                  />
+                </span>
+              </label>
+              <PlaneField choice={plane} value={newNetwork} onChange={setNewNetwork} disabled={busy} />
+            </div>
+            {actionError && errorScope === 'create' && (
+              <ul className="error threshold-errors" id={summary.id} ref={summary.ref} tabIndex={-1}>
+                <li>{actionError}</li>
+              </ul>
+            )}
+            <div className="threshold-foot">
+              <span className="hint">
+                A new mesh has no members or probes until you add them.
+                {multiNetwork &&
+                  ' The network binding is permanent: templates expand only over that network’s agents at member sites.'}
+              </span>
+              <span className="threshold-actions">
+                <button type="button" className="secondary-button" disabled={busy} onClick={closeCreate}>
+                  Cancel
+                </button>
+                <button
+                  className="primary"
+                  disabled={busy || newName.trim() === '' || !newMeshDirty || !planeReady(plane)}
+                  onClick={() =>
+                    // The mesh POST upserts by name with omitted network
+                    // meaning "keep an existing mesh's binding", so the plane
+                    // must be stated whenever we have one — otherwise an
+                    // existing mesh on another plane comes back as a silent
+                    // success instead of the server's 409. Only a global
+                    // caller on a single-plane install omits it, keeping the
+                    // pre-networks request shape.
+                    run(
+                      () =>
+                        apiPost('/api/v1/config/meshes', {
+                          name: newName.trim(),
+                          ...networkField(newNetwork),
+                        }),
+                      `Mesh ${newName.trim()} created.`,
+                      'create',
+                    ).then((saved) => {
+                      if (saved) closeCreate()
+                      else summary.request()
+                    })
+                  }
+                >
+                  Create
+                </button>
+              </span>
+            </div>
+          </div>
+        </SettingsFormDialog>
         <p className="section-intro">
           Each mesh probe template expands over every ordered pair of member sites. Removing a member or deleting a mesh
           also retires the affected series and closes their open incidents.
         </p>
-        {actionError && (
-          <ul className="error threshold-errors" id={summary.id} ref={summary.ref} tabIndex={-1}>
+        {actionError && errorScope === 'row' && (
+          <ul className="error threshold-errors">
             <li>{actionError}</li>
           </ul>
         )}
@@ -218,77 +296,6 @@ export default function MeshesPanel({
               </li>
             ))}
           </ul>
-        )}
-        {canWrite && (
-          <div className="config-form">
-            <h3 className="label">Create mesh</h3>
-            <div className="config-form-grid">
-              <label className="threshold-field">
-                <span className="label">Name</span>
-                <span className="threshold-input">
-                  <input
-                    type="text"
-                    value={newName}
-                    placeholder="e.g. core"
-                    disabled={busy}
-                    aria-describedby={summary.describedby}
-                    onChange={(e) => setNewName(e.target.value)}
-                  />
-                </span>
-              </label>
-              <PlaneField choice={plane} value={newNetwork} onChange={setNewNetwork} disabled={busy} />
-            </div>
-            <div className="threshold-foot">
-              <span className="hint">
-                A new mesh has no members or probes until you add them.
-                {multiNetwork &&
-                  ' The network binding is permanent: templates expand only over that network’s agents at member sites.'}
-              </span>
-              <span className="threshold-actions">
-                {(newName !== '' || newNetworkDraft !== null) && (
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    disabled={busy}
-                    onClick={() => {
-                      setNewName('')
-                      setNewNetwork(null)
-                      setActionError('')
-                    }}
-                  >
-                    Cancel
-                  </button>
-                )}
-                <button
-                  className="primary"
-                  disabled={busy || newName.trim() === '' || !newMeshDirty || !planeReady(plane)}
-                  onClick={() =>
-                    // The mesh POST upserts by name with omitted network
-                    // meaning "keep an existing mesh's binding", so the plane
-                    // must be stated whenever we have one — otherwise an
-                    // existing mesh on another plane comes back as a silent
-                    // success instead of the server's 409. Only a global
-                    // caller on a single-plane install omits it, keeping the
-                    // pre-networks request shape.
-                    run(
-                      () =>
-                        apiPost('/api/v1/config/meshes', {
-                          name: newName.trim(),
-                          ...networkField(newNetwork),
-                        }),
-                      `Mesh ${newName.trim()} created.`,
-                      'create',
-                    ).then((saved) => {
-                      if (saved) setNewName('')
-                      else summary.request()
-                    })
-                  }
-                >
-                  Create
-                </button>
-              </span>
-            </div>
-          </div>
         )}
       </section>
     </>

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { apiDelete, apiGet, apiPost, apiPut } from '../api'
 import { fmtAgo } from '../format'
 import { useConcurrentSettingsDraft, useSettingsMutation } from '../settingsMutation'
@@ -7,6 +7,7 @@ import type { NetworksConfigResponse, NetworkConfig } from '../types'
 import { usePolledResource } from '../usePolledResource'
 import ConfirmButton from './ConfirmButton'
 import DataTable, { type DataTableColumn } from './DataTable'
+import SettingsFormDialog from './SettingsFormDialog'
 import SettingsPageError from './SettingsPageError'
 
 interface Draft {
@@ -55,18 +56,6 @@ export default function NetworksPanel({
   const [saving, setSaving] = useState(false)
   const [actionRow, setActionRow] = useState<string | null>(null)
   const [expandedRow, setExpandedRow] = useState<string | null>(null)
-  // Actions → Edit unmounts the floating menu with focus inside it; the
-  // always-mounted form below the table takes focus once startEdit's draft
-  // lands, so keyboard users continue from the editor instead of the
-  // document root. startEdit always sets a fresh draft object, so the
-  // effect fires even when re-editing the same network.
-  const editForm = useRef<HTMLDivElement | null>(null)
-  const focusForm = useRef(false)
-  useEffect(() => {
-    if (!focusForm.current) return
-    focusForm.current = false
-    editForm.current?.focus()
-  }, [draft, editing])
   const feedback = useSettingsMutation()
   const loadedNetwork = editing && draft ? data?.networks.find((network) => network.name === draft.name) : undefined
   const loadedDraft = loadedNetwork ? draftFrom(loadedNetwork) : emptyDraft
@@ -143,6 +132,20 @@ export default function NetworksPanel({
     setDraft({ name: n.name, display_name: n.display_name })
   }
 
+  // The dialog is open exactly while a draft exists, so opening, Cancel, a
+  // route-guard discard, and a conflict reload all go through the draft.
+  const openCreate = () => {
+    setEditing(false)
+    setFormErrors([])
+    setDraft(emptyDraft)
+  }
+
+  const cancel = () => {
+    setDraft(null)
+    setEditing(false)
+    setFormErrors([])
+  }
+
   if (error && !data) {
     return (
       <SettingsPageError title="Networks unavailable" subject="networks" error={error} onRetry={() => void reload()} />
@@ -197,8 +200,57 @@ export default function NetworksPanel({
           <div>
             <h2>Networks</h2>
           </div>
-          <span className="hint">Refreshes every 30s</span>
+          <div className="card-head-actions">
+            <span className="hint">Refreshes every 30s</span>
+            {canWrite && (
+              <button type="button" className="primary" onClick={openCreate}>
+                Add network
+              </button>
+            )}
+          </div>
         </div>
+        <SettingsFormDialog
+          open={draft !== null}
+          title={editing ? `Edit ${draft?.name}` : 'Add network'}
+          busy={saving}
+          onClose={cancel}
+        >
+          <div className="config-form">
+            <div className="config-form-grid">
+              {field('Name', 'name', 'e.g. mgmt', editing)}
+              {field('Display name', 'display_name', 'e.g. Management')}
+            </div>
+            {formErrors.length > 0 && (
+              <ul className="error threshold-errors" id={summary.id} ref={summary.ref} tabIndex={-1}>
+                {formErrors.map((e) => (
+                  <li key={e}>{e}</li>
+                ))}
+              </ul>
+            )}
+            {guard.conflict && (
+              <div className="inline-alert" role="alert">
+                <strong>{guard.conflict.message}</strong>{' '}
+                <button type="button" className="linklike" disabled={saving} onClick={guard.conflict.reload}>
+                  Reload server version
+                </button>
+              </div>
+            )}
+            <div className="threshold-foot">
+              <span className="hint">
+                The name is immutable once created — it is how tokens, meshes, and probes reference the plane. An agent
+                moves between networks only by re-enrolling with a token for the other one.
+              </span>
+              <span className="threshold-actions">
+                <button type="button" className="secondary-button" disabled={saving} onClick={cancel}>
+                  Cancel
+                </button>
+                <button className="primary" onClick={save} disabled={saving || !draft || !guard.dirty}>
+                  {saving ? 'Saving…' : editing ? 'Save changes' : 'Add network'}
+                </button>
+              </span>
+            </div>
+          </div>
+        </SettingsFormDialog>
         <p className="section-intro">
           A network asserts that its agents can reach one another. Agents join one permanently through their join token;
           each mesh and direct probe measures within exactly one, so planes that cannot reach each other are never
@@ -211,7 +263,7 @@ export default function NetworksPanel({
           rowKey={(n) => n.id}
           columns={columns}
           emptyTitle="No networks"
-          emptyDescription="Initialization seeds the default network; add one below."
+          emptyDescription="Initialization seeds the default network."
           disclosure={{
             expandedKey: expandedRow,
             onExpandedKeyChange: setExpandedRow,
@@ -226,15 +278,10 @@ export default function NetworksPanel({
                   label: (n) => `Actions for ${n.name}`,
                   render: (n) => (
                     <>
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={() => {
-                          setActionRow(null)
-                          focusForm.current = true
-                          startEdit(n)
-                        }}
-                      >
+                      {/* The row menu stays mounted behind the modal (as it
+                          does for Delete's confirm) so closing the dialog
+                          returns focus to this item. */}
+                      <button type="button" className="secondary-button" onClick={() => startEdit(n)}>
                         Edit
                       </button>
                       <ConfirmButton
@@ -257,47 +304,6 @@ export default function NetworksPanel({
               : undefined
           }
         />
-        {canWrite && (
-          <div className="config-form" ref={editForm} tabIndex={-1}>
-            <h3 className="label">{editing ? `Edit ${draft?.name}` : 'Add network'}</h3>
-            <div className="config-form-grid">
-              {field('Name', 'name', 'unique handle, e.g. mgmt', editing)}
-              {field('Display name', 'display_name', 'e.g. Management')}
-            </div>
-            {formErrors.length > 0 && (
-              <ul className="error threshold-errors" id={summary.id} ref={summary.ref} tabIndex={-1}>
-                {formErrors.map((e) => (
-                  <li key={e}>{e}</li>
-                ))}
-              </ul>
-            )}
-            <div className="threshold-foot">
-              <span className="hint">
-                The name is immutable once created — it is how tokens, meshes, and probes reference the plane. An agent
-                moves between networks only by re-enrolling with a token for the other one.
-              </span>
-              <span className="threshold-actions">
-                {(editing || draft) && (
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    disabled={saving}
-                    onClick={() => {
-                      setDraft(null)
-                      setEditing(false)
-                      setFormErrors([])
-                    }}
-                  >
-                    Cancel
-                  </button>
-                )}
-                <button className="primary" onClick={save} disabled={saving || !draft || !guard.dirty}>
-                  {saving ? 'Saving…' : editing ? 'Save changes' : 'Add network'}
-                </button>
-              </span>
-            </div>
-          </div>
-        )}
       </section>
     </>
   )
