@@ -14,7 +14,7 @@ import {
   zoomMapViewportAt,
   type MapViewport,
 } from '../mapViewport'
-import { inheritRouteNetwork } from '../routeState'
+import { inheritRouteNetwork, siteDetailHref } from '../routeState'
 import MapBeams, { BeamMarkers } from './MapBeams'
 import { DOT_GRID_D } from '../mapDots'
 import { bubbleRadius, declutter, type DeclutterNode } from '../mapLayout'
@@ -694,24 +694,28 @@ export default function WorldMap({ topology, links }: { topology: SiteTopology[]
                       <span className="mono">{name}</span> · {counts.ok} of {counts.total} healthy
                     </div>
                   ))}
-              {shownStats.peers.length > 0 && (
-                <div className="map-tip-links">
-                  {shownStats.peers.map((peer) => (
-                    <a
-                      key={peer}
-                      href={inheritRouteNetwork(
-                        `#/pair/${encodeURIComponent(shownSite.name)}/${encodeURIComponent(peer)}`,
-                      )}
-                      aria-label={`Open pair detail for ${shownSite.name} and ${peer}`}
-                    >
-                      {shownSite.name} ⇄ {peer}
-                      <span className="map-tip-link-arrow" aria-hidden="true">
-                        ↗
-                      </span>
-                    </a>
-                  ))}
-                </div>
-              )}
+              <div className="map-tip-links">
+                <a href={siteDetailHref(shownSite.name)} aria-label={`Open site dashboard for ${shownSite.name}`}>
+                  Site dashboard
+                  <span className="map-tip-link-arrow" aria-hidden="true">
+                    ↗
+                  </span>
+                </a>
+                {shownStats.peers.map((peer) => (
+                  <a
+                    key={peer}
+                    href={inheritRouteNetwork(
+                      `#/pair/${encodeURIComponent(shownSite.name)}/${encodeURIComponent(peer)}`,
+                    )}
+                    aria-label={`Open pair detail for ${shownSite.name} and ${peer}`}
+                  >
+                    {shownSite.name} ⇄ {peer}
+                    <span className="map-tip-link-arrow" aria-hidden="true">
+                      ↗
+                    </span>
+                  </a>
+                ))}
+              </div>
             </div>
           )}
       </div>

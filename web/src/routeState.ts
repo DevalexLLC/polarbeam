@@ -84,6 +84,7 @@ function normalizePath(rawPath: string, source: URLSearchParams): string {
   }
   if (head === 'pair' && parts[1] && parts[2]) return `/pair/${encodedSegment(parts[1])}/${encodedSegment(parts[2])}`
   if (head === 'target') return parts[1] ? `/target/${encodedSegment(parts[1])}` : '/target'
+  if (head === 'site') return parts[1] ? `/site/${encodedSegment(parts[1])}` : '/site'
   if (head === 'settings') {
     if (parts[1] && !source.has('section')) source.set('section', decodeSegment(parts[1]))
     return '/settings'
@@ -96,6 +97,7 @@ function normalizePath(rawPath: string, source: URLSearchParams): string {
 function routeName(path: string): string {
   if (path.startsWith('/pair/')) return 'pair'
   if (path.startsWith('/target/')) return 'target'
+  if (path.startsWith('/site/')) return 'site'
   return path.slice(1) || 'overview'
 }
 
@@ -159,6 +161,14 @@ export function canonicalizeRouteHash(hash: string, options: CanonicalRouteOptio
       setNonDefault(out, 'probe', opaque(source, 'probe'))
       setNonDefault(out, 'from', opaque(source, 'from'))
     }
+  } else if (route === 'site') {
+    // The site page shares the incidents vocabulary for its timeline
+    // slice and expanded group so investigation state survives reloads
+    // and pair-detail round trips.
+    setNonDefault(out, 'window', oneOf(source, 'window', WINDOWS, '24h'), '24h')
+    const slice = positiveInteger(source, 'slice', 0)
+    if (slice > 0) out.set('slice', String(slice))
+    setNonDefault(out, 'incident', opaque(source, 'incident'))
   } else if (route === 'settings') {
     const requestedSection = opaque(source, 'section')
     const legacySections = options.settingsSections ?? LEGACY_SETTINGS_SECTIONS
@@ -289,6 +299,37 @@ export function incidentPairHref(
     `#/pair/${encodeURIComponent(source)}/${encodeURIComponent(destination)}${query}`,
     sourceHash,
   )
+}
+
+// Site pages are addressed by site name, the shared operator vocabulary
+// that every pair route already uses; the window rides along so a peer
+// link opened from a 30-day view stays on 30 days.
+export function siteDetailHref(name: string, window = '24h', sourceHash = routeHashSnapshot()): string {
+  const query = window === '24h' ? '' : `?window=${encodeURIComponent(window)}`
+  return inheritRouteNetwork(`#/site/${encodeURIComponent(name)}${query}`, sourceHash)
+}
+
+export type SiteInvestigation = 'agents' | 'routes' | 'targets' | 'settings-sites'
+
+// Investigation links out of a site page reuse each inventory's own search
+// (the agents, routes, and targets searches all match site names) — the
+// Settings sites panel selects rows by id, which the dashboard site list
+// does not carry, so it is searched by name too.
+export function siteInvestigateHref(
+  kind: SiteInvestigation,
+  name: string,
+  window = '24h',
+  sourceHash = routeHashSnapshot(),
+): string {
+  const params = new URLSearchParams()
+  if (kind === 'settings-sites') {
+    params.set('section', 'infrastructure')
+    params.set('subsection', 'sites')
+  }
+  if (kind === 'routes' && window !== '24h') params.set('window', window)
+  params.set('q', name)
+  const path = kind === 'settings-sites' ? '/settings' : `/${kind}`
+  return inheritRouteNetwork(`#${path}?${params.toString()}`, sourceHash)
 }
 
 export function incidentTargetHref(

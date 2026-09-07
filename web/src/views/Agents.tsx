@@ -6,7 +6,7 @@ import PageError from '../components/PageError'
 import { fmtAgo, fmtTime } from '../format'
 import { useNetworkFilter } from '../networkFilter'
 import { pageFailure } from '../pageState'
-import { inheritRouteNetwork, updateRouteParams } from '../routeState'
+import { inheritRouteNetwork, siteDetailHref, updateRouteParams } from '../routeState'
 import { useTimezone } from '../timezone'
 import { POLL_MS, usePolledResource } from '../usePolledResource'
 import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
@@ -434,7 +434,7 @@ export default function Agents({
       className: 'mono',
       render: (row) => (
         <span title={`enrolled ${fmtTime(row.enrolled_at)} · ${row.id}`}>
-          {row.site} · {row.hostname}
+          <a href={siteDetailHref(row.site)}>{row.site}</a> · {row.hostname}
         </span>
       ),
     },

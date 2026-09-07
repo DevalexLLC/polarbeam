@@ -16,6 +16,7 @@ test('mobile navigation exposes every primary route in operational order', () =>
     ],
   )
   assert.equal(navigationItemIsCurrent('#/', 'pair'), true)
+  assert.equal(navigationItemIsCurrent('#/', 'site'), true)
   assert.equal(navigationItemIsCurrent('#/targets', 'target'), true)
   assert.equal(navigationItemIsCurrent('#/settings', 'settings'), true)
   assert.equal(navigationItemIsCurrent('#/routes', 'incidents'), false)

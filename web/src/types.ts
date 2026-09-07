@@ -473,6 +473,9 @@ export interface OutagesResponse {
   // (a pathological fleet-wide incident): the list is partial and views
   // must say so instead of presenting it as complete.
   truncated?: boolean
+  // True when the newest-500 cap on RESOLVED events cut older history
+  // inside the window (per site under ?site=, fleet-wide otherwise).
+  history_truncated?: boolean
 }
 
 export interface Hop {

@@ -1,6 +1,6 @@
 import { apiGet } from '../api'
 import { fmtAgo } from '../format'
-import { inheritRouteNetwork } from '../routeState'
+import { inheritRouteNetwork, siteDetailHref } from '../routeState'
 import type { AgentBucketFailuresResponse, AgentHealthResponse, AgentInfo } from '../types'
 import HealthStrip, { stripStats, UptimeValue } from './HealthStrip'
 
@@ -69,8 +69,16 @@ export default function FleetAgentsCard({
                     }}
                   >
                     <td>
-                      {/* aria-label because the linter can't see the nested
-                          interpolated text as the control's label. */}
+                      {/* Two sibling links (anchors cannot nest): the site
+                          name opens the site page, the hostname the agent
+                          row. aria-label because the linter can't see the
+                          nested interpolated text as the control's label. */}
+                      <strong>
+                        <a className="fleet-site-link" href={siteDetailHref(a.site)}>
+                          {a.site}
+                        </a>
+                        {multiNetwork && <span className="chip">{a.network}</span>}
+                      </strong>
                       <a
                         className="fleet-agent-link"
                         href={inheritRouteNetwork('#/agents?agent=' + encodeURIComponent(a.id))}
@@ -78,10 +86,6 @@ export default function FleetAgentsCard({
                           multiNetwork ? `${a.site} · ${a.hostname} · ${a.network}` : `${a.site} · ${a.hostname}`
                         }
                       >
-                        <strong>
-                          {a.site}
-                          {multiNetwork && <span className="chip">{a.network}</span>}
-                        </strong>
                         <small>{a.hostname}</small>
                       </a>
                     </td>

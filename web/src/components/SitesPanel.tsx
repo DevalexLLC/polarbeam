@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, apiDelete, apiGet, apiPost, apiPut } from '../api'
-import { updateRouteParams } from '../routeState'
+import { siteDetailHref, updateRouteParams } from '../routeState'
 import { usePolledResource } from '../usePolledResource'
 import { useStickyPin } from '../useStickyPin'
 import { useRouteNumber, useRouteParam, useRouteSearch } from '../useRouteState'
@@ -268,7 +268,7 @@ export default function SitesPanel({
       sortKey: 'name',
       priority: 'identity',
       className: 'mono',
-      render: (site) => site.name,
+      render: (site) => <a href={siteDetailHref(site.name)}>{site.name}</a>,
     },
     {
       key: 'display',

@@ -6,6 +6,7 @@ import PageError from '../components/PageError'
 import { fmtAgo } from '../format'
 import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
 import { inheritRouteNetwork } from '../routeState'
+import { agentIsLive, ratioStatus } from '../siteHealth'
 import { buildSiteTopology, topologyUrgentSites } from '../siteTopology'
 import { buildThresholdResolver, cellSeverity } from '../severity'
 import { resolveTopologyMode } from '../topologyMode'
@@ -84,13 +85,6 @@ function incidentCause(o: OutageEvent): string {
   if (error.includes('timeout') || error.includes('deadline exceeded')) return 'Timed out'
   if (error.includes('no such host')) return 'Host not found'
   return o.error || 'Probe failure'
-}
-
-function ratioStatus(value: number, total: number): string {
-  if (total === 0) return ''
-  if (total > 0 && value === total) return ' stat-good'
-  if (total > 0 && value === 0) return ' stat-critical'
-  return ' stat-warning'
 }
 
 export default function Overview({ onAuthError }: { onAuthError: (err: unknown) => void }) {
@@ -177,16 +171,9 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
   const attention = shownAgents.filter((a) => attentionReason(a) != null)
   const healthyDirections = shownCells.filter((cell) => cellSeverity(cell, resolveThresholds) === 'ok').length
   const totalDirections = shownCells.length
-  const availableSites = shownSites.filter((site) => {
-    const own = shownAgents.filter((a) => a.site === site.name)
-    return own.some(
-      (a) =>
-        a.last_seen_at != null &&
-        !a.offline &&
-        !a.cert_revoked_at &&
-        (a.cert_not_after == null || Date.parse(a.cert_not_after) >= Date.now()),
-    )
-  }).length
+  const availableSites = shownSites.filter((site) =>
+    shownAgents.some((a) => a.site === site.name && agentIsLive(a)),
+  ).length
 
   if (error && !matrix)
     return <PageError title="Overview unavailable" subject="overview" error={error} onRetry={() => void reload()} />
@@ -219,9 +206,13 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
       )}
 
       <section className="stat-grid" aria-label="Network health summary">
-        <a
+        <button
+          type="button"
           className={'stat-card' + ratioStatus(availableSites, shownSites.length)}
-          href={inheritRouteNetwork('#/agents')}
+          onClick={() => {
+            setTopology('sites')
+            document.getElementById('connectivity')?.scrollIntoView({ block: 'nearest' })
+          }}
         >
           <span className="stat-label">Sites available</span>
           <strong>
@@ -229,7 +220,7 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
             <small> / {shownSites.length}</small>
           </strong>
           <span className="stat-context">Sites with a live agent</span>
-        </a>
+        </button>
         <button
           type="button"
           className={'stat-card' + ratioStatus(healthyDirections, totalDirections)}
