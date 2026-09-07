@@ -281,7 +281,7 @@ export default function TargetsPanel({
   ]
 
   const field = (label: string, key: keyof Draft, placeholder: string, locked = false, note?: string) => (
-    <label className="threshold-field">
+    <label className={key === 'url' ? 'threshold-field field-full' : 'threshold-field'}>
       <span className="label">{label}</span>
       <span className="threshold-input">
         <input
