@@ -41,8 +41,21 @@ const incidentRouteWindow = 15 * time.Minute
 // an unbounded multi-MB response. Truncation is reported, never silent.
 const openOutageCap = 2000
 
-// ListOutages returns open events plus up to 500 events closed within the
-// window, newest first. The two disjoint branches (open ∪ recently closed)
+// closedOutageCap bounds the closed branch of ListOutages: the newest 500
+// events closed inside the window. Per site under a site filter (the
+// predicate sits inside the branch), fleet-wide otherwise.
+const closedOutageCap = 500
+
+// OutageTruncation reports which ListOutages branch its cap cut. Open and
+// Closed are distinct signals: a cut open branch means the live incident
+// list is a floor, a cut closed branch means older history is missing.
+type OutageTruncation struct {
+	Open   bool
+	Closed bool
+}
+
+// ListOutages returns open events plus up to closedOutageCap events closed
+// within the window, newest first. The two disjoint branches (open ∪ recently closed)
 // replace a closed_at IS NULL OR closed_at > cutoff predicate no index
 // could serve against forever-retained history: the open branch rides the
 // partial open-event indexes, the closed branch range-scans
@@ -59,10 +72,19 @@ const openOutageCap = 2000
 // closed branch's LIMIT must count only in-scope events, or a noisy foreign
 // tenant's 500 newest closed outages would crowd a scoped tenant's own
 // history out of the response entirely.
-func (s *Store) ListOutages(ctx context.Context, window time.Duration, networks []uuid.UUID, includeRoutes bool) (_ []OutageInfo, truncated bool, _ error) {
-	// The open branch fetches cap+1 newest-first so truncation is detected
-	// in the same round trip; the sentinel row (the oldest open event) is
-	// dropped below.
+// site (nil = unfiltered) narrows both branches to events touching one
+// site: the event's agent sits there, or its target's agent does. It lives
+// inside the branches for the same reason the scope predicate does — the
+// closed cap must count only that site's events, so a busy fleet cannot
+// crowd one site's year of history out of the response. The target-side
+// match keeps an event whose source agent row is gone as long as its
+// target's agent still sits at the site: probes AGAINST a site are that
+// site's history too. Scoped callers never see such orphans — the network
+// predicate already fails closed on a deleted agent.
+func (s *Store) ListOutages(ctx context.Context, window time.Duration, networks []uuid.UUID, includeRoutes bool, site *uuid.UUID) (_ []OutageInfo, truncation OutageTruncation, _ error) {
+	// Both branches fetch cap+1 newest-first so truncation is detected in
+	// the same round trip; each sentinel row (the oldest event of its
+	// branch) is dropped below.
 	rows, err := s.pool.Query(ctx, `
 		SELECT oe.id, oe.kind, oe.agent_id, oe.probe_id, oe.target_id,
 			COALESCE(a.hostname, ''), COALESCE(n.name, ''),
@@ -74,6 +96,9 @@ func (s *Store) ListOutages(ctx context.Context, window time.Duration, networks 
 			WHERE closed_at IS NULL
 			  AND ($2::uuid[] IS NULL
 			       OR agent_id IN (SELECT id FROM agents WHERE network_id = ANY($2)))
+			  AND ($4::uuid IS NULL
+			       OR agent_id IN (SELECT id FROM agents WHERE site_id = $4)
+			       OR target_id IN (SELECT t.id FROM targets t JOIN agents ta ON ta.id = t.agent_id WHERE ta.site_id = $4))
 			ORDER BY opened_at DESC
 			LIMIT $3)
 			UNION ALL
@@ -82,8 +107,11 @@ func (s *Store) ListOutages(ctx context.Context, window time.Duration, networks 
 			WHERE closed_at > now() - $1::interval
 			  AND ($2::uuid[] IS NULL
 			       OR agent_id IN (SELECT id FROM agents WHERE network_id = ANY($2)))
+			  AND ($4::uuid IS NULL
+			       OR agent_id IN (SELECT id FROM agents WHERE site_id = $4)
+			       OR target_id IN (SELECT t.id FROM targets t JOIN agents ta ON ta.id = t.agent_id WHERE ta.site_id = $4))
 			ORDER BY opened_at DESC
-			LIMIT 500)
+			LIMIT $5)
 		) oe
 		LEFT JOIN agents a ON a.id = oe.agent_id
 		LEFT JOIN networks n ON n.id = a.network_id
@@ -91,50 +119,63 @@ func (s *Store) ListOutages(ctx context.Context, window time.Duration, networks 
 		LEFT JOIN targets t ON t.id = oe.target_id
 		LEFT JOIN agents ta ON ta.id = t.agent_id
 		LEFT JOIN sites dst ON dst.id = ta.site_id
-		ORDER BY oe.opened_at DESC`, window, networks, openOutageCap+1)
+		ORDER BY oe.opened_at DESC`, window, networks, openOutageCap+1, site, closedOutageCap+1)
 	if err != nil {
-		return nil, false, fmt.Errorf("list outages: %w", err)
+		return nil, OutageTruncation{}, fmt.Errorf("list outages: %w", err)
 	}
 	defer rows.Close()
 
 	var out []OutageInfo
-	open := 0
+	open, closed := 0, 0
 	for rows.Next() {
 		var o OutageInfo
 		if err := rows.Scan(&o.ID, &o.Kind, &o.AgentID, &o.ProbeID, &o.TargetID,
 			&o.AgentHostname, &o.Network, &o.SrcSite,
 			&o.DstSite, &o.TargetName, &o.ProbeType, &o.OpenedAt, &o.ClosedAt, &o.Error); err != nil {
-			return nil, false, fmt.Errorf("scan outage: %w", err)
+			return nil, OutageTruncation{}, fmt.Errorf("scan outage: %w", err)
 		}
 		if o.ClosedAt == nil {
 			open++
+		} else {
+			closed++
 		}
 		out = append(out, o)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, false, err
+		return nil, OutageTruncation{}, err
 	}
 	rows.Close()
+	// Drop each branch's sentinel: the last row of that branch in
+	// newest-first order is its oldest event, the one the cap is defined
+	// to cut.
 	if open > openOutageCap {
-		// Drop the sentinel: the last open row in newest-first order is the
-		// oldest open event, the one the cap is defined to cut.
-		for i := len(out) - 1; i >= 0; i-- {
-			if out[i].ClosedAt == nil {
-				out = append(out[:i], out[i+1:]...)
-				break
-			}
-		}
-		truncated = true
+		out = dropOldest(out, func(o OutageInfo) bool { return o.ClosedAt == nil })
+		truncation.Open = true
+	}
+	if closed > closedOutageCap {
+		out = dropOldest(out, func(o OutageInfo) bool { return o.ClosedAt != nil })
+		truncation.Closed = true
 	}
 	if len(out) == 0 || !includeRoutes {
-		return out, truncated, nil
+		return out, truncation, nil
 	}
 	candidates, err := s.listIncidentRouteCandidates(ctx, window, networks)
 	if err != nil {
-		return nil, false, err
+		return nil, OutageTruncation{}, err
 	}
 	correlateIncidentRoutes(out, candidates)
-	return out, truncated, nil
+	return out, truncation, nil
+}
+
+// dropOldest removes the last row matching branch from a newest-first
+// slice — the sentinel the branch's cap+1 fetch added.
+func dropOldest(out []OutageInfo, branch func(OutageInfo) bool) []OutageInfo {
+	for i := len(out) - 1; i >= 0; i-- {
+		if branch(out[i]) {
+			return append(out[:i], out[i+1:]...)
+		}
+	}
+	return out
 }
 
 // PathEventInfo is one path_events row joined with display names. Hops are

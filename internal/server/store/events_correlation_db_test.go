@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,7 +75,7 @@ func TestListOutagesStableIdentitiesAndRelatedRoutes(t *testing.T) {
 	// agent+target identity.
 	insertPathQueryEvent(t, ctx, s, legacyRoute, base.Add(6*time.Hour+time.Minute), f.aDef, legacyRouteProbe, serviceTarget, `[]`, `[]`)
 
-	outages, _, err := s.ListOutages(ctx, 24*time.Hour, nil, true)
+	outages, _, err := s.ListOutages(ctx, 24*time.Hour, nil, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +109,7 @@ func TestListOutagesStableIdentitiesAndRelatedRoutes(t *testing.T) {
 	if legacy.ProbeID != nil || !slices.Contains(pathEventIDs(legacy.RelatedRoutes), legacyRoute) {
 		t.Errorf("legacy missing-probe routes = %+v", legacy.RelatedRoutes)
 	}
-	withoutRoutes, _, err := s.ListOutages(ctx, 24*time.Hour, nil, false)
+	withoutRoutes, _, err := s.ListOutages(ctx, 24*time.Hour, nil, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,12 +138,15 @@ func TestListOutagesOpenBranchCap(t *testing.T) {
 		t.Fatalf("seed outage flood: %v", err)
 	}
 
-	outages, truncated, err := s.ListOutages(ctx, 24*time.Hour, nil, false)
+	outages, truncation, err := s.ListOutages(ctx, 24*time.Hour, nil, false, nil)
 	if err != nil {
 		t.Fatalf("ListOutages: %v", err)
 	}
-	if !truncated {
-		t.Error("2001 open events: truncated = false, want true")
+	if !truncation.Open {
+		t.Error("2001 open events: truncation.Open = false, want true")
+	}
+	if truncation.Closed {
+		t.Error("no closed events: truncation.Closed = true, want false")
 	}
 	if len(outages) != 2000 {
 		t.Fatalf("got %d events, want 2000 (cap)", len(outages))
@@ -160,14 +164,122 @@ func TestListOutagesOpenBranchCap(t *testing.T) {
 		WHERE opened_at = (SELECT min(opened_at) FROM outage_events)`); err != nil {
 		t.Fatalf("close oldest: %v", err)
 	}
-	outages, truncated, err = s.ListOutages(ctx, 24*time.Hour, nil, false)
+	outages, truncation, err = s.ListOutages(ctx, 24*time.Hour, nil, false, nil)
 	if err != nil {
 		t.Fatalf("ListOutages after close: %v", err)
 	}
-	if truncated {
-		t.Error("2000 open events: truncated = true, want false")
+	if truncation.Open || truncation.Closed {
+		t.Errorf("2000 open events: truncation = %+v, want neither branch cut", truncation)
 	}
 	if len(outages) != 2001 {
 		t.Errorf("got %d events, want 2001 (2000 open + 1 recently closed)", len(outages))
+	}
+}
+
+// TestListOutagesSiteFilter: the site filter matches an event through its
+// agent's site OR its target's agent's site, sits inside both union
+// branches so the closed cap counts per site, keeps a deleted-source event
+// for a global caller as long as its target's agent still sits at the site,
+// and drops that orphan for a scoped caller (the network predicate fails
+// closed on a deleted agent).
+func TestListOutagesSiteFilter(t *testing.T) {
+	t.Parallel()
+	ctx, s := newStore(t)
+	f := buildNetFixture(t, ctx, s)
+	now := time.Now()
+	hourAgo := now.Add(-time.Hour)
+
+	// e1: A → B, open. e2: B offline, open. e3: B → A, closed an hour ago.
+	// e4: deleted agent → A, open — attributable only through its target.
+	e1, e2, e3, e4 := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	p1, p3, p4 := uuid.New(), uuid.New(), uuid.New()
+	orphanAgent := uuid.New()
+	insertOutageEvent(t, ctx, s, e1, "probe_failing", f.aDef, &p1, &f.tBDef, now.Add(-4*time.Hour), nil)
+	insertOutageEvent(t, ctx, s, e2, "agent_offline", f.bDef, nil, nil, now.Add(-3*time.Hour), nil)
+	insertOutageEvent(t, ctx, s, e3, "probe_failing", f.bDef, &p3, &f.tADef, now.Add(-2*time.Hour), &hourAgo)
+	insertOutageEvent(t, ctx, s, e4, "probe_failing", orphanAgent, &p4, &f.tADef, now.Add(-90*time.Minute), nil)
+
+	ids := func(out []store.OutageInfo) []uuid.UUID {
+		got := make([]uuid.UUID, 0, len(out))
+		for _, o := range out {
+			got = append(got, o.ID)
+		}
+		slices.SortFunc(got, func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
+		return got
+	}
+	sorted := func(want ...uuid.UUID) []uuid.UUID {
+		slices.SortFunc(want, func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
+		return want
+	}
+	unknown := uuid.New()
+	for _, tc := range []struct {
+		name   string
+		scope  []uuid.UUID
+		site   *uuid.UUID
+		want   []uuid.UUID
+		closed bool
+	}{
+		{"unfiltered", nil, nil, sorted(e1, e2, e3, e4), false},
+		{"site A (global)", nil, &f.siteA, sorted(e1, e3, e4), false},
+		{"site B (global)", nil, &f.siteB, sorted(e1, e2, e3), false},
+		{"unknown site", nil, &unknown, sorted(), false},
+		{"site A (default-scoped drops the orphan)", []uuid.UUID{f.defaultNet}, &f.siteA, sorted(e1, e3), false},
+	} {
+		out, truncation, err := s.ListOutages(ctx, 24*time.Hour, tc.scope, false, tc.site)
+		if err != nil {
+			t.Fatalf("%s: ListOutages: %v", tc.name, err)
+		}
+		if got := ids(out); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+		if truncation.Open || truncation.Closed != tc.closed {
+			t.Errorf("%s: truncation = %+v, want {Open:false Closed:%v}", tc.name, truncation, tc.closed)
+		}
+	}
+
+	// Flood site B with 501 resolved offline events, all opened after e3:
+	// the fleet-wide and the site-B closed branches are cut (e3, their
+	// oldest resolved event, is the one dropped) and say so, while site A's
+	// branch keeps e3 because the cap counts per site.
+	if _, err := s.Pool().Exec(ctx, `
+		INSERT INTO outage_events (id, kind, agent_id, opened_at, closed_at)
+		SELECT gen_random_uuid(), 'agent_offline', $1,
+		       now() - make_interval(secs => 600 + i), now() - make_interval(secs => i)
+		FROM generate_series(1, 501) AS i`, f.bDef); err != nil {
+		t.Fatalf("seed closed flood: %v", err)
+	}
+	for _, tc := range []struct {
+		name       string
+		site       *uuid.UUID
+		wantClosed bool
+		wantE3     bool
+	}{
+		{"unfiltered", nil, true, false},
+		{"site B", &f.siteB, true, false},
+		{"site A", &f.siteA, false, true},
+	} {
+		out, truncation, err := s.ListOutages(ctx, 24*time.Hour, nil, false, tc.site)
+		if err != nil {
+			t.Fatalf("%s: ListOutages: %v", tc.name, err)
+		}
+		closed := 0
+		hasE3 := false
+		for _, o := range out {
+			if o.ClosedAt != nil {
+				closed++
+			}
+			if o.ID == e3 {
+				hasE3 = true
+			}
+		}
+		if truncation.Closed != tc.wantClosed || truncation.Open {
+			t.Errorf("%s: truncation = %+v, want {Open:false Closed:%v}", tc.name, truncation, tc.wantClosed)
+		}
+		if tc.wantClosed && closed != 500 {
+			t.Errorf("%s: %d closed events returned, want exactly the 500 cap", tc.name, closed)
+		}
+		if hasE3 != tc.wantE3 {
+			t.Errorf("%s: site A's resolved event present = %v, want %v", tc.name, hasE3, tc.wantE3)
+		}
 	}
 }

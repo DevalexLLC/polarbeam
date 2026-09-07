@@ -129,6 +129,10 @@ type fakeEventState struct {
 	outages []store.OutageInfo
 	// whether the most recent outage read requested correlated route evidence
 	lastOutageRoutes bool
+	// the site filter of the most recent outage read (nil = unfiltered)
+	lastOutageSite *uuid.UUID
+	// what the next outage read reports as cut by the store caps
+	outageTruncation store.OutageTruncation
 	pathEvents       []store.PathEventInfo
 	// Query-mode path event arguments and metadata. The fake preserves its
 	// seeded order; SQL filtering/sorting is covered by store DB tests.
@@ -532,16 +536,17 @@ func (f *fakeDB) UpdateBannerSettings(_ context.Context, b store.BannerSettings)
 	f.banner = &b
 	return f.banner, nil
 }
-func (f *fakeDB) ListOutages(_ context.Context, _ time.Duration, networks []uuid.UUID, includeRoutes bool) ([]store.OutageInfo, bool, error) {
+func (f *fakeDB) ListOutages(_ context.Context, _ time.Duration, networks []uuid.UUID, includeRoutes bool, site *uuid.UUID) ([]store.OutageInfo, store.OutageTruncation, error) {
 	f.recordScope("ListOutages", networks)
 	f.lastOutageRoutes = includeRoutes
+	f.lastOutageSite = site
 	out := append([]store.OutageInfo(nil), f.outages...)
 	if !includeRoutes {
 		for i := range out {
 			out[i].RelatedRoutes = nil
 		}
 	}
-	return out, false, nil
+	return out, f.outageTruncation, nil
 }
 func (f *fakeDB) ListPathEvents(_ context.Context, _ time.Duration, networks []uuid.UUID) ([]store.PathEventInfo, error) {
 	f.recordScope("ListPathEvents", networks)
@@ -1544,6 +1549,75 @@ func TestUnknownSiteIs404(t *testing.T) {
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "nowhere") {
 		t.Errorf("unknown site = %d %s, want 404 naming the site", w.Code, w.Body)
+	}
+}
+
+// TestOutagesSiteFilter: ?site= resolves the name through the scoped site
+// lookup and hands the store the site ID; an unknown (or invisible) site
+// 404s naming it, exactly like pair detail; no param leaves the read
+// unfiltered.
+func TestOutagesSiteFilter(t *testing.T) {
+	f := newFakeDB()
+	lon := uuid.New()
+	f.endpoints = map[string]*store.SiteEndpoints{
+		"lon": {SiteInfo: store.SiteInfo{ID: lon, Name: "lon"}},
+	}
+	h := newTestAPI(t, f)
+	cookie, _ := loginAndCookie(t, h, f)
+	get := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", path, nil)
+		req.AddCookie(cookie)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w
+	}
+
+	w := get("/api/v1/outages?window=7d&site=lon")
+	if w.Code != http.StatusOK || f.lastOutageSite == nil || *f.lastOutageSite != lon {
+		t.Errorf("site=lon = %d %s, store site = %v, want 200 and %s", w.Code, w.Body, f.lastOutageSite, lon)
+	}
+	w = get("/api/v1/outages?site=nowhere")
+	if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "nowhere") {
+		t.Errorf("site=nowhere = %d %s, want 404 naming the site", w.Code, w.Body)
+	}
+	w = get("/api/v1/outages")
+	if w.Code != http.StatusOK || f.lastOutageSite != nil {
+		t.Errorf("unfiltered = %d, store site = %v, want 200 and nil", w.Code, f.lastOutageSite)
+	}
+}
+
+// TestOutagesTruncationFlags: the two store caps surface as two independent
+// fields — "truncated" keeps its open-only floor-marker meaning and
+// "history_truncated" reports cut resolved history — never folded.
+func TestOutagesTruncationFlags(t *testing.T) {
+	f := newFakeDB()
+	h := newTestAPI(t, f)
+	cookie, _ := loginAndCookie(t, h, f)
+	for _, tc := range []struct {
+		name string
+		cut  store.OutageTruncation
+	}{
+		{"neither", store.OutageTruncation{}},
+		{"open only", store.OutageTruncation{Open: true}},
+		{"closed only", store.OutageTruncation{Closed: true}},
+		{"both", store.OutageTruncation{Open: true, Closed: true}},
+	} {
+		f.outageTruncation = tc.cut
+		req := httptest.NewRequest("GET", "/api/v1/outages", nil)
+		req.AddCookie(cookie)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		var body struct {
+			Truncated        bool `json:"truncated"`
+			HistoryTruncated bool `json:"history_truncated"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("%s: decode: %v (%s)", tc.name, err, w.Body)
+		}
+		if w.Code != http.StatusOK || body.Truncated != tc.cut.Open || body.HistoryTruncated != tc.cut.Closed {
+			t.Errorf("%s: %d truncated=%v history_truncated=%v, want %v/%v",
+				tc.name, w.Code, body.Truncated, body.HistoryTruncated, tc.cut.Open, tc.cut.Closed)
+		}
 	}
 }
 

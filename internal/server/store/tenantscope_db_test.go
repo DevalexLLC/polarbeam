@@ -241,7 +241,7 @@ func TestScopedReadsKeepPlanesApart(t *testing.T) {
 				t.Fatalf("insert path event: %v", err)
 			}
 		}
-		outages, _, err := s.ListOutages(ctx, 24*time.Hour, mgmtScope, false)
+		outages, _, err := s.ListOutages(ctx, 24*time.Hour, mgmtScope, false, nil)
 		if err != nil {
 			t.Fatalf("ListOutages: %v", err)
 		}
@@ -273,7 +273,7 @@ func TestScopedReadsKeepPlanesApart(t *testing.T) {
 			VALUES ('agent_offline', $1, now() - interval '2 hours', now())`, f.aMgmt); err != nil {
 			t.Fatalf("insert own closed outage: %v", err)
 		}
-		outages, _, err := s.ListOutages(ctx, 24*time.Hour, mgmtScope, false)
+		outages, _, err := s.ListOutages(ctx, 24*time.Hour, mgmtScope, false, nil)
 		if err != nil {
 			t.Fatalf("ListOutages: %v", err)
 		}
