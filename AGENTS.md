@@ -54,6 +54,19 @@ screens, Map otherwise), while every explicit Sites, Map, or Matrix choice
 must remain URL-backed. Keep SVG viewport math pure in
 `web/src/mapViewport.ts` and preserve keyboard-operable controls.
 
+Keep React render paths pure under oxlint's React rules. Rendered state belongs
+in React state; synchronize refs used by event handlers or imperative libraries
+in a layout effect before passive consumers run. Destructure error-summary DOM
+callbacks separately from scalar IDs and ARIA metadata. Settings draft baselines
+stay frozen throughout an edit, including polling updates, until a confirmed
+server-version reload. Browser navigation guards compare against the last
+accepted hash because hashchange/popstate arrive after the URL changes. Health
+strips use `web/src/useNow.ts` to age stale data.
+
+Metric chart options are memoized per mounted `web/src/components/MetricChart.tsx`;
+loss ceilings affect only loss options. Pass threshold values to Chart, which
+commits them independently of options and redraws only on scalar level changes.
+
 Pair and target uPlot charts share investigation-range behavior through
 `web/src/components/Chart.tsx` and pure reconciliation in
 `web/src/chartRange.ts`. Every caller must pass a context key containing all

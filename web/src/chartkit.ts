@@ -3,8 +3,7 @@ import type { SeriesPoint } from './types'
 
 // Shared uPlot machinery for the metric chart views (PairDetail,
 // TargetDetail). Everything here is behavior-identical to what PairDetail
-// originally defined inline; views keep their own mkOptions because the
-// series shapes and cache keys differ.
+// originally defined inline; MetricChart owns the shared metric options.
 
 export type Metric = 'latency' | 'loss'
 
@@ -21,8 +20,8 @@ export const CHART_COLORS = {
 }
 
 // Threshold levels in the CURRENT metric's y units (ms or loss %), read by
-// the chart plugin at draw time. Views hold these in a ref, never options
-// state: mkOptions caches options objects, and baking levels into them
+// the chart plugin at draw time. Chart commits these separately from
+// its memoized options; baking levels into options
 // would either destroy the plots on every settings poll or draw stale
 // lines.
 export interface ThresholdLevels {
@@ -71,7 +70,7 @@ export function thresholdLinesPlugin(getLevels: () => ThresholdLevels): uPlot.Pl
 // Wire timings are microseconds; charts plot milliseconds.
 export const ms = (v: number | null | undefined) => (v == null ? null : v / 1000)
 
-// withPctl must match the series list the view's mkOptions builds for the
+// withPctl must match the series list MetricChart builds for the
 // same render: uPlot requires data columns and series definitions to agree
 // in count.
 export function toChartData(points: SeriesPoint[], metric: Metric, withPctl: boolean): uPlot.AlignedData {

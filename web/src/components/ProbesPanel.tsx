@@ -74,7 +74,12 @@ export default function ProbesPanel({
   const [editID, setEditID] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState<ProbeDraft | null>(null)
   const [editErrors, setEditErrors] = useState<string[]>([])
-  const editSummary = useErrorSummary(editErrors.length > 0)
+  const {
+    request: editSummaryRequest,
+    describedby: editSummaryDescribedby,
+    id: editSummaryId,
+    ref: editSummaryRef,
+  } = useErrorSummary(editErrors.length > 0)
   // Actions → Edit unmounts the floating menu with focus inside it, so the
   // opened editor must take focus itself or keyboard users land back at the
   // document root with the expansion unannounced. The request is keyed to
@@ -195,7 +200,7 @@ export default function ProbesPanel({
     setEditErrors(errors)
     if (!body) {
       feedback.error(`Probe ${assignmentLabel(p)}: ${errors.join('; ')}`)
-      editSummary.request()
+      editSummaryRequest()
       return
     }
     setBusy(true)
@@ -230,7 +235,7 @@ export default function ProbesPanel({
       onAuthError(err)
       const message = err instanceof Error ? err.message : String(err)
       setEditErrors([message])
-      editSummary.request()
+      editSummaryRequest()
       feedback.error(`Probe was not saved: ${message}`)
     } finally {
       setBusy(false)
@@ -253,13 +258,19 @@ export default function ProbesPanel({
   // Single-network installs never see the network picker or labels.
   const multiNetwork = plane.kind !== 'implicit'
 
+  const selectedForEdit = data?.probes.find((probe) => probe.id === selectedProbe)
+  if (!selectedProbe && editID !== null) {
+    setEditID(null)
+    setEditDraft(null)
+  } else if (selectedForEdit && editID !== selectedProbe) {
+    setEditID(selectedProbe)
+    setEditDraft(draftFrom(selectedForEdit))
+    setEditErrors([])
+  }
+
   useEffect(() => {
     if (!selectedProbe) {
       scrolledProbe.current = null
-      if (editID !== null) {
-        setEditID(null)
-        setEditDraft(null)
-      }
       return
     }
     if (!data) return
@@ -269,18 +280,13 @@ export default function ProbesPanel({
       onSelectedProbe('', 'replace')
       return
     }
-    if (editID !== selectedProbe) {
-      setEditID(selectedProbe)
-      setEditDraft(draftFrom(selected))
-      setEditErrors([])
-    }
     if (scrolledProbe.current !== selectedProbe) {
       const row = document.getElementById(`settings-probe-${selectedProbe}-${visibleSurface()}`)
       if (!row) return
       row.scrollIntoView({ block: 'nearest' })
       scrolledProbe.current = selectedProbe
     }
-  }, [data, editID, loadedRequestURL, onSelectedProbe, pinnedProbeID, requestURL, selectedProbe])
+  }, [data, loadedRequestURL, onSelectedProbe, pinnedProbeID, requestURL, selectedProbe])
 
   const pageMeta = data?.page ?? { limit: PROBE_PAGE, offset: 0, total: probes.length, has_more: false }
   const pageCount = Math.max(1, Math.ceil(pageMeta.total / PROBE_PAGE))
@@ -327,12 +333,12 @@ export default function ProbesPanel({
         <ProbeDraftFields
           draft={editDraft}
           onChange={setEditDraftFn}
-          describedby={editSummary.describedby}
+          describedby={editSummaryDescribedby}
           busy={busy}
           registry={registry}
         />
         {editErrors.length > 0 && (
-          <ul className="error threshold-errors" id={editSummary.id} ref={editSummary.ref} tabIndex={-1}>
+          <ul className="error threshold-errors" id={editSummaryId} ref={editSummaryRef} tabIndex={-1}>
             {editErrors.map((message) => (
               <li key={message}>{message}</li>
             ))}

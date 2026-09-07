@@ -1,7 +1,9 @@
+import { useNow } from '../useNow'
 import { useEffect, useMemo, useRef } from 'react'
 import uPlot from 'uplot'
 import { apiGet } from '../api'
 import Chart from '../components/Chart'
+import MetricChart from '../components/MetricChart'
 import HealthStrip, { stripStats, UptimeValue } from '../components/HealthStrip'
 import PageError from '../components/PageError'
 import PathGraph, { isWidePath } from '../components/PathGraph'
@@ -30,7 +32,6 @@ import {
   lossScaleCeiling,
   ms,
   statusLabel,
-  thresholdLinesPlugin,
   toChartData,
 } from '../chartkit'
 import type { Metric, ThresholdLevels } from '../chartkit'
@@ -215,7 +216,7 @@ function StripRows({
   selectedProbe: string
   onSelectProbe: (probe: string) => void
 }) {
-  const nowS = Date.now() / 1000
+  const nowS = useNow() / 1000
   // Sorting a freshly-spread copy, same as Agents' probe sort (toSorted
   // needs a newer TS lib target than the build uses).
   // oxlint-disable-next-line unicorn/no-array-sort
@@ -386,18 +387,17 @@ export default function TargetDetail({
   // ingest bakes into the assignment map.
   const resolveThresholds = useMemo(() => buildThresholdResolver(settings), [settings])
 
-  // Kept current every render; the chart plugin reads the ref at draw
-  // time, keyed by site so each source chart draws its own lines.
-  const thresholdLevels = useRef<Record<string, ThresholdLevels>>({})
+  // Pass each source chart its own effective levels; Chart commits these
+  // separately from its options so threshold polls preserve the plot.
+  const thresholdLevels: Record<string, ThresholdLevels> = {}
   {
     const c = COLORS[resolved]
     const dstSite = summary?.target.dst_site ?? null
-    const levels: Record<string, ThresholdLevels> = {}
     for (const src of summary?.sources ?? []) {
       // Keyed by (site, network) — a site probing from two planes has two
       // source rows, and each resolves its own plane's thresholds.
       const effective = resolveThresholds(src.site, dstSite, src.network)
-      levels[srcKey(src.site, src.network)] =
+      thresholdLevels[srcKey(src.site, src.network)] =
         metric === 'loss'
           ? {
               warn: effective && effective.loss_warn_pct > 0 ? effective.loss_warn_pct : null,
@@ -412,72 +412,7 @@ export default function TargetDetail({
               critColor: c.crit,
             }
     }
-    thresholdLevels.current = levels
   }
-
-  const mkOptions = useMemo(() => {
-    // Cached options identity, same contract as PairDetail's factory: a
-    // poll that changes only data hands Chart the SAME object so the plot
-    // survives; every keyed input change gets a fresh plot.
-    const cache = new Map<string, Omit<uPlot.Options, 'width'>>()
-    return (
-      source: string, // srcKey(site, network) — one plot identity per source row
-      axisLabel: string,
-      withPctl: boolean,
-      lossCeiling: number,
-    ): Omit<uPlot.Options, 'width'> => {
-      const key = [id, win, source, axisLabel, withPctl, metric === 'loss' ? lossCeiling : '', mode].join('|')
-      const cached = cache.get(key)
-      if (cached) return cached
-      const c = COLORS[resolved]
-      const stroke = c.aToB
-      const axisStyle = {
-        stroke: c.axis,
-        grid: { stroke: c.grid, width: 1 },
-        ticks: { stroke: c.grid, width: 1 },
-      }
-      const value =
-        metric === 'loss'
-          ? (_u: uPlot, v: number) => (v == null ? '—' : `${v.toFixed(1)}%`)
-          : (_u: uPlot, v: number) => (v == null ? '—' : fmtLatency(v * 1000))
-      const chartSeries: uPlot.Series[] =
-        metric === 'loss'
-          ? [{}, { label: 'loss %', stroke, width: 2, spanGaps: false, value }]
-          : [
-              {},
-              { label: 'avg', stroke, width: 2, spanGaps: false, value },
-              { label: 'min', stroke, width: 1, alpha: 0.4, spanGaps: false, value },
-              { label: 'max', stroke, width: 1, alpha: 0.4, spanGaps: false, value },
-            ]
-      if (metric === 'latency' && withPctl) {
-        // Aggregate windows only; must stay in lockstep with toChartData.
-        chartSeries.push(
-          { label: 'p50', stroke, width: 1.5, alpha: 0.7, spanGaps: false, value },
-          { label: 'p95', stroke, width: 1, alpha: 0.55, dash: [6, 4], spanGaps: false, value },
-          { label: 'p99', stroke, width: 1, alpha: 0.35, dash: [2, 4], spanGaps: false, value },
-        )
-      }
-      const options: Omit<uPlot.Options, 'width'> = {
-        height: 230,
-        series: chartSeries,
-        scales: metric === 'loss' ? { y: { range: [0, lossCeiling] } } : {},
-        axes: [{ ...axisStyle }, { ...axisStyle, label: axisLabel, size: 64 }],
-        cursor: { drag: { x: true, y: false } },
-        legend: { live: true },
-        // The ref is stable; the closure resolves this chart's source at
-        // draw time, so cached options never draw another source's lines.
-        plugins: [
-          latestLegendPlugin(),
-          thresholdLinesPlugin(
-            () => thresholdLevels.current[source] ?? { warn: null, crit: null, warnColor: '', critColor: '' },
-          ),
-        ],
-        ...(mode === 'utc' ? { tzDate: (ts: number) => uPlot.tzDate(new Date(ts * 1e3), 'Etc/UTC') } : {}),
-      }
-      cache.set(key, options)
-      return options
-    }
-  }, [metric, resolved, mode, win, id])
 
   const stageOptions = useMemo((): Omit<uPlot.Options, 'width'> => {
     // One stage chart per page: no cache map needed, the memo identity is
@@ -749,8 +684,12 @@ export default function TargetDetail({
                     <span className="metric-source">{latencySourceName(src.latency_source)}</span>
                   )}
                 </h2>
-                <Chart
-                  options={mkOptions(srcKey(src.site, src.network), axisLabel, withPctl, lossCeiling)}
+                <MetricChart
+                  metric={metric}
+                  axisLabel={axisLabel}
+                  withPctl={withPctl}
+                  lossCeiling={lossCeiling}
+                  thresholds={thresholdLevels[srcKey(src.site, src.network)]}
                   data={toChartData(points, metric, withPctl)}
                   label={`${srcLabel(src.site, src.network)} → ${title} ${metric} chart`}
                   contextKey={[id, network, win, metric, selectedProbe, srcKey(src.site, src.network)].join('\u0000')}

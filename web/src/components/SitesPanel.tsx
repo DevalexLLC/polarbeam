@@ -82,7 +82,12 @@ export default function SitesPanel({
   const [draft, setDraft] = useState<Draft | null>(null)
   const [editing, setEditing] = useState(false) // draft edits an existing site (name locked)
   const [formErrors, setFormErrors] = useState<string[]>([])
-  const summary = useErrorSummary(formErrors.length > 0)
+  const {
+    request: summaryRequest,
+    describedby: summaryDescribedby,
+    id: summaryId,
+    ref: summaryRef,
+  } = useErrorSummary(formErrors.length > 0)
   const [saving, setSaving] = useState(false)
   const [query, setQuery] = useRouteSearch()
   const [queryParam] = useRouteParam('q')
@@ -137,7 +142,7 @@ export default function SitesPanel({
     const { errors, latitude, longitude } = validate(draft)
     setFormErrors(errors)
     if (errors.length > 0) {
-      summary.request()
+      summaryRequest()
       feedback.error(`Site: ${errors.join('; ')}`)
       return
     }
@@ -174,7 +179,7 @@ export default function SitesPanel({
       onAuthError(err)
       const message = err instanceof Error ? err.message : String(err)
       setFormErrors([message])
-      summary.request()
+      summaryRequest()
       feedback.error(`Site was not saved: ${message}`)
     } finally {
       setSaving(false)
@@ -218,13 +223,14 @@ export default function SitesPanel({
     setFormErrors([])
   }
 
+  if (!selectedSite && editing) {
+    setEditing(false)
+    setDraft(null)
+  }
+
   useEffect(() => {
     if (!selectedSite) {
       scrolledSite.current = null
-      if (editing) {
-        setEditing(false)
-        setDraft(null)
-      }
       return
     }
     if (!data) return
@@ -241,7 +247,7 @@ export default function SitesPanel({
       row.scrollIntoView({ block: 'nearest' })
       scrolledSite.current = selectedSite
     }
-  }, [data, editing, loadedRequestURL, onSelectedSite, pinnedSiteID, requestURL, selectedSite])
+  }, [data, loadedRequestURL, onSelectedSite, pinnedSiteID, requestURL, selectedSite])
 
   const pageMeta = data?.page ?? { limit: SITE_PAGE, offset: 0, total: data?.sites.length ?? 0, has_more: false }
   const pageCount = Math.max(1, Math.ceil(pageMeta.total / SITE_PAGE))
@@ -309,7 +315,7 @@ export default function SitesPanel({
           value={draft?.[key] ?? ''}
           placeholder={placeholder}
           disabled={saving || locked}
-          aria-describedby={summary.describedby}
+          aria-describedby={summaryDescribedby}
           onChange={(e) => {
             setDraft((d) => ({ ...(d ?? emptyDraft), [key]: e.target.value }))
           }}
@@ -354,7 +360,7 @@ export default function SitesPanel({
               {field('Longitude', 'longitude', '-180 to 180')}
             </div>
             {formErrors.length > 0 && (
-              <ul className="error threshold-errors" id={summary.id} ref={summary.ref} tabIndex={-1}>
+              <ul className="error threshold-errors" id={summaryId} ref={summaryRef} tabIndex={-1}>
                 {formErrors.map((e) => (
                   <li key={e}>{e}</li>
                 ))}

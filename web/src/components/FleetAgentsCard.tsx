@@ -1,3 +1,4 @@
+import { useNow } from '../useNow'
 import { apiGet } from '../api'
 import { fmtAgo } from '../format'
 import { inheritRouteNetwork, siteDetailHref } from '../routeState'
@@ -19,7 +20,7 @@ export default function FleetAgentsCard({
   multiNetwork: boolean
 }) {
   const bucketS = health?.bucket_s ?? 1800
-  const nowS = Date.now() / 1000
+  const nowS = useNow() / 1000
   const healthById = new Map(health?.agents.map((a) => [a.id, a.buckets]) ?? [])
 
   return (

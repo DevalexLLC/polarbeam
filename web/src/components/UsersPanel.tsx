@@ -149,11 +149,9 @@ export default function UsersPanel({
   // poll), the response is an empty window with a nonzero total — snap
   // back to the last valid page instead of showing a misleading empty
   // state with no pager.
-  useEffect(() => {
-    if (data && data.total > 0 && offset >= data.total) {
-      setOffset(Math.floor((data.total - 1) / PAGE_SIZE) * PAGE_SIZE)
-    }
-  }, [data, offset])
+  if (data && data.total > 0 && offset >= data.total) {
+    setOffset(Math.floor((data.total - 1) / PAGE_SIZE) * PAGE_SIZE)
+  }
 
   const toggleScope = (u: UserAccount) => {
     if (scopeEdit?.id === u.id && scopeGuard.dirty) {

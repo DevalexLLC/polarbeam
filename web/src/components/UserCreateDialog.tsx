@@ -1,4 +1,4 @@
-import { type RefObject, useEffect, useId, useState } from 'react'
+import { type RefObject, useId, useState } from 'react'
 import { apiPost } from '../api'
 import { roleLabel } from '../caps'
 import { useErrorSummary } from '../formErrors'
@@ -31,14 +31,20 @@ export default function UserCreateDialog({
   onAuthError: (err: unknown) => void
 }) {
   const [createError, setCreateError] = useState('') // shown inside the dialog
-  const createSummary = useErrorSummary(Boolean(createError))
+  const {
+    request: createSummaryRequest,
+    describedby: createSummaryDescribedby,
+    id: createSummaryId,
+    ref: createSummaryRef,
+  } = useErrorSummary(Boolean(createError))
   const [newUsername, setNewUsername] = useState('')
   const [newRole, setNewRole] = useState<Role>('viewer')
   // Only meaningful for the two scoped roles: the server requires at least
   // one network for them and rejects the field outright for the global ones.
   const [newNetworks, setNewNetworks] = useState<string[]>([])
   const [creating, setCreating] = useState(false)
-  const [copied, setCopied] = useState(false)
+  const [copiedSecret, setCopiedSecret] = useState<MintedSecret | null>(null)
+  const copied = minted !== null && copiedSecret === minted
   // Names the create/reveal dialog from whichever <h2> is rendered — an
   // aria-label string would go stale when the content switches.
   const dialogTitleID = useId()
@@ -46,9 +52,7 @@ export default function UserCreateDialog({
 
   // Every path that replaces or clears the minted password (a create, a
   // row's reset, Done, discard) must also reset the Copy button's state.
-  useEffect(() => {
-    setCopied(false)
-  }, [minted])
+  if (copiedSecret !== null && copiedSecret !== minted) setCopiedSecret(null)
 
   const discardCreate = () => {
     setNewUsername('')
@@ -56,7 +60,7 @@ export default function UserCreateDialog({
     setNewNetworks([])
     setCreateError('')
     onMintedChange(null)
-    setCopied(false)
+    setCopiedSecret(null)
     dialogRef.current?.close()
   }
   useSettingsDraft(
@@ -81,7 +85,7 @@ export default function UserCreateDialog({
     if (!newUsername.trim()) return
     setCreating(true)
     setCreateError('')
-    setCopied(false)
+    setCopiedSecret(null)
     try {
       // The server requires networks for a scoped role and refuses the
       // field for a global one, so send it exactly when it applies.
@@ -100,7 +104,7 @@ export default function UserCreateDialog({
       onAuthError(err)
       const message = err instanceof Error ? err.message : String(err)
       setCreateError(message)
-      createSummary.request()
+      createSummaryRequest()
       feedback.error(`User was not created: ${message}`)
     } finally {
       setCreating(false)
@@ -109,15 +113,15 @@ export default function UserCreateDialog({
 
   const finishReveal = () => {
     onMintedChange(null)
-    setCopied(false)
+    setCopiedSecret(null)
     dialogRef.current?.close()
   }
 
   const copyMinted = () => {
     if (!minted) return
     navigator.clipboard.writeText(minted.res.password).then(
-      () => setCopied(true),
-      () => setCopied(false),
+      () => setCopiedSecret(minted),
+      () => setCopiedSecret(null),
     )
   }
 
@@ -182,7 +186,7 @@ export default function UserCreateDialog({
                     value={newUsername}
                     disabled={creating}
                     placeholder="username"
-                    aria-describedby={createSummary.describedby}
+                    aria-describedby={createSummaryDescribedby}
                     onChange={(e) => setNewUsername(e.target.value)}
                   />
                 </span>
@@ -193,7 +197,7 @@ export default function UserCreateDialog({
                   <select
                     value={newRole}
                     disabled={creating}
-                    aria-describedby={createSummary.describedby}
+                    aria-describedby={createSummaryDescribedby}
                     onChange={(e) => setNewRole(e.target.value as Role)}
                   >
                     {ALL_ROLES.map((r) => (
@@ -217,14 +221,14 @@ export default function UserCreateDialog({
                 className="threshold-field"
                 role="group"
                 aria-label="Networks"
-                aria-describedby={createSummary.describedby}
+                aria-describedby={createSummaryDescribedby}
               >
                 <span className="label">Networks</span>
                 <NetworkPicker all={networks} value={newNetworks} disabled={creating} onChange={setNewNetworks} />
               </div>
             )}
             {createError && (
-              <ul className="error threshold-errors" id={createSummary.id} ref={createSummary.ref} tabIndex={-1}>
+              <ul className="error threshold-errors" id={createSummaryId} ref={createSummaryRef} tabIndex={-1}>
                 <li>{createError}</li>
               </ul>
             )}

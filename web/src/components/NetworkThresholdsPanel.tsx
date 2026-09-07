@@ -73,7 +73,12 @@ export default function NetworkThresholdsPanel({
   // Derived render-time error: the picked network already has a row. It
   // describes the network select above it, so no request() — there is no
   // submit that lands on it (the editor simply does not render).
-  const addSummary = useErrorSummary(addNetwork !== '' && configured.has(addNetwork))
+  const {
+    invalid: addSummaryInvalid,
+    describedby: addSummaryDescribedby,
+    id: addSummaryId,
+    ref: addSummaryRef,
+  } = useErrorSummary(addNetwork !== '' && configured.has(addNetwork))
 
   const remove = async (d: NetworkThreshold) => {
     setRowError('')
@@ -239,12 +244,12 @@ export default function NetworkThresholdsPanel({
                   value={addNetwork}
                   onChange={setAddNetwork}
                   label="Network"
-                  invalid={addSummary.invalid}
-                  describedby={addSummary.describedby}
+                  invalid={addSummaryInvalid}
+                  describedby={addSummaryDescribedby}
                 />
               </div>
               {addNetwork !== '' && configured.has(addNetwork) && (
-                <ul className="error threshold-errors" id={addSummary.id} ref={addSummary.ref} tabIndex={-1}>
+                <ul className="error threshold-errors" id={addSummaryId} ref={addSummaryRef} tabIndex={-1}>
                   <li>{addNetwork} already has defaults — edit them in the table above</li>
                 </ul>
               )}

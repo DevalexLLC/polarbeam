@@ -134,7 +134,12 @@ export default function ThresholdOverrideForm({
 }) {
   const [draft, setDraft] = useState<Draft | null>(null)
   const [errors, setErrors] = useState<string[]>([])
-  const summary = useErrorSummary(errors.length > 0)
+  const {
+    request: summaryRequest,
+    describedby: summaryDescribedby,
+    id: summaryId,
+    ref: summaryRef,
+  } = useErrorSummary(errors.length > 0)
   const [warnings, setWarnings] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const feedback = useSettingsMutation()
@@ -169,7 +174,7 @@ export default function ThresholdOverrideForm({
         const { errors: errs, body } = validate(current, inherited)
         setErrors(errs)
         if (!body) {
-          summary.request()
+          summaryRequest()
           feedback.error(`${resource}: ${errs.join('; ')}`)
           return
         }
@@ -191,7 +196,7 @@ export default function ThresholdOverrideForm({
       onAuthError(err)
       const message = err instanceof Error ? err.message : String(err)
       setErrors([message])
-      summary.request()
+      summaryRequest()
       feedback.error(`${resource} was not saved: ${message}`)
     } finally {
       setSaving(false)
@@ -203,7 +208,7 @@ export default function ThresholdOverrideForm({
     if (allEmpty && !override) {
       const message = 'set at least one value — empty fields inherit ' + emptyHint
       setErrors([message])
-      summary.request()
+      summaryRequest()
       feedback.error(`${resource}: ${message}`)
       return
     }
@@ -230,7 +235,7 @@ export default function ThresholdOverrideForm({
           value={current[key]}
           placeholder={`inherits ${inheritValue}`}
           disabled={!canWrite || saving}
-          aria-describedby={summary.describedby}
+          aria-describedby={summaryDescribedby}
           onChange={(e) => setDraft((d) => ({ ...(d ?? draftFrom(override)), [key]: e.target.value }))}
         />
         <span className="hint">{unit}</span>
@@ -251,7 +256,7 @@ export default function ThresholdOverrideForm({
           {field('Loss critical', '%', 'lossCritPct', String(inherited.loss_crit_pct))}
         </div>
         {errors.length > 0 && (
-          <ul className="error threshold-errors" id={summary.id} ref={summary.ref} tabIndex={-1}>
+          <ul className="error threshold-errors" id={summaryId} ref={summaryRef} tabIndex={-1}>
             {errors.map((e) => (
               <li key={e}>{e}</li>
             ))}

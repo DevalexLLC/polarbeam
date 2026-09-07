@@ -52,7 +52,12 @@ export default function NetworksPanel({
   const [draft, setDraft] = useState<Draft | null>(null)
   const [editing, setEditing] = useState(false) // draft edits an existing network (name locked)
   const [formErrors, setFormErrors] = useState<string[]>([])
-  const summary = useErrorSummary(formErrors.length > 0)
+  const {
+    request: summaryRequest,
+    describedby: summaryDescribedby,
+    id: summaryId,
+    ref: summaryRef,
+  } = useErrorSummary(formErrors.length > 0)
   const [saving, setSaving] = useState(false)
   const [actionRow, setActionRow] = useState<string | null>(null)
   const [expandedRow, setExpandedRow] = useState<string | null>(null)
@@ -81,7 +86,7 @@ export default function NetworksPanel({
     const errors = validate(draft)
     setFormErrors(errors)
     if (errors.length > 0) {
-      summary.request()
+      summaryRequest()
       feedback.error(`Network: ${errors.join('; ')}`)
       return
     }
@@ -107,7 +112,7 @@ export default function NetworksPanel({
       onAuthError(err)
       const message = err instanceof Error ? err.message : String(err)
       setFormErrors([message])
-      summary.request()
+      summaryRequest()
       feedback.error(`Network was not saved: ${message}`)
     } finally {
       setSaving(false)
@@ -179,7 +184,7 @@ export default function NetworksPanel({
           value={draft?.[key] ?? ''}
           placeholder={placeholder}
           disabled={saving || locked}
-          aria-describedby={summary.describedby}
+          aria-describedby={summaryDescribedby}
           onChange={(e) => {
             setDraft((d) => ({ ...(d ?? emptyDraft), [key]: e.target.value }))
           }}
@@ -221,7 +226,7 @@ export default function NetworksPanel({
               {field('Display name', 'display_name', 'e.g. Management')}
             </div>
             {formErrors.length > 0 && (
-              <ul className="error threshold-errors" id={summary.id} ref={summary.ref} tabIndex={-1}>
+              <ul className="error threshold-errors" id={summaryId} ref={summaryRef} tabIndex={-1}>
                 {formErrors.map((e) => (
                   <li key={e}>{e}</li>
                 ))}

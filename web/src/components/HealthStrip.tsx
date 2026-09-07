@@ -190,7 +190,7 @@ export default function HealthStrip({
       document.removeEventListener('click', onDocClick, true)
       window.removeEventListener('scroll', onScroll, { capture: true })
     }
-  }, [pinned])
+  }, [pinned, cardRef, wrapRef])
 
   // The pinned slot is addressed by bucket start, not index: a poll that
   // crosses a bucket boundary shifts every slot left, and the card must

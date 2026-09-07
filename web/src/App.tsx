@@ -135,7 +135,7 @@ export default function App() {
   const [route, setRoute] = useState<Route>(() => parseHash(location.hash))
   const routeKey = JSON.stringify(route)
   const pageKey = routePageKey(route)
-  const initialRouteRef = useRef(true)
+  const focusedPage = useRef(pageKey)
   const [entityTitle, setEntityTitle] = useState<{ routeKey: string; label: string } | null>(null)
 
   useEffect(() => {
@@ -150,10 +150,8 @@ export default function App() {
   // wait for their first response are observed until their heading mounts;
   // the observer is discarded on the next route change.
   useEffect(() => {
-    if (initialRouteRef.current) {
-      initialRouteRef.current = false
-      return
-    }
+    if (focusedPage.current === pageKey) return
+    focusedPage.current = pageKey
     const main = document.getElementById('main-content')
     if (!main) return
     let observer: MutationObserver | null = null
@@ -235,9 +233,11 @@ export default function App() {
     key: user,
     logError: (err) => console.warn('ui banner unavailable; keeping last known', err),
   })
-  useEffect(() => {
+  const [lastPolledBanner, setLastPolledBanner] = useState(polledBanner)
+  if (lastPolledBanner !== polledBanner) {
+    setLastPolledBanner(polledBanner)
     if (polledBanner) setBanner(polledBanner)
-  }, [polledBanner])
+  }
 
   // The network list decides whether the top-bar filter renders at all
   // (single-network installs never see it). Fetch on login and poll so an
@@ -278,10 +278,14 @@ export default function App() {
   // distinct from [], which means "this caller sees no networks". Plane
   // pickers must not read "not loaded yet" as "single-network install".
   const networks = networksSnapshot?.names ?? null
+  const [appliedNetworks, setAppliedNetworks] = useState(networksSnapshot)
+  if (appliedNetworks !== networksSnapshot) {
+    setAppliedNetworks(networksSnapshot)
+    if (networksSnapshot?.refreshedUser) setUser(networksSnapshot.refreshedUser)
+  }
   useEffect(() => {
     if (!networksSnapshot) return
     reconcileNetworkFilter(networksSnapshot.names)
-    if (networksSnapshot.refreshedUser) setUser(networksSnapshot.refreshedUser)
   }, [networksSnapshot])
 
   // Capabilities are derived from the session, not stored: they change
@@ -289,7 +293,12 @@ export default function App() {
   // tree at that moment anyway. A store would add a global that can drift
   // from `user`, and would make logout ordering a correctness bug.
   const caps = useMemo(() => (user ? capsOf(user) : null), [user])
-  useEffect(() => clearNotifications(), [clearNotifications, user])
+  const notifiedSession = useRef(user)
+  useEffect(() => {
+    if (notifiedSession.current === user) return
+    notifiedSession.current = user
+    clearNotifications()
+  }, [clearNotifications, user])
   const primaryNavigation = PRIMARY_NAVIGATION.map((item) => ({
     ...item,
     href: inheritRouteNetwork(item.href),
@@ -310,15 +319,14 @@ export default function App() {
       : primaryNavigation
 
   // A hash naming a tab this role cannot open is rewritten to the one it
-  // landed on, so the URL the user copies is honest. replaceState does not
-  // fire hashchange, so this cannot loop.
+  // landed on, so the URL the user copies is honest. updateRouteParams
+  // notifies the shared route subscription, which owns the state update.
   const settingsTab = caps && route.view === 'settings' ? resolveTab(route.tab, caps) : null
   useEffect(() => {
     if (route.view !== 'settings' || settingsTab === null) return
     if (route.tab === settingsTab) return
     const destination = settingsTabDef(settingsTab)
     updateRouteParams({ section: destination.group, subsection: destination.tab }, 'replace')
-    setRoute({ view: 'settings', tab: settingsTab })
   }, [route, settingsTab])
 
   const reportEntityTitle = useCallback((label: string) => setEntityTitle({ routeKey, label }), [routeKey])

@@ -61,7 +61,7 @@ const SettingsMutationContext = createContext<SettingsMutationContextValue | nul
 
 export function SettingsMutationProvider({ children }: { children: ReactNode }) {
   const dirtyForms = useRef(new Map<string, DirtyForm>())
-  const [dirtyVersion, setDirtyVersion] = useState(0)
+  const [hasDirty, setHasDirty] = useState(false)
   const [toasts, setToasts] = useState<Toast[]>([])
   const [confirmation, setConfirmation] = useState<ConfirmationRequest | null>(null)
   const [pendingRoute, setPendingRoute] = useState<{ hash: string; mode: HistoryMode } | null>(null)
@@ -72,13 +72,11 @@ export function SettingsMutationProvider({ children }: { children: ReactNode }) 
   const cancelRef = useRef<HTMLButtonElement>(null)
   const confirmTitleID = useId()
   const acceptedHash = useRef(typeof location === 'undefined' ? '#/' : canonicalizeRouteHash(location.hash).hash)
-  const hasDirty = dirtyForms.current.size > 0
 
   const registerDirty = useCallback((id: string, form: DirtyForm | null) => {
-    const previous = dirtyForms.current.get(id)
     if (form) dirtyForms.current.set(id, form)
     else dirtyForms.current.delete(id)
-    if (previous !== form) setDirtyVersion((version) => version + 1)
+    setHasDirty(dirtyForms.current.size > 0)
   }, [])
 
   const dismiss = useCallback((id: number) => {
@@ -130,7 +128,7 @@ export function SettingsMutationProvider({ children }: { children: ReactNode }) 
   const discardAll = useCallback(() => {
     for (const form of dirtyForms.current.values()) form.discard()
     dirtyForms.current.clear()
-    setDirtyVersion((version) => version + 1)
+    setHasDirty(false)
   }, [])
 
   const discardDescription = useCallback(() => {
@@ -164,12 +162,9 @@ export function SettingsMutationProvider({ children }: { children: ReactNode }) 
   )
 
   const blockRoute = useCallback(
-    (hash: string, mode: HistoryMode) => {
+    (hash: string, mode: HistoryMode, fromHash = location.hash || acceptedHash.current) => {
       const canonical = canonicalizeRouteHash(hash).hash
-      if (
-        dirtyForms.current.size === 0 ||
-        !routeChangeDiscardsSettingsDraft(location.hash || acceptedHash.current, canonical)
-      ) {
+      if (dirtyForms.current.size === 0 || !routeChangeDiscardsSettingsDraft(fromHash, canonical)) {
         acceptedHash.current = canonical
         return true
       }
@@ -202,7 +197,7 @@ export function SettingsMutationProvider({ children }: { children: ReactNode }) 
     const onBrowserRoute = (event: Event) => {
       const next = canonicalizeRouteHash(location.hash).hash
       if (next === acceptedHash.current) return
-      if (blockRoute(next, 'push')) return
+      if (blockRoute(next, 'push', acceptedHash.current)) return
       history.pushState(null, '', acceptedHash.current)
       event.stopImmediatePropagation()
     }
@@ -238,7 +233,7 @@ export function SettingsMutationProvider({ children }: { children: ReactNode }) 
     }
     window.addEventListener('beforeunload', beforeUnload)
     return () => window.removeEventListener('beforeunload', beforeUnload)
-  }, [dirtyVersion, hasDirty])
+  }, [hasDirty])
 
   useEffect(() => {
     const dialog = dialogRef.current
@@ -354,7 +349,9 @@ export function useSettingsDraft(
 ): () => void {
   const { registerDirty } = useSettingsMutation()
   const discardRef = useRef(discard)
-  discardRef.current = discard
+  useLayoutEffect(() => {
+    discardRef.current = discard
+  }, [discard])
   useEffect(() => {
     registerDirty(id, dirty ? { label, consequence, discard: () => discardRef.current() } : null)
     return () => registerDirty(id, null)
@@ -380,11 +377,12 @@ export function useConcurrentSettingsDraft<T>({
   reload: (latest: T) => void
 }) {
   const feedback = useSettingsMutation()
-  const baseline = useRef<T | null>(loaded)
-  const wasEditing = useRef(editing)
-  baseline.current = synchronizeDraftBaseline(baseline.current, loaded, editing, wasEditing.current)
-  wasEditing.current = editing
-  const dirty = editing && current !== null && serverSnapshotChanged(baseline.current, current)
+  const [snapshot, setSnapshot] = useState({ baseline: loaded, editing })
+  const baseline = synchronizeDraftBaseline(snapshot.baseline, loaded, editing, snapshot.editing)
+  if (snapshot.editing !== editing || serverSnapshotChanged(snapshot.baseline, baseline)) {
+    setSnapshot({ baseline, editing })
+  }
+  const dirty = editing && current !== null && serverSnapshotChanged(baseline, current)
   const release = useSettingsDraft(id, label, dirty, discard)
   // The last preflight conflict, for editors that render inside a modal
   // <dialog>: the provider's toast (and its reload action) sits outside
@@ -392,26 +390,24 @@ export function useConcurrentSettingsDraft<T>({
   // notice and the same confirmed reload itself. Cleared when the editor
   // closes, when a later preflight passes, and when the reload is applied.
   const [conflict, setConflict] = useState<{ message: string; reload: () => void } | null>(null)
-  useEffect(() => {
-    if (!editing) setConflict(null)
-  }, [editing])
+  if (!editing && conflict !== null) setConflict(null)
 
   const checkForConflict = useCallback(
     async (fetchLatest: () => Promise<T>): Promise<boolean> => {
       const latest = await fetchLatest()
-      if (!serverSnapshotChanged(baseline.current, latest)) {
+      if (!serverSnapshotChanged(baseline, latest)) {
         setConflict(null)
         return true
       }
       const askReload = feedback.conflict(label, () => {
-        baseline.current = latest
+        setSnapshot({ baseline: latest, editing })
         setConflict(null)
         reload(latest)
       })
       setConflict({ message: `${label} changed on the server. Your changes were not saved.`, reload: askReload })
       return false
     },
-    [feedback, label, reload],
+    [baseline, editing, feedback, label, reload],
   )
 
   return { dirty, checkForConflict, release, conflict }
