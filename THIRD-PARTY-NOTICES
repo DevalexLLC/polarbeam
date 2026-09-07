@@ -4992,7 +4992,7 @@ github.com/containerd/errdefs/pkg v0.3.0
    limitations under the License.
 
 --------------------------------------------------------------------------------
-github.com/coreos/go-oidc/v3 v3.20.0
+github.com/coreos/go-oidc/v3 v3.21.0
 --------------------------------------------------------------------------------
 
 [github.com/coreos/go-oidc/v3/LICENSE]
