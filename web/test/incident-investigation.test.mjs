@@ -8,5 +8,6 @@ const overview = readFileSync(new URL('../src/views/Overview.tsx', import.meta.u
 test('incident evidence is opt-in and uses the rendered snapshot window', () => {
   assert.match(incidents, /\/api\/v1\/outages\?window=\$\{win\}&include_routes=true/)
   assert.match(incidents, /win=\{snapshotWin\}/)
+  assert.match(incidents, /data\.history_truncated/)
   assert.doesNotMatch(overview, /include_routes=true/)
 })

@@ -67,7 +67,23 @@ func (a *api) handleOutages(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "include_routes must be true or false")
 		return
 	}
-	outages, truncated, err := a.db.ListOutages(r.Context(), spec.Window, scopeIDs(r.Context()), includeRoutes)
+	// ?site= narrows the list to events touching one site, resolved with
+	// the caller's scope so an out-of-scope site 404s exactly like an
+	// unknown one (same wording as pair detail).
+	var site *uuid.UUID
+	if name := r.URL.Query().Get("site"); name != "" {
+		eps, err := a.db.SiteEndpointsBatch(r.Context(), []string{name}, scopeIDs(r.Context()))
+		if err != nil {
+			internalError(w, "site endpoints", err)
+			return
+		}
+		if eps[0] == nil {
+			writeError(w, http.StatusNotFound, "unknown site "+name)
+			return
+		}
+		site = &eps[0].ID
+	}
+	outages, truncation, err := a.db.ListOutages(r.Context(), spec.Window, scopeIDs(r.Context()), includeRoutes, site)
 	if err != nil {
 		internalError(w, "list outages", err)
 		return
@@ -106,7 +122,11 @@ func (a *api) handleOutages(w http.ResponseWriter, r *http.Request) {
 		// True when the oldest OPEN events were cut by the store's safety
 		// cap — the dashboard should say the incident list is partial
 		// rather than present it as complete.
-		"truncated": truncated,
+		"truncated": truncation.Open,
+		// True when the closed branch's cap cut older resolved events:
+		// history inside the window is incomplete. Kept separate from
+		// "truncated", whose open-only meaning marks live counts as floors.
+		"history_truncated": truncation.Closed,
 	})
 }
 

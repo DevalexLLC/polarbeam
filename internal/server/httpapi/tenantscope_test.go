@@ -313,6 +313,7 @@ func TestScopedReadsPassScope(t *testing.T) {
 		{"/api/v1/agents?q=edge", "QueryAgents"},
 		{"/api/v1/agents/health", "AgentHealthSeries"},
 		{"/api/v1/outages", "ListOutages"},
+		{"/api/v1/outages?site=lon", "SiteEndpoints"},
 		{"/api/v1/path-events", "ListPathEvents"},
 		{"/api/v1/settings", "ListPathThresholds"},
 		{"/api/v1/config/targets", "ListTargets"},

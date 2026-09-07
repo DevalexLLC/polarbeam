@@ -340,7 +340,17 @@ table.fleet-table tbody tr:hover td {
   text-decoration: none;
 }
 
-.fleet-agent-link:hover strong {
+.fleet-agent-link:hover small {
+  text-decoration: underline;
+}
+
+.fleet-site-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.fleet-site-link:hover,
+.fleet-site-link:focus-visible {
   text-decoration: underline;
 }
 
@@ -599,4 +609,101 @@ td.fleet-uptime {
   font-size: 0.75rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ---- Site page ---- */
+
+/* The peers table: one row per peer site, both directions side by side,
+   the same density as the fleet table. */
+table.site-peers {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.83rem;
+}
+
+table.site-peers th {
+  padding: 0.55rem 0.9rem;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-3);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+table.site-peers tbody th {
+  color: var(--ink);
+  font-size: 0.83rem;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+table.site-peers td {
+  padding: 0.55rem 0.9rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+table.site-peers tr:last-child th,
+table.site-peers tr:last-child td {
+  border-bottom: none;
+}
+
+table.site-peers .site-peers-count {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+table.site-peers .site-peers-link {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.site-direction {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.site-direction-value {
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.site-direction-planes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.site-direction-planes .chip {
+  padding: 0.05rem 0.5rem;
+  font-size: 0.75rem;
+}
+
+.site-investigate .incident-resource-links {
+  padding: 0.9rem 1.2rem 1.1rem;
+}
+
+/* Site names in the matrix headers and the sites list open the site page;
+   they keep the header's ink so the grid reads as before. */
+table.matrix th a {
+  color: inherit;
+  text-decoration: none;
+}
+
+table.matrix th a:hover,
+table.matrix th a:focus-visible {
+  text-decoration: underline;
+}
+
+.topology-site-detail .text-link {
+  flex-basis: 100%;
+}
+
+/* On the site page the fleet card stands alone, so the Overview row's
+   minimum scroll height would only leave blank space under one agent. */
+#site-agents .fleet-scroll {
+  min-height: 0;
 }

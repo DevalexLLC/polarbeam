@@ -743,7 +743,7 @@ func TestEventListsCarryNetwork(t *testing.T) {
 
 	want := map[string]string{"a-def": "default", "a-mgmt": "mgmt", "": ""}
 
-	outages, _, err := s.ListOutages(ctx, 24*time.Hour, nil, false)
+	outages, _, err := s.ListOutages(ctx, 24*time.Hour, nil, false, nil)
 	if err != nil {
 		t.Fatalf("ListOutages: %v", err)
 	}

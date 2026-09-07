@@ -9,6 +9,8 @@ import {
   routeNumberParam,
   routeParam,
   routeEventHref,
+  siteDetailHref,
+  siteInvestigateHref,
   routeChangeDiscardsSettingsDraft,
   setRouteNavigationBlocker,
   subscribeRouteState,
@@ -259,4 +261,26 @@ test('target inventory links preserve canonical URL-backed context', () => {
   )
   assert.equal(targetInventoryHref('#/target/id?from=%23%2Ftargets%3Fnetwork%3Dblue%26q%3Dedge'), '#/targets?q=edge')
   assert.equal(targetInventoryHref('#/target/id?network=blue&from=%23%2Froutes%3Fq%3Dx'), '#/targets?network=blue')
+})
+
+test('site detail keeps the incidents vocabulary and the plane in canonical order', () => {
+  assert.equal(
+    canonicalizeRouteHash('#/site/ny%20c?incident=i1&metric=loss&slice=170&window=90d&network=blue').hash,
+    '#/site/ny%20c?network=blue&window=90d&slice=170&incident=i1',
+  )
+  assert.equal(canonicalizeRouteHash('#/site/lon?window=24h&slice=0').hash, '#/site/lon')
+  assert.equal(canonicalizeRouteHash('#/site').hash, '#/site')
+  assert.equal(canonicalizeRouteHash('#/site/%').hash, '#/site/%25')
+  assert.equal(siteDetailHref('ny c', '7d', '#/agents?network=blue'), '#/site/ny%20c?network=blue&window=7d')
+  assert.equal(siteDetailHref('lon', '24h', '#/'), '#/site/lon')
+  assert.equal(
+    siteInvestigateHref('agents', 'ny c', '7d', '#/site/ny%20c?network=blue'),
+    '#/agents?network=blue&q=ny+c',
+  )
+  assert.equal(siteInvestigateHref('routes', 'lon', '7d', '#/'), '#/routes?window=7d&q=lon')
+  assert.equal(siteInvestigateHref('targets', 'lon', '7d', '#/'), '#/targets?q=lon')
+  assert.equal(
+    siteInvestigateHref('settings-sites', 'lon', '24h', '#/'),
+    '#/settings?section=infrastructure&subsection=sites&q=lon',
+  )
 })

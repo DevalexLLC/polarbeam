@@ -141,7 +141,13 @@ mode retains `target_id` after its display row is deleted.
 `GET /api/v1/outages` retains each event's stable agent, probe, and target IDs
 independently of its live display joins. `include_routes=true` adds up to three
 deduplicated route changes from the same network-scoped newest-500 set used by
-the Routes view; lightweight consumers omit it. Rows are ordered by distance
+the Routes view; lightweight consumers omit it. `site=<name>` narrows both
+branches — open events and the newest 500 resolved inside the window — to
+events whose agent, or whose target's agent, sits at that site, so the
+resolved cap counts per site rather than fleet-wide; an unknown or
+out-of-scope name is a 404 worded like pair detail. `truncated` keeps its
+open-only meaning (live counts are floors) and `history_truncated` reports the
+resolved-branch cap. Rows are ordered by distance
 from opening or closing inside a ±15-minute window (open incidents use only
 opening). Exact agent+target IDs correlate across distinct failing and
 traceroute probe configs; probe ID helps when a legacy target ID is absent,

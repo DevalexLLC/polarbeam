@@ -143,7 +143,7 @@ type probeConfigStore interface {
 // eventReader is the outage, path-event, traceroute, and path-MTU read
 // surface.
 type eventReader interface {
-	ListOutages(ctx context.Context, window time.Duration, networks []uuid.UUID, includeRoutes bool) ([]store.OutageInfo, bool, error)
+	ListOutages(ctx context.Context, window time.Duration, networks []uuid.UUID, includeRoutes bool, site *uuid.UUID) ([]store.OutageInfo, store.OutageTruncation, error)
 	ListPathEvents(ctx context.Context, window time.Duration, networks []uuid.UUID) ([]store.PathEventInfo, error)
 	QueryPathEvents(ctx context.Context, window time.Duration, f store.PathEventFilter) ([]store.PathEventInfo, int64, bool, error)
 	CurrentPathsBatch(ctx context.Context, dirs []store.DirectionKey) ([][]store.CurrentPath, error)

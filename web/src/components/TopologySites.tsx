@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { fmtLatency } from '../format'
-import { inheritRouteNetwork } from '../routeState'
+import { inheritRouteNetwork, siteDetailHref } from '../routeState'
 import { SEVERITY_LABEL } from '../severity'
 import { rankSiteTopology, type SiteTopology } from '../siteTopology'
 
@@ -46,6 +46,9 @@ export default function TopologySites({ topology }: { topology: SiteTopology[] }
             </button>
             {open && (
               <div id={detailID} className="topology-site-detail">
+                <a className="text-link" href={siteDetailHref(site.name)}>
+                  Open site dashboard
+                </a>
                 <span>
                   <strong>{stats.degree}</strong> {stats.degree === 1 ? 'link' : 'links'}
                 </span>

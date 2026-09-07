@@ -33,6 +33,7 @@ import Outages from './views/Outages'
 import PairDetail from './views/PairDetail'
 import Paths from './views/Paths'
 import Settings from './views/Settings'
+import SiteDetail from './views/SiteDetail'
 import TargetDetail from './views/TargetDetail'
 import Targets from './views/Targets'
 
@@ -44,6 +45,7 @@ import Targets from './views/Targets'
 type Route =
   | { view: 'overview' }
   | { view: 'pair'; a: string; b: string }
+  | { view: 'site'; name: string }
   | { view: 'target'; id: string }
   | { view: 'targets' }
   | { view: 'incidents' }
@@ -70,6 +72,9 @@ function parseHash(hash: string): Route {
   if (parts[0] === 'pair' && parts[1] && parts[2]) {
     return { view: 'pair', a: decodeSegment(parts[1]), b: decodeSegment(parts[2]) }
   }
+  // #/site/<name> is the per-site dashboard; like target, an empty or
+  // unknown name shows the view's own loud not-found.
+  if (parts[0] === 'site') return { view: 'site', name: parts[1] ? decodeSegment(parts[1]) : '' }
   if (parts[0] === 'targets') return { view: 'targets' }
   // #/target/<id> is the per-target drill-down; a bad id shows the view's
   // own loud not-found rather than silently landing on the overview.
@@ -99,6 +104,7 @@ function parseHash(hash: string): Route {
 function routePageKey(route: Route): string {
   if (route.view === 'pair') return `${route.view}/${route.a}/${route.b}`
   if (route.view === 'target') return `${route.view}/${route.id}`
+  if (route.view === 'site') return `${route.view}/${route.name}`
   if (route.view === 'settings') return `${route.view}/${route.tab}`
   return route.view
 }
@@ -107,6 +113,7 @@ function routeTitle(route: Route, settingsTab: SettingsTab | null): string {
   if (route.view === 'overview') return 'Overview'
   if (route.view === 'pair') return `${route.a} ⇄ ${route.b}`
   if (route.view === 'target') return 'Target detail'
+  if (route.view === 'site') return route.name || 'Site detail'
   if (route.view === 'targets') return 'Targets'
   if (route.view === 'incidents') return 'Incidents'
   if (route.view === 'routes') return 'Routes'
@@ -472,6 +479,15 @@ export default function App() {
             // a stale series from the previous pair would otherwise keep
             // rendering under the new names when the new fetch fails.
             <PairDetail key={`${route.a}/${route.b}`} a={route.a} b={route.b} onAuthError={onAuthError} />
+          ) : route.view === 'site' ? (
+            // Keyed on the name so switching sites remounts with fresh state.
+            <SiteDetail
+              key={route.name}
+              name={route.name}
+              caps={caps}
+              onAuthError={onAuthError}
+              onTitleChange={reportEntityTitle}
+            />
           ) : route.view === 'target' ? (
             // Keyed on the id for the same remount-on-switch reason.
             <TargetDetail key={route.id} id={route.id} onAuthError={onAuthError} onTitleChange={reportEntityTitle} />

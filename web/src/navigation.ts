@@ -1,6 +1,7 @@
 export type PrimaryView =
   | 'overview'
   | 'pair'
+  | 'site'
   | 'target'
   | 'targets'
   | 'incidents'
@@ -26,7 +27,7 @@ export const PRIMARY_NAVIGATION: readonly NavigationItem[] = [
 export const SETTINGS_NAVIGATION: NavigationItem = { href: '#/settings', label: 'Settings' }
 
 export function navigationItemIsCurrent(href: string, view: PrimaryView): boolean {
-  if (href === '#/') return view === 'overview' || view === 'pair'
+  if (href === '#/') return view === 'overview' || view === 'pair' || view === 'site'
   if (href === '#/targets') return view === 'targets' || view === 'target'
   return href === `#/${view}`
 }

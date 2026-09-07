@@ -5,7 +5,7 @@ import Chart from '../components/Chart'
 import PageError from '../components/PageError'
 import PathGraph, { isWidePath } from '../components/PathGraph'
 import { useNetworkFilter } from '../networkFilter'
-import { inheritRouteNetwork } from '../routeState'
+import { inheritRouteNetwork, siteDetailHref } from '../routeState'
 import { useTheme } from '../theme'
 import { useTimezone } from '../timezone'
 import { usePolledResource } from '../usePolledResource'
@@ -435,7 +435,7 @@ export default function PairDetail({
             <a href={inheritRouteNetwork('#/')}>Overview</a> / Pair detail
           </div>
           <h1>
-            {a} ⇄ {b}
+            <a href={siteDetailHref(a, win)}>{a}</a> ⇄ <a href={siteDetailHref(b, win)}>{b}</a>
           </h1>
         </div>
         <span className="sub">

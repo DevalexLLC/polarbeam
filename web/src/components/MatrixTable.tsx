@@ -1,7 +1,7 @@
 import { cellSeverity, SEVERITY_LABEL, type Severity, type ThresholdResolver } from '../severity'
 import type { MatrixCell, Site } from '../types'
 import { fmtLatency } from '../format'
-import { inheritRouteNetwork } from '../routeState'
+import { inheritRouteNetwork, siteDetailHref } from '../routeState'
 
 // Matrix cells grade through the same cellSeverity fold as the map and
 // Overview — the raw API status alone would call a threshold-violating
@@ -118,7 +118,7 @@ export default function MatrixTable({
               </th>
               {sites.map((s) => (
                 <th key={s.name} scope="col">
-                  {s.display_name || s.name}
+                  <a href={siteDetailHref(s.name)}>{s.display_name || s.name}</a>
                 </th>
               ))}
             </tr>
@@ -126,7 +126,9 @@ export default function MatrixTable({
           <tbody>
             {sites.map((src) => (
               <tr key={src.name}>
-                <th scope="row">{src.display_name || src.name}</th>
+                <th scope="row">
+                  <a href={siteDetailHref(src.name)}>{src.display_name || src.name}</a>
+                </th>
                 {sites.map((dst) => {
                   if (src.name === dst.name) return <td key={dst.name} className="diag" aria-label="same site" />
                   const cell = cellFor.get(src.name + '\u0000' + dst.name)
