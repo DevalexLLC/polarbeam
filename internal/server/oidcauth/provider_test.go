@@ -38,6 +38,8 @@ type fakeIDP struct {
 	// overrideDiscovery replaces values, to test endpoint validation.
 	dropDiscoveryKeys []string
 	overrideDiscovery map[string]any
+	// extraJWKS tests mixed provider key sets through real token verification.
+	extraJWKS []any
 
 	gotCode     atomic.Value // string
 	gotVerifier atomic.Value // string
@@ -69,9 +71,9 @@ func newFakeIDP(t *testing.T) *fakeIDP {
 		json.NewEncoder(w).Encode(doc)
 	})
 	mux.HandleFunc("GET /jwks", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{
-			{Key: &idp.key.PublicKey, KeyID: "test-key", Algorithm: "RS256", Use: "sig"},
-		}})
+		keys := append([]any{}, idp.extraJWKS...)
+		keys = append(keys, jose.JSONWebKey{Key: &idp.key.PublicKey, KeyID: "test-key", Algorithm: "RS256", Use: "sig"})
+		json.NewEncoder(w).Encode(map[string]any{"keys": keys})
 	})
 	mux.HandleFunc("POST /token", func(w http.ResponseWriter, r *http.Request) {
 		r.ParseForm()
@@ -347,5 +349,43 @@ func TestManagerTestUsesCandidateConfig(t *testing.T) {
 	}
 	if info.Issuer != idp.ts.URL || info.TokenEndpoint != idp.ts.URL+"/token" {
 		t.Errorf("discovery info = %+v", info)
+	}
+}
+
+// Exercise the remote JWKS decoder through the same Exchange path as SSO.
+// Unsupported types may coexist with a usable key; malformed supported keys
+// must still fail closed rather than bypassing the JOSE key validation.
+func TestProviderMixedJWKS(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		key       map[string]any
+		wantError bool
+	}{
+		{name: "unsupported curve", key: map[string]any{"kty": "OKP", "crv": "Ed448", "x": "AA"}},
+		{name: "unsupported key type", key: map[string]any{"kty": "future-key", "x": "AA"}},
+		{name: "malformed supported key", key: map[string]any{"kty": "OKP", "crv": "Ed25519", "x": "AA"}, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			idp := newFakeIDP(t)
+			idp.tokenClaims = goodClaims
+			idp.extraJWKS = []any{tc.key}
+			p, err := newProvider(context.Background(), idp.settings())
+			if err != nil {
+				t.Fatal(err)
+			}
+			claims, err := p.Exchange(context.Background(), "code-1", oauth2.GenerateVerifier(), "nonce-1")
+			if tc.wantError {
+				if err == nil || !strings.Contains(err.Error(), "failed to decode keys") {
+					t.Fatalf("Exchange error = %v, want key decoding failure", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if claims.Subject != "user-1" {
+				t.Fatalf("subject = %q, want user-1", claims.Subject)
+			}
+		})
 	}
 }
