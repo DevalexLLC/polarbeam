@@ -3203,7 +3203,7 @@ cel.dev/expr v0.25.3
    limitations under the License.
 
 --------------------------------------------------------------------------------
-codeberg.org/miekg/dns v0.6.105
+codeberg.org/miekg/dns v0.6.108
 --------------------------------------------------------------------------------
 
 [codeberg.org/miekg/dns/LICENSE]
@@ -4992,7 +4992,7 @@ github.com/containerd/errdefs/pkg v0.3.0
    limitations under the License.
 
 --------------------------------------------------------------------------------
-github.com/coreos/go-oidc/v3 v3.20.0
+github.com/coreos/go-oidc/v3 v3.21.0
 --------------------------------------------------------------------------------
 
 [github.com/coreos/go-oidc/v3/LICENSE]
@@ -6115,7 +6115,7 @@ Copyright (c) 2016 Felix Geisendörfer (felix@debuggable.com)
  THE SOFTWARE.
 
 --------------------------------------------------------------------------------
-github.com/go-jose/go-jose/v4 v4.1.4
+github.com/go-jose/go-jose/v4 v4.1.5
 --------------------------------------------------------------------------------
 
 [github.com/go-jose/go-jose/v4/LICENSE]
@@ -12502,7 +12502,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 --------------------------------------------------------------------------------
-golang.org/x/crypto v0.55.0
+golang.org/x/crypto v0.56.0
 --------------------------------------------------------------------------------
 
 [golang.org/x/crypto/LICENSE]
