@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import DisclosureChevron from './DisclosureChevron'
 import {
@@ -50,7 +50,9 @@ function FloatingActionMenu({
 }) {
   const menu = useRef<HTMLDivElement>(null)
   const onCloseRef = useRef(onClose)
-  onCloseRef.current = onClose
+  useLayoutEffect(() => {
+    onCloseRef.current = onClose
+  }, [onClose])
 
   useLayoutEffect(() => {
     const place = () => {
@@ -243,7 +245,7 @@ export default function DataTable<Row>({
 }: DataTableProps<Row>) {
   const root = useRef<HTMLDivElement>(null)
   const focusedRow = useRef<string | null>(null)
-  const actionTrigger = useRef<HTMLButtonElement | null>(null)
+  const [actionTrigger, setActionTrigger] = useState<HTMLButtonElement | null>(null)
   const keys = useMemo(() => rows.map(rowKey), [rowKey, rows])
   const { expandedMissing, actionMissing } = dataTableMissingKeys(
     keys,
@@ -316,7 +318,7 @@ export default function DataTable<Row>({
           aria-expanded={open}
           aria-controls={menuID}
           onClick={(event) => {
-            actionTrigger.current = open ? null : event.currentTarget
+            setActionTrigger(open ? null : event.currentTarget)
             actions.onOpenKeyChange(open ? null : key)
           }}
         >
@@ -515,14 +517,14 @@ export default function DataTable<Row>({
               </span>
             </div>
           )}
-          {actions && openActionRow && actionTrigger.current && (
+          {actions && openActionRow && actionTrigger && (
             <FloatingActionMenu
               id={`data-table-actions-${actions.openKey}`}
               label={actions.label(openActionRow)}
-              trigger={actionTrigger.current}
+              trigger={actionTrigger}
               onClose={() => {
                 actions.onOpenKeyChange(null)
-                actionTrigger.current = null
+                setActionTrigger(null)
               }}
             >
               {actions.render(openActionRow)}

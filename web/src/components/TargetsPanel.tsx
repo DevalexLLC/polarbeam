@@ -71,7 +71,12 @@ export default function TargetsPanel({
   const [draft, setDraft] = useState<Draft | null>(null)
   const [editing, setEditing] = useState(false) // draft edits an existing target (name locked)
   const [formErrors, setFormErrors] = useState<string[]>([])
-  const summary = useErrorSummary(formErrors.length > 0)
+  const {
+    request: summaryRequest,
+    describedby: summaryDescribedby,
+    id: summaryId,
+    ref: summaryRef,
+  } = useErrorSummary(formErrors.length > 0)
   const [saving, setSaving] = useState(false)
   const [query, setQuery] = useRouteSearch()
   const [queryParam] = useRouteParam('q')
@@ -125,7 +130,7 @@ export default function TargetsPanel({
     const { errors, port } = validate(draft)
     setFormErrors(errors)
     if (errors.length > 0) {
-      summary.request()
+      summaryRequest()
       feedback.error(`Target: ${errors.join('; ')}`)
       return
     }
@@ -148,7 +153,7 @@ export default function TargetsPanel({
       } else if (await loadNamedTarget()) {
         const message = `a target named ${draft.name.trim()} already exists — choose another name or edit that target`
         setFormErrors([message])
-        summary.request()
+        summaryRequest()
         feedback.error(`Target was not added: ${message}`)
         return
       }
@@ -167,7 +172,7 @@ export default function TargetsPanel({
       onAuthError(err)
       const message = err instanceof Error ? err.message : String(err)
       setFormErrors([message])
-      summary.request()
+      summaryRequest()
       feedback.error(`Target was not saved: ${message}`)
     } finally {
       setSaving(false)
@@ -284,7 +289,7 @@ export default function TargetsPanel({
           value={draft?.[key] ?? ''}
           placeholder={placeholder}
           disabled={saving || locked}
-          aria-describedby={summary.describedby}
+          aria-describedby={summaryDescribedby}
           onChange={(e) => {
             setDraft((d) => ({ ...(d ?? blankDraft()), [key]: e.target.value }))
           }}
@@ -343,7 +348,7 @@ export default function TargetsPanel({
               )}
             </div>
             {formErrors.length > 0 && (
-              <ul className="error threshold-errors" id={summary.id} ref={summary.ref} tabIndex={-1}>
+              <ul className="error threshold-errors" id={summaryId} ref={summaryRef} tabIndex={-1}>
                 {formErrors.map((e) => (
                   <li key={e}>{e}</li>
                 ))}

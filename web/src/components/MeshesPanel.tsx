@@ -37,7 +37,12 @@ export default function MeshesPanel({
   // Row actions (delete, add/remove member) share actionError's render slot
   // but must not describe the create form's fields.
   const [errorScope, setErrorScope] = useState<'create' | 'row'>('create')
-  const summary = useErrorSummary(Boolean(actionError) && errorScope === 'create')
+  const {
+    describedby: summaryDescribedby,
+    id: summaryId,
+    ref: summaryRef,
+    request: summaryRequest,
+  } = useErrorSummary(Boolean(actionError) && errorScope === 'create')
   const [newName, setNewName] = useState('')
   const [newNetworkDraft, setNewNetwork] = useState<string | null>(null)
   const newNetwork = newNetworkDraft ?? initialPlane(plane)
@@ -132,7 +137,7 @@ export default function MeshesPanel({
                     value={newName}
                     placeholder="e.g. core"
                     disabled={busy}
-                    aria-describedby={summary.describedby}
+                    aria-describedby={summaryDescribedby}
                     onChange={(e) => setNewName(e.target.value)}
                   />
                 </span>
@@ -140,7 +145,7 @@ export default function MeshesPanel({
               <PlaneField choice={plane} value={newNetwork} onChange={setNewNetwork} disabled={busy} />
             </div>
             {actionError && errorScope === 'create' && (
-              <ul className="error threshold-errors" id={summary.id} ref={summary.ref} tabIndex={-1}>
+              <ul className="error threshold-errors" id={summaryId} ref={summaryRef} tabIndex={-1}>
                 <li>{actionError}</li>
               </ul>
             )}
@@ -175,7 +180,7 @@ export default function MeshesPanel({
                       'create',
                     ).then((saved) => {
                       if (saved) closeCreate()
-                      else summary.request()
+                      else summaryRequest()
                     })
                   }
                 >

@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import uPlot from 'uplot'
 import { panChartRange, reconcileChartRange, xExtent, zoomChartRange, type ChartRange } from '../chartRange'
-import { summarizeSeries } from '../chartkit'
+import { summarizeSeries, thresholdLinesPlugin, type ThresholdLevels } from '../chartkit'
 import { getTZMode, useTimezone } from '../timezone'
+
+const NO_THRESHOLDS: ThresholdLevels = { warn: null, crit: null, warnColor: '', critColor: '' }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
@@ -57,12 +59,14 @@ export default function Chart({
   options,
   data,
   contextKey,
+  thresholds = NO_THRESHOLDS,
   label = 'Chart',
   empty,
 }: {
   options: Omit<uPlot.Options, 'width'>
   data: uPlot.AlignedData
   contextKey: string
+  thresholds?: ThresholdLevels
   label?: string
   empty?: ReactNode
 }) {
@@ -70,27 +74,45 @@ export default function Chart({
   const plotRef = useRef<uPlot | null>(null)
   const dataRef = useRef(data)
   const selectedRef = useRef<ChartRange | null>(null)
-  const contextRef = useRef<string | null>(null)
   const dragRef = useRef(false)
-  const [mode, setMode] = useState<'live' | 'zoomed'>('live')
-  const [selectedRange, setSelectedRange] = useState<ChartRange | null>(null)
+  const [selection, setSelection] = useState<{ contextKey: string; range: ChartRange | null }>({
+    contextKey,
+    range: null,
+  })
   const [announcement, setAnnouncement] = useState('')
   const { mode: tzMode } = useTimezone()
-  dataRef.current = data
+  const reconciliation = reconcileChartRange(selection.range, xExtent(data[0]), selection.contextKey !== contextKey)
+  const selectedRange = reconciliation.range
+  const mode = reconciliation.mode
+  if (selection.contextKey !== contextKey || selection.range !== selectedRange) {
+    setSelection({ contextKey, range: selectedRange })
+    setAnnouncement(reconciliation.reason === 'expired' ? 'Selected range expired; returned to live data.' : '')
+  }
+  const thresholdRef = useRef(thresholds)
+  const { warn, crit, warnColor, critColor } = thresholds
+  useLayoutEffect(() => {
+    dataRef.current = data
+    selectedRef.current = selectedRange
+  }, [data, selectedRange])
+  useLayoutEffect(() => {
+    thresholdRef.current = { warn, crit, warnColor, critColor }
+    plotRef.current?.redraw()
+  }, [warn, crit, warnColor, critColor])
 
   useEffect(() => {
     const host = hostRef.current
     if (!host) return
-    const contextChanged = contextRef.current !== contextKey
-    contextRef.current = contextKey
-    const reconciliation = reconcileChartRange(selectedRef.current, xExtent(dataRef.current[0]), contextChanged)
-    selectedRef.current = reconciliation.range
-    setMode(reconciliation.mode)
-    setSelectedRange(reconciliation.range)
-    if (contextChanged) setAnnouncement('')
-    const plot = new uPlot({ ...options, width: Math.max(host.clientWidth, 200) }, dataRef.current, host)
+    const plot = new uPlot(
+      {
+        ...options,
+        plugins: [...(options.plugins ?? []), thresholdLinesPlugin(() => thresholdRef.current)],
+        width: Math.max(host.clientWidth, 200),
+      },
+      dataRef.current,
+      host,
+    )
     plotRef.current = plot
-    if (reconciliation.range) plot.setScale('x', reconciliation.range)
+    if (selectedRef.current) plot.setScale('x', selectedRef.current)
     const ro = new ResizeObserver(() => {
       plot.setSize({ width: Math.max(host.clientWidth, 200), height: options.height })
     })
@@ -110,17 +132,14 @@ export default function Chart({
         const epsilon = Math.max((extent.max - extent.min) * 0.000_001, Number.EPSILON)
         if (min <= extent.min + epsilon && max >= extent.max - epsilon) return
         selectedRef.current = { min, max }
-        setSelectedRange({ min, max })
-        setMode('zoomed')
+        setSelection({ contextKey, range: { min, max } })
         setAnnouncement('')
       })
     }
     const reset = (announce: string) => {
       selectedRef.current = null
-      setSelectedRange(null)
-      setMode('live')
+      setSelection({ contextKey, range: null })
       setAnnouncement(announce)
-      plot.setData(dataRef.current)
     }
     const onDoubleClick = () => {
       if (!selectedRef.current) return
@@ -131,9 +150,7 @@ export default function Chart({
     // data at key time, so polling never invalidates a binding.
     const applyRange = (range: ChartRange) => {
       selectedRef.current = range
-      setSelectedRange(range)
-      setMode('zoomed')
-      plot.setScale('x', range)
+      setSelection({ contextKey, range })
       setAnnouncement(`Zoomed to ${clockRange(range, getTZMode() === 'utc')}.`)
     }
     const onKeyDown = (event: KeyboardEvent) => {
@@ -207,16 +224,11 @@ export default function Chart({
   useEffect(() => {
     const plot = plotRef.current
     if (!plot) return
-    const reconciliation = reconcileChartRange(selectedRef.current, xExtent(data[0]))
-    selectedRef.current = reconciliation.range
-    setSelectedRange(reconciliation.range)
+    // setData also resets the default scale when selection is cleared without
+    // a new poll (Return live, Escape, 0, or double-click).
     plot.setData(data)
-    if (reconciliation.range) plot.setScale('x', reconciliation.range)
-    if (reconciliation.reason === 'expired') {
-      setMode('live')
-      setAnnouncement('Selected range expired; returned to live data.')
-    }
-  }, [data])
+    if (selectedRange) plot.setScale('x', selectedRange)
+  }, [data, selectedRange])
 
   useEffect(() => {
     if (!announcement) return
@@ -226,10 +238,8 @@ export default function Chart({
 
   const returnLive = () => {
     selectedRef.current = null
-    setSelectedRange(null)
-    setMode('live')
+    setSelection({ contextKey, range: null })
     setAnnouncement('Returned to live data.')
-    plotRef.current?.setData(dataRef.current)
   }
 
   // Text alternative for the canvas: a per-series digest of the visible

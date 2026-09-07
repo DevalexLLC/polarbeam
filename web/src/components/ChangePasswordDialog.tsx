@@ -66,7 +66,7 @@ export default function ChangePasswordDialog({
   // Each failure names the field it belongs to (null = the whole form) so
   // only that field is marked invalid.
   const [error, setError] = useState<{ field: 'current' | 'next' | 'confirm' | null; text: string } | null>(null)
-  const summary = useErrorSummary(Boolean(error))
+  const { request: summaryRequest, id: summaryId, ref: summaryRef } = useErrorSummary(Boolean(error))
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState(false)
 
@@ -81,12 +81,12 @@ export default function ChangePasswordDialog({
     // server's rune count (.length counts UTF-16 units).
     if ([...next].length < MIN_PASSWORD_LEN) {
       setError({ field: 'next', text: `New password must be at least ${MIN_PASSWORD_LEN} characters.` })
-      summary.request()
+      summaryRequest()
       return
     }
     if (next !== confirm) {
       setError({ field: 'confirm', text: 'New passwords do not match.' })
-      summary.request()
+      summaryRequest()
       return
     }
     setBusy(true)
@@ -100,10 +100,10 @@ export default function ChangePasswordDialog({
         onAuthError(err)
       } else if (err instanceof ApiError && err.status === 429) {
         setError({ field: null, text: 'Too many attempts — wait a minute and try again.' })
-        summary.request()
+        summaryRequest()
       } else {
         setError({ field: null, text: err instanceof Error ? err.message : String(err) })
-        summary.request()
+        summaryRequest()
       }
     } finally {
       setBusy(false)
@@ -146,7 +146,7 @@ export default function ChangePasswordDialog({
               autoComplete="current-password"
               disabled={busy}
               invalid={error?.field === 'current'}
-              describedby={error && (error.field === 'current' || error.field === null) ? summary.id : undefined}
+              describedby={error && (error.field === 'current' || error.field === null) ? summaryId : undefined}
               onChange={setCurrent}
             />
             <PasswordField
@@ -155,7 +155,7 @@ export default function ChangePasswordDialog({
               autoComplete="new-password"
               disabled={busy}
               invalid={error?.field === 'next'}
-              describedby={error && (error.field === 'next' || error.field === null) ? summary.id : undefined}
+              describedby={error && (error.field === 'next' || error.field === null) ? summaryId : undefined}
               onChange={setNext}
             />
             <PasswordField
@@ -164,12 +164,12 @@ export default function ChangePasswordDialog({
               autoComplete="new-password"
               disabled={busy}
               invalid={error?.field === 'confirm'}
-              describedby={error && (error.field === 'confirm' || error.field === null) ? summary.id : undefined}
+              describedby={error && (error.field === 'confirm' || error.field === null) ? summaryId : undefined}
               onChange={setConfirm}
             />
           </div>
           {error && (
-            <ul className="error threshold-errors" id={summary.id} ref={summary.ref} tabIndex={-1}>
+            <ul className="error threshold-errors" id={summaryId} ref={summaryRef} tabIndex={-1}>
               <li>{error.text}</li>
             </ul>
           )}

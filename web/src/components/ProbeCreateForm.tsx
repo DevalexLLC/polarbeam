@@ -40,7 +40,12 @@ export default function ProbeCreateForm({
 }) {
   const [draft, setDraft] = useState<ProbeDraft | null>(null)
   const [formErrors, setFormErrors] = useState<string[]>([])
-  const createSummary = useErrorSummary(formErrors.length > 0)
+  const {
+    request: createSummaryRequest,
+    describedby: createSummaryDescribedby,
+    id: createSummaryId,
+    ref: createSummaryRef,
+  } = useErrorSummary(formErrors.length > 0)
   const feedback = useSettingsMutation()
   const blankProbe = newDraft(initialPlane(plane))
   const createGuard = useConcurrentSettingsDraft({
@@ -63,7 +68,7 @@ export default function ProbeCreateForm({
     setFormErrors(errors)
     if (!body) {
       feedback.error(`New probe: ${errors.join('; ')}`)
-      createSummary.request()
+      createSummaryRequest()
       return
     }
     onBusyChange(true)
@@ -95,7 +100,7 @@ export default function ProbeCreateForm({
       onAuthError(err)
       const message = err instanceof Error ? err.message : String(err)
       setFormErrors([message])
-      createSummary.request()
+      createSummaryRequest()
       feedback.error(`Probe was not added: ${message}`)
     } finally {
       onBusyChange(false)
@@ -128,7 +133,7 @@ export default function ProbeCreateForm({
                 className="control-group config-mode"
                 role="group"
                 aria-label="Probe assignment"
-                aria-describedby={createSummary.describedby}
+                aria-describedby={createSummaryDescribedby}
               >
                 <button
                   type="button"
@@ -164,7 +169,7 @@ export default function ProbeCreateForm({
                 <select
                   value={createDraft.type}
                   disabled={busy}
-                  aria-describedby={createSummary.describedby}
+                  aria-describedby={createSummaryDescribedby}
                   onChange={(e) => setCreateDraft((d) => ({ ...d, type: e.target.value, params: {} }))}
                 >
                   {registry.types
@@ -184,7 +189,7 @@ export default function ProbeCreateForm({
                   <select
                     value={createDraft.mesh}
                     disabled={busy}
-                    aria-describedby={createSummary.describedby}
+                    aria-describedby={createSummaryDescribedby}
                     onChange={(e) => setCreateDraft((d) => ({ ...d, mesh: e.target.value }))}
                   >
                     <option value="">pick…</option>
@@ -204,7 +209,7 @@ export default function ProbeCreateForm({
                     <select
                       value={createDraft.site}
                       disabled={busy}
-                      aria-describedby={createSummary.describedby}
+                      aria-describedby={createSummaryDescribedby}
                       onChange={(e) => setCreateDraft((d) => ({ ...d, site: e.target.value }))}
                     >
                       <option value="">pick…</option>
@@ -222,7 +227,7 @@ export default function ProbeCreateForm({
                     <select
                       value={createDraft.target}
                       disabled={busy}
-                      aria-describedby={createSummary.describedby}
+                      aria-describedby={createSummaryDescribedby}
                       onChange={(e) => setCreateDraft((d) => ({ ...d, target: e.target.value }))}
                     >
                       <option value="">pick…</option>
@@ -247,12 +252,12 @@ export default function ProbeCreateForm({
           <ProbeDraftFields
             draft={createDraft}
             onChange={setCreateDraft}
-            describedby={createSummary.describedby}
+            describedby={createSummaryDescribedby}
             busy={busy}
             registry={registry}
           />
           {formErrors.length > 0 && (
-            <ul className="error threshold-errors" id={createSummary.id} ref={createSummary.ref} tabIndex={-1}>
+            <ul className="error threshold-errors" id={createSummaryId} ref={createSummaryRef} tabIndex={-1}>
               {formErrors.map((e) => (
                 <li key={e}>{e}</li>
               ))}

@@ -2,7 +2,7 @@
 // Views and panels pass a URL (or a fetcher for multi-request loads) and get
 // the shared 30-second cadence, 401 -> onAuthError, per-view failure logging,
 // and stale-response suppression without hand-rolling the effect.
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { apiGet } from './api'
 import { POLL_MS, startPolledResource, type PolledResourceController } from './polledResource'
 
@@ -53,9 +53,11 @@ export function usePolledResource<T>(
   // when the fetch identity (key/enabled/pollMs) changes, never because a
   // caller passed an inline fetcher or callback.
   const sourceRef = useRef(source)
-  sourceRef.current = source
   const optionsRef = useRef(options)
-  optionsRef.current = options
+  useLayoutEffect(() => {
+    sourceRef.current = source
+    optionsRef.current = options
+  }, [source, options])
   const controllerRef = useRef<PolledResourceController | null>(null)
 
   useEffect(() => {

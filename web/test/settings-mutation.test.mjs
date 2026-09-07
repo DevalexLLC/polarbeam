@@ -65,7 +65,10 @@ test('settings mutation boundary guards navigation and standardizes feedback', a
   assert.match(source, /Your changes were not saved/)
   assert.match(source, /const canonical = canonicalizeRouteHash\(destination\.hash\)\.hash/)
   assert.match(source, /if \(!dialog\.open\) dialog\.showModal\(\)/)
-  assert.match(source, /routeChangeDiscardsSettingsDraft/)
+  assert.match(source, /routeChangeDiscardsSettingsDraft\(fromHash, canonical\)/)
+  // Browser events arrive after location.hash changed: compare with the
+  // last accepted route or the draft guard sees destination === origin.
+  assert.match(source, /blockRoute\(next, 'push', acceptedHash\.current\)/)
   assert.match(source, /pendingRouteRef\.current \|\| confirmationRef\.current/)
   assert.match(source, /if \(!blockRoute\(target\.hash, 'push'\)\) event\.preventDefault\(\)/)
 })
@@ -189,7 +192,10 @@ test('create collisions preserve target input and destructive labels use verbs',
 test('session changes clear notifications and banner layout offsets the sticky sidebar', async () => {
   const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8')
   const styles = readStyles()
-  assert.match(app, /useEffect\(\(\) => clearNotifications\(\), \[clearNotifications, user\]\)/)
+  assert.match(
+    app,
+    /if \(notifiedSession\.current === user\) return[\s\S]*notifiedSession\.current = user[\s\S]*clearNotifications\(\)[\s\S]*\[clearNotifications, user\]/,
+  )
   assert.match(app, /guardAction\(\(\) => void logout\(\)\)/)
   assert.match(styles, /\.banner-frame \.settings-sidebar[\s\S]*top: calc\(5rem \+ var\(--banner-h\)\)/)
 })

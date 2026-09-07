@@ -1,3 +1,4 @@
+import { useNow } from '../useNow'
 import { useEffect, useRef } from 'react'
 import { apiGet } from '../api'
 import DataTable, { type DataTableColumn } from '../components/DataTable'
@@ -139,6 +140,7 @@ function ProbeDetail({
   onSelectProbe: (probe: string) => void
   surface: 'desktop' | 'mobile'
 }) {
+  const nowS = useNow() / 1000
   if (!detail && error !== null)
     return (
       <div className="inline-alert" role="status">
@@ -159,7 +161,6 @@ function ProbeDetail({
       </div>
     )
   const bucketS = detail.bucket_s || 1800
-  const nowS = Date.now() / 1000
   // Sorting a freshly-spread copy, same as Outages' group sort (toSorted
   // needs a newer TS lib target than the build uses).
   // oxlint-disable-next-line unicorn/no-array-sort
@@ -341,7 +342,7 @@ export default function Agents({
     }
     if (!detail) return
     if (detail.probes.some((probe) => probe.probe_id === selectedProbe)) {
-      const key = `${expanded ?? ''}\u0000${selectedProbe}`
+      const key = `${page}\u0000${expanded ?? ''}\u0000${selectedProbe}`
       if (scrolledProbe.current !== key) {
         const surface = window.matchMedia('(max-width: 760px)').matches ? 'mobile' : 'desktop'
         const row = document.getElementById(`agent-probe-${selectedProbe}-${surface}`)
@@ -363,12 +364,13 @@ export default function Agents({
       scrolledAgent.current = null
       return
     }
-    if (!data || scrolledAgent.current === expanded) return
+    const key = `${page}\u0000${expanded}`
+    if (!data || scrolledAgent.current === key) return
     const surface = window.matchMedia('(max-width: 760px)').matches ? 'mobile' : 'desktop'
     const row = document.getElementById(`agent-${expanded}-${surface}`)
     if (!row) return
     row.scrollIntoView({ block: 'nearest' })
-    scrolledAgent.current = expanded
+    scrolledAgent.current = key
   }, [expanded, data, page])
 
   const fleet = data?.agents ?? []

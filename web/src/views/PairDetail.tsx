@@ -1,7 +1,6 @@
-import { useMemo, useRef } from 'react'
-import uPlot from 'uplot'
+import { useMemo } from 'react'
 import { apiGet } from '../api'
-import Chart from '../components/Chart'
+import MetricChart from '../components/MetricChart'
 import PageError from '../components/PageError'
 import PathGraph, { isWidePath } from '../components/PathGraph'
 import { useNetworkFilter } from '../networkFilter'
@@ -20,16 +19,7 @@ import {
   latencySourceName,
 } from '../format'
 import { buildThresholdResolver } from '../severity'
-import {
-  CHART_COLORS as COLORS,
-  densify,
-  hasAnyValue,
-  latestLegendPlugin,
-  lossScaleCeiling,
-  statusLabel,
-  thresholdLinesPlugin,
-  toChartData,
-} from '../chartkit'
+import { CHART_COLORS as COLORS, densify, hasAnyValue, lossScaleCeiling, statusLabel, toChartData } from '../chartkit'
 import type { Metric, ThresholdLevels } from '../chartkit'
 import type {
   CurrentPath,
@@ -248,9 +238,8 @@ export default function PairDetail({
   // same as the matrix — rather than silently falling back to the fold.
   const { network: net } = useNetworkFilter()
   const { resolved } = useTheme()
-  // Also covers the fmtTime tooltips below; mode reaches the charts through
-  // mkOptions so axis ticks and the live-legend readout follow the toggle.
-  const { mode } = useTimezone()
+  // Timezone changes also refresh the timestamp tooltips in this view.
+  useTimezone()
   // Settings ride the same load as the series so a threshold change and
   // the chart redraw land in one commit. The hook's generation counter
   // drops superseded responses: switching a slow 365d fetch to 24h must not
@@ -294,101 +283,21 @@ export default function PairDetail({
   const plane = net !== '' ? net : pair?.networks.length === 1 ? pair.networks[0] : ''
   const effective = useMemo(() => buildThresholdResolver(settings)(a, b, plane), [settings, a, b, plane])
 
-  // Kept current every render; the chart plugin reads it at draw time.
-  const thresholdLevels = useRef<ThresholdLevels>({ warn: null, crit: null, warnColor: '', critColor: '' })
-  {
-    const c = COLORS[resolved]
-    thresholdLevels.current =
-      metric === 'loss'
-        ? {
-            warn: effective && effective.loss_warn_pct > 0 ? effective.loss_warn_pct : null,
-            crit: effective ? effective.loss_crit_pct : null,
-            warnColor: c.warn,
-            critColor: c.crit,
-          }
-        : {
-            warn: effective ? effective.latency_warn_us / 1000 : null,
-            crit: effective ? effective.latency_crit_us / 1000 : null,
-            warnColor: c.warn,
-            critColor: c.crit,
-          }
-  }
-
-  const mkOptions = useMemo(() => {
-    // Options are cached by everything they depend on, so a poll that changes
-    // only the data hands Chart the SAME object and the uPlot instance
-    // survives. A rebuilt object destroys and recreates the canvas on every
-    // refresh, which is what this avoids. The key space is tiny and bounded:
-    // one pair and window, two directions, a handful of axis labels, five
-    // loss ceilings.
-    const cache = new Map<string, Omit<uPlot.Options, 'width'>>()
-    return (
-      direction: 'aToB' | 'bToA',
-      axisLabel: string,
-      withPctl: boolean,
-      lossCeiling: number,
-    ): Omit<uPlot.Options, 'width'> => {
-      // lossCeiling only reaches the options on the loss metric; keying on it
-      // while showing latency would miss the cache — and so destroy both
-      // charts — whenever loss crossed a ceiling band.
-      // The pair and window are keyed too, so a different dataset always gets
-      // a fresh plot rather than inheriting one built for the old series.
-      // net is keyed so switching planes never reuses a chart built for a
-      // different dataset (same rationale as the pair and window keys).
-      const key = [a, b, win, net, direction, axisLabel, withPctl, metric === 'loss' ? lossCeiling : '', mode].join('|')
-      const cached = cache.get(key)
-      if (cached) return cached
-      const c = COLORS[resolved]
-      const stroke = c[direction]
-      const axisStyle = {
-        stroke: c.axis,
-        grid: { stroke: c.grid, width: 1 },
-        ticks: { stroke: c.grid, width: 1 },
-      }
-      // Live-legend readouts: fixed decimals so values don't jitter in width.
-      const value =
-        metric === 'loss'
-          ? (_u: uPlot, v: number) => (v == null ? '—' : `${v.toFixed(1)}%`)
-          : (_u: uPlot, v: number) => (v == null ? '—' : fmtLatency(v * 1000))
-      const chartSeries: uPlot.Series[] =
-        metric === 'loss'
-          ? [{}, { label: 'loss %', stroke, width: 2, spanGaps: false, value }]
-          : [
-              {},
-              { label: 'avg', stroke, width: 2, spanGaps: false, value },
-              { label: 'min', stroke, width: 1, alpha: 0.4, spanGaps: false, value },
-              { label: 'max', stroke, width: 1, alpha: 0.4, spanGaps: false, value },
-            ]
-      if (metric === 'latency' && withPctl) {
-        // Aggregate windows only; must stay in lockstep with toChartData.
-        chartSeries.push(
-          { label: 'p50', stroke, width: 1.5, alpha: 0.7, spanGaps: false, value },
-          { label: 'p95', stroke, width: 1, alpha: 0.55, dash: [6, 4], spanGaps: false, value },
-          { label: 'p99', stroke, width: 1, alpha: 0.35, dash: [2, 4], spanGaps: false, value },
-        )
-      }
-      const options: Omit<uPlot.Options, 'width'> = {
-        height: 230,
-        series: chartSeries,
-        scales: metric === 'loss' ? { y: { range: [0, lossCeiling] } } : {},
-        axes: [{ ...axisStyle }, { ...axisStyle, label: axisLabel, size: 64 }],
-        cursor: { drag: { x: true, y: false } },
-        legend: { live: true },
-        // thresholdLevels is a stable ref — safe inside the cached options.
-        plugins: [latestLegendPlugin(), thresholdLinesPlugin(() => thresholdLevels.current)],
-        // UTC mode pins axis ticks and the live-legend x readout to UTC
-        // wall clock; local mode keeps uPlot's default (browser zone).
-        ...(mode === 'utc' ? { tzDate: (ts: number) => uPlot.tzDate(new Date(ts * 1e3), 'Etc/UTC') } : {}),
-      }
-      cache.set(key, options)
-      return options
-    }
-    // Dropping the cache entirely on a metric change (the series shape
-    // differs), a theme flip, or a timezone flip is what makes every
-    // identity new, so Chart recreates uPlot with the right palette and
-    // axis zone and charts update live on toggle. Nothing in the key
-    // changes on a poll, so charts survive refreshes.
-  }, [metric, resolved, mode, win, net, a, b])
+  const c = COLORS[resolved]
+  const thresholdLevels: ThresholdLevels =
+    metric === 'loss'
+      ? {
+          warn: effective && effective.loss_warn_pct > 0 ? effective.loss_warn_pct : null,
+          crit: effective ? effective.loss_crit_pct : null,
+          warnColor: c.warn,
+          critColor: c.crit,
+        }
+      : {
+          warn: effective ? effective.latency_warn_us / 1000 : null,
+          crit: effective ? effective.latency_crit_us / 1000 : null,
+          warnColor: c.warn,
+          critColor: c.crit,
+        }
 
   if (error && !series)
     return (
@@ -528,8 +437,13 @@ export default function PairDetail({
               <span className={'swatch series-' + dir} /> {title}
               {metric === 'latency' && <span className="metric-source">{latencySourceName(directionSource)}</span>}
             </h2>
-            <Chart
-              options={mkOptions(chart, axisLabel, withPctl, lossCeiling)}
+            <MetricChart
+              direction={chart}
+              metric={metric}
+              axisLabel={axisLabel}
+              withPctl={withPctl}
+              lossCeiling={lossCeiling}
+              thresholds={thresholdLevels}
               data={chartData}
               label={`${title} ${metric} chart`}
               contextKey={[a, b, net, win, metric, chart].join('\u0000')}

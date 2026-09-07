@@ -69,7 +69,12 @@ export default function EnrollmentPanel({
   // Token deletion reuses actionError's render slot but must not describe
   // the issue-token form's fields.
   const [errorScope, setErrorScope] = useState<'create' | 'row'>('create')
-  const summary = useErrorSummary(Boolean(actionError) && errorScope === 'create')
+  const {
+    request: summaryRequest,
+    describedby: summaryDescribedby,
+    id: summaryId,
+    ref: summaryRef,
+  } = useErrorSummary(Boolean(actionError) && errorScope === 'create')
   const [site, setSite] = useState('')
   const [networkDraft, setNetwork] = useState<string | null>(null)
   const network = networkDraft ?? initialPlane(plane)
@@ -145,7 +150,7 @@ export default function EnrollmentPanel({
       const message = err instanceof Error ? err.message : String(err)
       setErrorScope('create')
       setActionError(message)
-      summary.request()
+      summaryRequest()
       feedback.error(`Enrollment token was not issued: ${message}`)
     } finally {
       setCreating(false)
@@ -237,7 +242,7 @@ export default function EnrollmentPanel({
                     <select
                       value={site}
                       disabled={creating}
-                      aria-describedby={summary.describedby}
+                      aria-describedby={summaryDescribedby}
                       onChange={(e) => setSite(e.target.value)}
                     >
                       <option value="">choose a site…</option>
@@ -256,7 +261,7 @@ export default function EnrollmentPanel({
                     <select
                       value={ttlMS}
                       disabled={creating}
-                      aria-describedby={summary.describedby}
+                      aria-describedby={summaryDescribedby}
                       onChange={(e) => setTtlMS(Number(e.target.value))}
                     >
                       {TTL_OPTIONS.map((o) => (
@@ -270,7 +275,7 @@ export default function EnrollmentPanel({
               </div>
             )}
             {actionError && (
-              <ul className="error threshold-errors" id={summary.id} ref={summary.ref} tabIndex={-1}>
+              <ul className="error threshold-errors" id={summaryId} ref={summaryRef} tabIndex={-1}>
                 <li>{actionError}</li>
               </ul>
             )}

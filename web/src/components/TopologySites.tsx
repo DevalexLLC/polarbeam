@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { fmtLatency } from '../format'
 import { inheritRouteNetwork, siteDetailHref } from '../routeState'
 import { SEVERITY_LABEL } from '../severity'
@@ -8,9 +8,7 @@ export default function TopologySites({ topology }: { topology: SiteTopology[] }
   const ranked = useMemo(() => rankSiteTopology(topology), [topology])
   const [selected, setSelected] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (selected && !topology.some((entry) => entry.site.name === selected)) setSelected(null)
-  }, [selected, topology])
+  if (selected && !topology.some((entry) => entry.site.name === selected)) setSelected(null)
 
   if (ranked.length === 0) return <p className="muted">No sites are enrolled.</p>
 
