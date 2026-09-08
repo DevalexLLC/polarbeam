@@ -10,6 +10,10 @@ Dashboard source is in `web/src/`, with its committed build in `web/dist/`.
 Deployment files live in `deploy/` (including the annotated
 `deploy/agent/agent.example.yaml`), and design documentation in `docs/`. Go dependencies are committed in `vendor/`.
 
+`docs/quickstart.md` is the minimal connected two-site walkthrough; keep its
+commands aligned with deployment defaults and leave deeper guidance in
+`docs/install.md`.
+
 ## Build, Test, and Development Commands
 
 - `make build`: build static server and agent binaries into `bin/` offline.
