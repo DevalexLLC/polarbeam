@@ -19,6 +19,12 @@ historical latency (min/avg/max/percentiles), packet loss, jitter, TCP connect
 and TLS handshake times, recent outages, and path changes — **in both
 directions for every site pair** — over 7/30/90/365-day windows.
 
+## Quick start
+
+Follow the [two-site quick start](docs/quickstart.md) to pull the images,
+start PolarBEAM, and see measurements in both directions. It uses IP addresses
+and a self-signed dashboard certificate, with no DNS setup required.
+
 ## Design highlights
 
 - **Directional by construction.** Site A → Site B and Site B → Site A are
