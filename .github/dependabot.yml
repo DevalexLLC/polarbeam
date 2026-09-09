@@ -49,6 +49,10 @@
 #   and sat on 36 High findings for months (issue #174). Candidates keep
 #   the tag suffix (`-alpine-slim`), only the version part moves.
 #
+#   The distroless digest is pinned in both server.Dockerfile and
+#   agent.Dockerfile (same base); Dependabot sends one PR per file, so
+#   finish a digest bump by moving both.
+#
 #   Ignores, both deliberate:
 #   - golang: the Go build stages must match go.mod's exact toolchain
 #     version (CLAUDE.md); that bump is done by hand together with go.mod

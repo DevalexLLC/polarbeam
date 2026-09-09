@@ -64,8 +64,8 @@ lint: vet fmt-check
 	fi
 
 # Production images for the local architecture (CI does multi-arch via
-# buildx). The agent MUST name --target release: the Dockerfile's default
-# target is the dev image.
+# buildx). Both Dockerfiles default to release (their last stage) but also
+# hold a compose-dev `dev` stage, so the target is named explicitly.
 images:
 	docker build -f deploy/docker/server.Dockerfile --target release \
 		--build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) \
