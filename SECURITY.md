@@ -99,8 +99,9 @@ with a pointer here, so please read this list first.
   it sounds: `offline-build` proves the Go binaries compile and test with
   `GOPROXY=off` against vendored dependencies. It is not a claim that
   every build step is offline. Building the container images does need
-  the network — base images, `apk add libcap` — which is why air-gapped
-  sites consume the pre-built release bundle rather than rebuilding. `docs/airgap-build.md` lists
+  the network — the base-image pulls; no published image installs a
+  package — which is why air-gapped sites consume the pre-built release
+  bundle rather than rebuilding. `docs/airgap-build.md` lists
   exactly which steps touch the network. Supply-chain concerns in that
   packaging path are in scope; please report them.
 
