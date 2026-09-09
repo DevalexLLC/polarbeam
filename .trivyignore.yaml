@@ -1,0 +1,24 @@
+# Suppressions for CI's advisory image-scan job (aquasecurity/trivy-action,
+# passed as `trivyignores:`). Policy, enforced by review:
+#
+#   - Only findings that provably cannot apply to the shipped images belong
+#     here. Anything fixable or reachable is tracked, never suppressed.
+#   - Every entry carries a `statement` saying exactly why it cannot apply.
+#   - Every entry has an offline guard that fails CI the moment the
+#     justification stops holding (`make trivyignore-check`, run by the
+#     offline-build job and by `make lint`).
+#
+# GitHub closes the matching code-scanning alerts automatically once the
+# uploaded SARIF stops reporting a suppressed ID.
+vulnerabilities:
+  - id: GO-2026-5932
+    statement: >-
+      The advisory covers only golang.org/x/crypto/openpgp and its
+      subpackages (unmaintained, unsafe by design; all versions affected, no
+      fixed version, so no x/crypto bump clears it). Trivy matches Go
+      binaries at module granularity from their embedded build info, but
+      PolarBEAM links only argon2, blake2b, chacha20, chacha20poly1305 and
+      cryptobyte from x/crypto: openpgp is not vendored and is absent from
+      both binaries' build graphs. `make trivyignore-check` fails CI if
+      openpgp ever enters the CGO_ENABLED=0 linux/amd64 or linux/arm64
+      dependency graph, at which point this entry must be removed.

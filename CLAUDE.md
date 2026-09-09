@@ -88,6 +88,11 @@ Full design + milestone plan: `docs/architecture.md`.
   cache and include OS/Go findings; failed scans are unavailable, not clean.
   Trivy and DB downloads are online CI only, outside the air-gap guarantee
   proved by `offline-build`. Never add them to Make targets or bundles.
+  `.trivyignore.yaml` suppresses only findings that provably cannot apply
+  (currently GO-2026-5932: the unlinked `x/crypto/openpgp` package); every
+  entry needs a `statement` and an offline guard in `make trivyignore-check`
+  (run by `offline-build` and `make lint`) that fails the moment the
+  justification stops holding.
 - Regenerate protos: `make proto` — buf + protoc-gen-go{,-grpc} are pinned
   in go.mod's `tool` block and run from `vendor/`, no host tooling — and
   commit the diff under `internal/pb/` (the `offline-build` CI job
