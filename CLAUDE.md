@@ -22,12 +22,14 @@ Full design + milestone plan: `docs/architecture.md`.
   The minimum Go version includes the security patch level in `go.mod`; keep
   both Go build stages and `docs/airgap-build.md` pinned to that exact version.
 - **Control plane is containers-only** (proxy + server + TimescaleDB via
-  compose). The published server image is static distroless
-  (`deploy/docker/server.Dockerfile`, target `release`, the default): no
-  shell, no package manager. Anything that needs a shell around the server
-  uses the alpine `dev` target (compose-dev overlay only, never published)
-  or a Go subcommand (`tls install`, `ca retire`) — never `--entrypoint sh`
-  on the release image, in docs or scripts. The nginx proxy does SNI
+  compose). The published server and agent images are static distroless
+  (`deploy/docker/{server,agent}.Dockerfile`, target `release`, the default
+  in both): no shell, no package manager. Anything that needs a shell
+  around either binary uses its alpine `dev` target (compose-dev overlay
+  only, never published) or a Go subcommand (server: `tls install`,
+  `ca retire`; agent: `identity retire`) — never `--entrypoint sh` on a
+  release image, in docs or scripts. Both Dockerfiles pin the same
+  distroless digest; bump them together. The nginx proxy does SNI
   passthrough on 443 — it never terminates TLS; agent mTLS is verified
   end-to-end in the Go server. It prepends a PROXY protocol v1 header on
   both routes; the server requires the header when `listen.proxy_protocol`
@@ -35,9 +37,12 @@ Full design + milestone plan: `docs/architecture.md`.
   enrollment see real client addresses.
 - **The agent is a single static Go binary** (`CGO_ENABLED=0`), no runtime
   deps, shipped only as a container image (`deploy/docker/agent.Dockerfile`,
-  `--target release`; the default target is the dev overlay image). The
-  release entrypoint runs `selfcheck` before `run` as the fail-loud
-  preflight. No RPM/systemd packaging exists.
+  `--target release`). `run` performs `selfcheck` itself as the fail-loud
+  preflight (no entrypoint wrapper, no way to skip it). The binary carries
+  the `cap_net_raw+ep` file capability, written by `tools/filecap` in the
+  Go build stage (no libcap/apk) and carried through `COPY --from`; ci.yml
+  runs the built image to prove it survived. No RPM/systemd packaging
+  exists.
 - **Fail loud.** Unknown YAML keys are fatal (`internal/strictyaml`),
   preflight names every problem, spool overflow is reported to the server,
   unsupported probe types report `UNSUPPORTED` instead of being skipped.

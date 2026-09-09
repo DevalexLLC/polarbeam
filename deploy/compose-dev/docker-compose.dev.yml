@@ -70,8 +70,8 @@ services:
     build: &agent-build
       context: ../..
       dockerfile: deploy/docker/agent.Dockerfile
-      # The Dockerfile's default target is dev, but consumers must be
-      # explicit (production/CI build --target release).
+      # The published image is distroless (no shell); the dev stage keeps
+      # alpine (root, iptables for the outage gate, enrolling entrypoint).
       target: dev
     image: polarbeam-agent:dev
     restart: unless-stopped
