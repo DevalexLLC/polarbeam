@@ -267,7 +267,8 @@ jobs:
           # release explicitly for the server too: its Dockerfile defaults to
           # release (last stage), but an explicit target survives reordering.
           - { name: server, file: deploy/docker/server.Dockerfile, target: release }
-          # release explicitly: the agent Dockerfile's default target is dev
+          # Same for the agent: release is its default too, but the dev stage
+          # exists in the same file, so name the target.
           - { name: agent, file: deploy/docker/agent.Dockerfile, target: release }
           - { name: proxy, file: deploy/docker/proxy.Dockerfile, target: "" }
     steps:
@@ -282,6 +283,10 @@ jobs:
           file: ${{ matrix.file }}
           target: ${{ matrix.target }}
           push: false
+          # The agent leg loads its image into the runner's daemon for the
+          # capability gate below; the other two are build-only.
+          load: ${{ matrix.name == 'agent' }}
+          tags: polarbeam-${{ matrix.name }}:ci
           # Layer cache in the GitHub Actions cache service, scoped per
           # image so the three legs never evict each other. Without it
           # every PR recompiled the full Go tree three times over. Cache
@@ -289,3 +294,30 @@ jobs:
           # real artifacts) stays cache-free on purpose.
           cache-from: type=gha,scope=docker-build-${{ matrix.name }}
           cache-to: type=gha,scope=docker-build-${{ matrix.name }},mode=max
+      # File-capability gate. The agent's raw ICMP as uid 10001 rides on a
+      # security.capability xattr written in the Go build stage and carried
+      # through COPY --from into the distroless release stage. No Go test
+      # can see whether that hop still preserves it, so run the built
+      # image: selfcheck must open a raw socket under the runner's default
+      # bounding set, and dropping NET_RAW must make the kernel refuse the
+      # exec outright (that refusal is what proves the effective file
+      # capability is present). Exit statuses are captured bare, never
+      # through a pipe.
+      - name: Agent image honors its file capability
+        if: matrix.name == 'agent'
+        run: |
+          status=0
+          docker run --rm \
+            -v "$PWD/deploy/compose-dev/agent.dev.yaml:/etc/polarbeam/agent.yaml:ro" \
+            polarbeam-agent:ci selfcheck > selfcheck.log 2>&1 || status=$?
+          cat selfcheck.log
+          [ "$status" -eq 0 ] || { echo "selfcheck exited $status" >&2; exit 1; }
+          grep -Eq '^icmp \(raw\) +ok ' selfcheck.log || { echo "raw ICMP not available as uid 10001" >&2; exit 1; }
+          grep -Eq '^capabilities +ok ' selfcheck.log || { echo "NET_RAW not effective" >&2; exit 1; }
+      - name: Agent image refuses to exec without NET_RAW
+        if: matrix.name == 'agent'
+        run: |
+          if docker run --rm --cap-drop NET_RAW polarbeam-agent:ci version; then
+            echo "exec succeeded without NET_RAW: the file capability is missing" >&2
+            exit 1
+          fi

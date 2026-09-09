@@ -747,8 +747,11 @@ refuses to `execve` such a binary when that capability is outside the
 container's bounding set — the container dies before the program starts, with:
 
 ```text
-exec container process `/usr/local/bin/polarbeam-agent`: Operation not permitted
+exec /usr/local/bin/polarbeam-agent: operation not permitted
 ```
+
+(Podman's runtime words it `exec container process ...: Operation not
+permitted`.)
 
 Docker includes `NET_RAW` in its default set, so this bites on runtimes that
 do not: Podman, rootless daemons, and daemons whose `default-capabilities`
@@ -1381,9 +1384,12 @@ outside every mesh on the right one. Compare the agent's network (the
 agent's network and its `--probe-address` are fixed at
 enrollment, so the fix is the same for either mistake: re-enroll with a fresh
 token for the correct network and a peer-reachable address. Enrollment refuses
-to overwrite identity state; stop the agent and deliberately remove only that
-agent's `<state_dir>/pki` directory or replace its dedicated state volume
-before re-enrolling. Treat this as identity replacement, not routine repair.
+to overwrite identity state; stop the agent and deliberately move only that
+agent's identity aside with `polarbeam-agent identity retire` (it renames
+`<state_dir>/pki` to `pki.retired-<UTC timestamp>` and leaves the spool in
+place — see the [CA algorithm cutover](#upgrading-across-a-ca-algorithm-change) for the
+container invocation) or replace its dedicated state volume before
+re-enrolling. Treat this as identity replacement, not routine repair.
 
 Also verify the WAN firewall permits the selected probe protocol in both
 directions.
@@ -1394,10 +1400,10 @@ directions.
 docker logs polarbeam-agent
 ```
 
-The container entrypoint runs `selfcheck` before `run`, and a failed check
-stops the container. The check names the broken YAML key, state-directory
-permission, expired identity, private-key mode, or missing socket
-capability, each with a remedy.
+`run` performs `selfcheck` before starting and refuses to start on a failed
+fatal check, so the container exits instead of degrading. The rows name the
+broken YAML key, state-directory permission, expired identity, private-key
+mode, or missing socket capability, each with a remedy.
 
 ### Container agent cannot write its state volume
 
@@ -1408,7 +1414,7 @@ for enrollment and the long-running container.
 ### Container agent exits with "Operation not permitted"
 
 ```text
-exec container process `/usr/local/bin/polarbeam-agent`: Operation not permitted
+exec /usr/local/bin/polarbeam-agent: operation not permitted
 ```
 
 The container is missing `NET_RAW`. The binary carries the `cap_net_raw+ep`
@@ -1416,23 +1422,28 @@ file capability, and `execve` fails when that capability is outside the
 container's bounding set, so the failure happens before any PolarBEAM code
 runs — subcommands that never touch a raw socket, such as `enroll`, fail
 identically. Add `--cap-add NET_RAW` (or `cap_add: [NET_RAW]` in Compose) to
-every invocation of the image. To confirm the runtime is the cause, read the
-bounding set your daemon hands out by default:
+every invocation of the image. To confirm the runtime is the cause, run the
+same one-shot command with the capability granted and with it dropped — the
+image has no shell, and none is needed:
 
 ```sh
-docker run --rm --entrypoint sh \
-  ghcr.io/devalexllc/polarbeam-agent:<version> -c 'grep CapBnd /proc/self/status'
+docker run --rm --cap-add NET_RAW ghcr.io/devalexllc/polarbeam-agent:<version> version
+docker run --rm --cap-drop NET_RAW ghcr.io/devalexllc/polarbeam-agent:<version> version
 ```
 
-This uses the agent image, which an air-gapped host already has, rather than
-pulling an unrelated one. Overriding the entrypoint is what makes it work
-without `--cap-add`: the shell carries no file capabilities, so it executes
-under any bounding set — only the agent binary is refused.
+The first prints the version; the second must fail with `operation not
+permitted` before any PolarBEAM output — that refusal is the file capability
+doing its job. If a plain `docker run … version` with neither flag fails the
+same way, your daemon's default capability set omits `NET_RAW` (Podman,
+rootless daemons, a narrowed `default-capabilities`) and every container of
+this image needs `--cap-add NET_RAW`.
 
-`NET_RAW` is capability 13, so the printed mask must have bit `0x2000` set. A
-default Docker daemon prints `00000000a80425fb`; the same daemon with
-`NET_RAW` removed prints `00000000a80405fb`. If bit `0x2000` is clear, the
-runtime is dropping it and every `polarbeam-agent` container needs the flag.
+The opposite symptom — the container starts but `selfcheck` reports
+`icmp (raw) FAIL` — means the capability is in the bounding set but was not
+applied at exec (user-namespace remap, `no-new-privileges`, a `nosuid`
+mount). The `capabilities` row of `selfcheck` prints the bounding and
+effective masks read from `/proc/self/status` (`NET_RAW` is bit `0x2000`) and
+says which of the two cases applies.
 
 ### Zombie `ssl_client` processes accumulate on the control-plane host
 
@@ -1781,9 +1792,9 @@ The cutover, on the control-plane host:
      --site <site-name> --network <network-name> --ttl 24h
    ```
 
-   Then on the agent host: stop the agent, remove **only** its `pki`
-   directory (the spool stays and drains after re-enrollment), re-enroll
-   with the new fingerprint exactly as in
+   Then on the agent host: stop the agent, move **only** its identity
+   aside with `identity retire` (the spool stays and drains after
+   re-enrollment), re-enroll with the new fingerprint exactly as in
    [section 8.2](#82-enroll-into-the-persistent-volume), and recreate the
    container:
 
@@ -1791,12 +1802,22 @@ The cutover, on the control-plane host:
    docker stop -t 60 polarbeam-agent
    docker rm polarbeam-agent
    docker run --rm \
+     --cap-add NET_RAW \
+     --mount type=bind,src=/opt/polarbeam-agent/agent.yaml,dst=/etc/polarbeam/agent.yaml,readonly \
      --mount type=volume,src=polarbeam-agent-state,dst=/var/lib/polarbeam-agent \
-     --entrypoint sh ghcr.io/devalexllc/polarbeam-agent:<version> \
-     -c 'rm -rf /var/lib/polarbeam-agent/pki'
+     ghcr.io/devalexllc/polarbeam-agent:<version> \
+     identity retire --config /etc/polarbeam/agent.yaml
    # re-enroll per section 8.2 (new token, NEW fingerprint, same
    # --probe-address), then recreate the container per section 8.3
    ```
+
+   `identity retire` renames `/var/lib/polarbeam-agent/pki` to
+   `pki.retired-<UTC timestamp>` and prints that path; nothing is deleted,
+   and the retired directory can be moved back by hand if the cutover has
+   to be abandoned. Run it only against a stopped agent — the running
+   agent's certificate renewer writes into `pki`. The `--cap-add` is the
+   usual exec-time requirement from section 8.2, not something the
+   subcommand uses.
 
    Re-enrollment issues a new agent identity: history recorded under the
    old identity remains queryable, but continues under the new one — the
