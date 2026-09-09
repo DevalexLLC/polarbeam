@@ -42,7 +42,7 @@ RUN printf 'polarbeam:x:10001:65533::/home/polarbeam:/sbin/nologin\n' >> /out/et
 # server entrypoint chains subcommands through /bin/sh and bootstrap.sh
 # needs BusyBox, so this stays on alpine. Declared before release so the
 # default target stays release.
-FROM alpine:3.22 AS dev
+FROM alpine:3.24 AS dev
 RUN adduser -S -D -H -u 10001 -s /sbin/nologin polarbeam \
     && mkdir -p /var/lib/polarbeam-server \
     && chown 10001 /var/lib/polarbeam-server
