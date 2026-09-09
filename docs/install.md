@@ -1361,6 +1361,17 @@ with the knob on, connecting to the server while bypassing the proxy (for
 example `curl https://server:8080` from inside the compose network) is
 rejected by design — debug through the proxy.
 
+### Everything fails after the server container was recreated
+
+The bundled proxy resolves its `server` upstream once, at start (nginx
+static `upstream` blocks). If the server container is recreated — an
+upgrade, `docker compose up -d --force-recreate server`, a manual
+`rm`/`up` — and comes back on a different address, the proxy keeps
+forwarding to the old one and every connection through it fails until the
+proxy is restarted. Always follow a server recreate with
+`docker compose restart proxy`. The upgrade procedure below recreates
+both services together, which has the same effect.
+
 ### Agents connect but mesh results are absent or target the proxy
 
 First check the network dimension: a mesh pairs only agents on its own
@@ -1552,7 +1563,13 @@ Work from the compose directory on the control-plane host:
    ```
 
    Do this promptly after step 4 so the serving binary matches the
-   migrated schema.
+   migrated schema. Recreating the proxy along with the server is not
+   optional: the proxy resolves its `server` upstream once at start, so a
+   proxy left running from before the upgrade may still point at the old
+   server address (see [Troubleshooting](#everything-fails-after-the-server-container-was-recreated)).
+   A new `POLARBEAM_VERSION` changes the proxy image tag too, so `up -d`
+   recreates both; if you ever recreate only the server, follow it with
+   `docker compose restart proxy`.
 
 6. **Verify:** `https://<dashboard-name>/healthz` answers, the dashboard
    **Agents** page shows agents reconnecting (they retry on their own —

@@ -88,9 +88,13 @@ Prerequisites beyond this repository and Go 1.27.1:
   `deploy/docker/server.Dockerfile` — the server's runtime base, served
   from gcr.io, so a second registry to mirror; `alpine:3.22` for the agent
   release stage and the server's compose-dev `dev` stage;
-  `nginx:1.29-alpine`) and an Alpine package source for `libcap` (see
-  above). `timescale/timescaledb-ha:pg16-all` is needed to
-  *run* a stack but is no longer part of any release artifact.
+  `nginx:1.30.4-alpine-slim` at the digest pinned in
+  `deploy/docker/proxy.Dockerfile` — the *slim* official variant, which
+  omits the dynamic-module packages and curl the stream-only proxy never
+  loads, so stage that one rather than the full `-alpine` image) and an
+  Alpine package source for `libcap` (see above).
+  `timescale/timescaledb-ha:pg16-all` is needed to *run* a stack but is no
+  longer part of any release artifact.
 
 ```sh
 GOFLAGS=-mod=vendor GOPROXY=off GOTOOLCHAIN=local make build   # binaries (zero network)
