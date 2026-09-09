@@ -25,6 +25,9 @@ test('site detail composes the overview feeds with a site-filtered incident hist
   // Identity resolves unfiltered; the filtered topology may be absent.
   assert.match(site, /matrix\?\.sites\.find\(\(s\) => s\.name === name\)/)
   assert.match(site, /topology\?\.stats/)
+  // The Pair detail column keeps its screen-reader heading (#185 was fixed
+  // by containing it, never by removing it).
+  assert.match(site, /className="site-peers-link">\s*<span className="sr-only">Pair detail<\/span>/)
 })
 
 test('every site surface links into the site page', () => {
