@@ -471,8 +471,11 @@ jobs:
             outcome_var="${image^^}_SCAN_OUTCOME"
             if [ "${!outcome_var}" != success ] || ! jq -er --arg image "$image" '
               if type != "object" or .SchemaVersion != 2 then error("invalid Trivy report") else . end
-              | (.Results // []) as $results
+              | (.Results | if . == null then [] else . end) as $results
               | if ($results | type) != "array" then error("invalid Results") else . end
+              | if all($results[]; type == "object" and
+                  (.Vulnerabilities == null or (.Vulnerabilities | type) == "array"))
+                then . else error("invalid vulnerability list") end
               | [$results[] | .Class as $class | (.Vulnerabilities // [])[]
                  | . + {Class: $class}] as $all
               | if all($all[]; (.Severity | IN("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN")))
