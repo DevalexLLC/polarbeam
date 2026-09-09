@@ -38,6 +38,30 @@
 #   grouped because init and analyze must run the same version — split PRs
 #   each fail CodeQL with a config/runtime version mismatch (seen with
 #   4.37.8→4.37.9, PRs #135/#136).
+#
+# docker (deploy/docker/) — base-image pins in the three Dockerfiles. The
+#   detector matches any filename containing "dockerfile", so the
+#   `*.Dockerfile` names are covered by one directory entry. For a
+#   `image:tag@sha256:…` pin Dependabot proposes tag and digest together in
+#   one PR (and a digest-only PR when the same tag is rebuilt), which is the
+#   point: an unpinned tag can freeze without anyone noticing — the proxy's
+#   `nginx:1.29-alpine` stopped receiving builds when 1.29 left mainline
+#   and sat on 36 High findings for months (issue #174). Candidates keep
+#   the tag suffix (`-alpine-slim`), only the version part moves.
+#
+#   Ignores, both deliberate:
+#   - golang: the Go build stages must match go.mod's exact toolchain
+#     version (CLAUDE.md); that bump is done by hand together with go.mod
+#     and docs/airgap-build.md, never by Dependabot.
+#   - nginx minor/major: the proxy tracks nginx's STABLE line (even minor
+#     versions). Without this, Dependabot proposes the mainline line
+#     (odd minor) as soon as it exists. Patch and digest-only bumps still
+#     flow; the yearly stable-line move (1.30 -> 1.32) is a hand bump.
+#
+#   docs/airgap-build.md lists the base images by tag (digests live only in
+#   the Dockerfiles), so a Dependabot tag bump leaves that list stale until
+#   the maintainer finishing the PR moves the doc line too. No CI check
+#   catches that; it is a review item, same as the npm `make web` caveat.
 version: 2
 updates:
   - package-ecosystem: gomod
@@ -60,3 +84,12 @@ updates:
       codeql-action:
         patterns:
           - "github/codeql-action*"
+  - package-ecosystem: docker
+    directory: "/deploy/docker"
+    schedule:
+      interval: weekly
+    ignore:
+      # See the docker caveat above.
+      - dependency-name: golang
+      - dependency-name: nginx
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
