@@ -94,6 +94,12 @@ with a pointer here, so please read this list first.
   steps obtain the pinned Go toolchain and CodeQL bundle, and its final step
   uploads analysis results to GitHub. The traced PolarBEAM build itself stays
   offline with `GOPROXY=off`, `GOTOOLCHAIN=local`, and committed `vendor/`.
+- **CI's advisory `image-scan` job downloads Trivy and its vulnerability
+  database.** The SHA-pinned action supplies the scanner version; three
+  sequential scans of the built amd64 images share a daily DB cache with
+  freshness checks enabled. Reports are uploaded to GitHub as artifacts and
+  per-image SARIF analyses. These downloads and uploads are online CI only,
+  never Make targets, release-image contents, or air-gap bundle contents.
 
   To be precise about the air-gap guarantee, because it is narrower than
   it sounds: `offline-build` proves the Go binaries compile and test with

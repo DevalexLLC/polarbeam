@@ -49,6 +49,15 @@ and its analysis step uploads results to GitHub. The traced project build still
 runs with `GOPROXY=off`, `GOTOOLCHAIN=local`, and committed `vendor/`, so it
 cannot fetch Go dependencies or a replacement toolchain.
 
+The advisory `image-scan` job downloads the Trivy version supplied by its
+SHA-pinned action and fetches a vulnerability database, cached daily and
+shared by its three sequential scans. It scans the actual amd64 server,
+agent, and proxy images from CI's Docker builds and uploads reports and
+SARIF to GitHub. It does not rebuild or modify those images. These network
+calls belong only to online CI: no scanner or database is added to Make
+targets, release images, or air-gap bundles. The six required checks stay
+unchanged; `CONTRIBUTING.md` explains the advisory results and triage.
+
 Container image builds compile from vendor the same way, but are NOT
 zero-network: they pull the golang/distroless/alpine/nginx base images.
 Rebuilding the published images therefore needs registry access (or an
