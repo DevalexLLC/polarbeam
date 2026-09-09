@@ -67,7 +67,7 @@ lint: vet fmt-check
 # buildx). The agent MUST name --target release: the Dockerfile's default
 # target is the dev image.
 images:
-	docker build -f deploy/docker/server.Dockerfile \
+	docker build -f deploy/docker/server.Dockerfile --target release \
 		--build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) \
 		-t $(REGISTRY)/polarbeam-server:$(VERSION) .
 	docker build -f deploy/docker/agent.Dockerfile --target release \

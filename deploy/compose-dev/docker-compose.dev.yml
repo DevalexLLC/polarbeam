@@ -22,6 +22,9 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/server.Dockerfile
+      # The published image is distroless (no shell); the dev stage keeps
+      # alpine so the entrypoint chain below and bootstrap.sh can run.
+      target: dev
     image: polarbeam-server:dev
     volumes:
       - ../compose-dev/server.dev.yaml:/etc/polarbeam/server.yaml:ro
