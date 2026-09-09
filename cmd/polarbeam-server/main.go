@@ -17,6 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/devalexllc/polarbeam/internal/retiredir"
 	"github.com/devalexllc/polarbeam/internal/server"
 	"github.com/devalexllc/polarbeam/internal/server/ca"
 	"github.com/devalexllc/polarbeam/internal/server/config"
@@ -210,40 +211,15 @@ func cmdCARetire(args []string) error {
 	if err != nil {
 		return err
 	}
-	retired, err := retireCA(cfg.CA.Dir, time.Now())
+	retired, err := retiredir.Move(cfg.CA.Dir, time.Now())
 	if err != nil {
-		return err
+		return fmt.Errorf("ca retire: %w", err)
 	}
 	fmt.Printf("CA retired: %s moved to %s\n"+
 		"next: polarbeam-server ca init --config <file> creates the replacement;\n"+
 		"keep the retired directory as the rollback path until every agent is re-enrolled\n",
 		filepath.Clean(cfg.CA.Dir), retired)
 	return nil
-}
-
-// retireCA renames dir to <dir>.retired-<UTC stamp> and returns the new
-// path. dir is cleaned first: with a trailing slash the destination would
-// otherwise be computed inside the directory being moved.
-func retireCA(dir string, now time.Time) (string, error) {
-	dir = filepath.Clean(dir)
-	st, err := os.Stat(dir)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("no CA directory at %s (nothing to retire)", dir)
-		}
-		return "", fmt.Errorf("ca retire: %w", err)
-	}
-	if !st.IsDir() {
-		return "", fmt.Errorf("ca retire: %s is not a directory", dir)
-	}
-	retired := dir + ".retired-" + now.UTC().Format("20060102T150405Z")
-	if _, err := os.Stat(retired); err == nil {
-		return "", fmt.Errorf("ca retire: %s already exists", retired)
-	}
-	if err := os.Rename(dir, retired); err != nil {
-		return "", fmt.Errorf("ca retire: %w", err)
-	}
-	return retired, nil
 }
 
 func cmdToken(args []string) error {

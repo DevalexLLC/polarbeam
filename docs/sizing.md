@@ -42,11 +42,12 @@ poorly.
 |---|---|
 | CPU | Negligible: well under 5% of one core (measured under 1%) |
 | Memory | 64 MB minimum; 128 MB is a comfortable container limit (measured ~11 MB) |
-| Disk | 1 GB free: ~45 MB image + up to 256 MB spool (default cap) + headroom |
+| Disk | 1 GB free: ~20 MB image + up to 256 MB spool (default cap) + headroom |
 | Network | Kilobytes per second at typical workloads; see the model below |
 
-The agent is a single static Go binary in an Alpine container. It has no
-runtime dependencies and its disk use is bounded by design: the on-disk spool
+The agent is a single static Go binary in a distroless static container (no
+shell, no package manager). It has no runtime dependencies and its disk use
+is bounded by design: the on-disk spool
 that buffers results while the server is unreachable is capped at
 `spool.max_bytes` (default 256 MiB) and `spool.max_age` (default 7 days).
 
@@ -198,7 +199,7 @@ running a six-site mesh workload. Probing is timers and tiny packets; even
 hundreds of assignments do not change the picture materially. A 128 MB
 container memory limit leaves generous headroom.
 
-**Disk**: the image is ~45 MB and the state volume holds the agent's
+**Disk**: the image is ~20 MB and the state volume holds the agent's
 identity, certificates, and the result spool. The spool grows only while the
 control plane is unreachable, up to `spool.max_bytes` (default 256 MiB —
 enough for several days of a typical site workload). Provision ~1 GB free and
@@ -286,10 +287,12 @@ The hourly and daily rollups keep growing until days 100 and 400
 respectively; project their growth over the remaining retention window and
 add it to the raw plateau.
 
-On agent hosts, check spool pressure inside the state volume:
+On agent hosts, check spool pressure inside the state volume with the
+`spool` row of `selfcheck`, which reports bytes on disk and the segment
+count (the image has no shell, so there is no `du` to run):
 
 ```sh
-docker exec <agent-container> du -sh /var/lib/polarbeam-agent/spool
+docker exec <agent-container> polarbeam-agent selfcheck --config /etc/polarbeam/agent.yaml
 ```
 
 The agent also reports a lifetime dropped-results counter to the server

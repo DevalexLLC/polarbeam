@@ -8,12 +8,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/devalexllc/polarbeam/internal/agent/confcache"
 	"github.com/devalexllc/polarbeam/internal/agent/config"
@@ -23,6 +25,7 @@ import (
 	"github.com/devalexllc/polarbeam/internal/agent/spool"
 	"github.com/devalexllc/polarbeam/internal/agent/uplink"
 	pb "github.com/devalexllc/polarbeam/internal/pb/polarbeamv1"
+	"github.com/devalexllc/polarbeam/internal/retiredir"
 	"github.com/devalexllc/polarbeam/internal/version"
 )
 
@@ -35,6 +38,10 @@ Usage:
                              [--probe-address <host>]
                                                      enroll with the control plane
   polarbeam-agent selfcheck --config <file>         verify probe capabilities
+                                                     (run performs the same
+                                                     checks before starting)
+  polarbeam-agent identity retire --config <file>   move <state_dir>/pki aside
+                                                     (before re-enrolling)
   polarbeam-agent version                           print version and exit
 `
 
@@ -51,6 +58,8 @@ func main() {
 		err = cmdEnroll(os.Args[2:])
 	case "selfcheck":
 		err = cmdSelfcheck(os.Args[2:])
+	case "identity":
+		err = cmdIdentity(os.Args[2:])
 	case "version", "--version":
 		fmt.Println("polarbeam-agent", version.String())
 		return
@@ -93,6 +102,53 @@ func cmdEnroll(args []string) error {
 	})
 }
 
+const identityUsage = "usage: polarbeam-agent identity retire --config <file>"
+
+func cmdIdentity(args []string) error {
+	if len(args) < 1 {
+		return errors.New(identityUsage)
+	}
+	switch args[0] {
+	case "retire":
+		return cmdIdentityRetire(args[1:])
+	}
+	return errors.New(identityUsage)
+}
+
+// cmdIdentityRetire moves <state_dir>/pki aside so `enroll` can issue a
+// replacement identity (it refuses while one exists). It replaces the
+// former runbook's `rm -rf` through `--entrypoint sh`, which the
+// shell-less release image cannot run. Rename only, never delete. The
+// agent must be stopped first: the renewer writes into pki/ and there is
+// no lock to detect a running instance.
+func cmdIdentityRetire(args []string) error {
+	fs := flag.NewFlagSet("identity retire", flag.ExitOnError)
+	cfg, err := loadConfig(fs, args)
+	if err != nil {
+		return err
+	}
+	retired, err := retireIdentity(cfg.StateDir, time.Now())
+	if err != nil {
+		return err
+	}
+	fmt.Printf("identity retired: %s moved to %s\n"+
+		"next: polarbeam-agent enroll --config <file> --token … issues the replacement identity\n"+
+		"(same --probe-address as before); the spool is untouched and drains after re-enrollment.\n"+
+		"Keep the retired directory until the new identity reports on the dashboard.\n",
+		enroll.NewPKI(cfg.StateDir).Dir, retired)
+	return nil
+}
+
+// retireIdentity renames <stateDir>/pki to a timestamped sibling and
+// returns the new path.
+func retireIdentity(stateDir string, now time.Time) (string, error) {
+	retired, err := retiredir.Move(enroll.NewPKI(stateDir).Dir, now)
+	if err != nil {
+		return "", fmt.Errorf("identity retire: %w", err)
+	}
+	return retired, nil
+}
+
 // cmdSelfcheck verifies the capabilities the probers need (ICMP socket
 // modes, traceroute's raw socket, spool writability) and exits non-zero if
 // any fatal check fails. Config load itself is the first check: a bad file
@@ -101,26 +157,46 @@ func cmdSelfcheck(args []string) error {
 	fs := flag.NewFlagSet("selfcheck", flag.ExitOnError)
 	cfg, err := loadConfig(fs, args)
 	if err != nil {
-		fmt.Printf("%-18s %-5s %v\n", "config", "FAIL", err)
-		return fmt.Errorf("selfcheck failed")
+		fmt.Printf(checkRow, "config", "FAIL", err)
+		return errSelfcheck
 	}
-	fmt.Printf("%-18s %-5s %s\n", "config", "ok", fs.Lookup("config").Value.String())
+	return preflight(os.Stdout, cfg, fs.Lookup("config").Value.String())
+}
 
-	failed := false
-	for _, c := range probes.SelfCheck(cfg.StateDir) {
+// checkRow is the selfcheck output format: name, ok/FAIL, detail.
+const checkRow = "%-18s %-5s %s\n"
+
+var errSelfcheck = errors.New("selfcheck failed")
+
+// preflight prints the config row and every selfcheck row for cfg and
+// returns errSelfcheck when a fatal check failed. `run` calls it before
+// starting so a misconfigured or capability-starved container fails loudly
+// at start instead of degrading silently — the guarantee the former shell
+// entrypoint wrapper (selfcheck && exec run) and, before it, the systemd
+// ExecStartPre provided. There is deliberately no way to skip it.
+func preflight(w io.Writer, cfg config.Config, cfgPath string) error {
+	fmt.Fprintf(w, checkRow, "config", "ok", cfgPath)
+	if !printChecks(w, probes.SelfCheck(cfg.StateDir)) {
+		return errSelfcheck
+	}
+	return nil
+}
+
+// printChecks writes one row per check and reports whether every fatal
+// check passed. Non-fatal failures print FAIL but do not block.
+func printChecks(w io.Writer, checks []probes.Check) bool {
+	ok := true
+	for _, c := range checks {
 		status := "ok"
 		if !c.OK {
 			status = "FAIL"
 			if c.Fatal {
-				failed = true
+				ok = false
 			}
 		}
-		fmt.Printf("%-18s %-5s %s\n", c.Name, status, c.Detail)
+		fmt.Fprintf(w, checkRow, c.Name, status, c.Detail)
 	}
-	if failed {
-		return fmt.Errorf("selfcheck failed")
-	}
-	return nil
+	return ok
 }
 
 func cmdRun(args []string) error {
@@ -128,6 +204,11 @@ func cmdRun(args []string) error {
 	cfg, err := loadConfig(fs, args)
 	if err != nil {
 		return err
+	}
+	// Fail-loud preflight: rows go to stdout before logging is configured,
+	// exactly as the former entrypoint wrapper printed them.
+	if err := preflight(os.Stdout, cfg, fs.Lookup("config").Value.String()); err != nil {
+		return fmt.Errorf("%w; not starting", err)
 	}
 	setupLogging(cfg.Log.Level)
 

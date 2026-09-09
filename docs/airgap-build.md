@@ -50,11 +50,15 @@ runs with `GOPROXY=off`, `GOTOOLCHAIN=local`, and committed `vendor/`, so it
 cannot fetch Go dependencies or a replacement toolchain.
 
 Container image builds compile from vendor the same way, but are NOT
-zero-network: besides pulling the golang/distroless/alpine/nginx base
-images, the agent image's release stage installs one Alpine package
-(`libcap`, for `setcap`). Rebuilding images therefore needs registry +
-Alpine-mirror access (or an internal mirror); truly air-gapped sites
-consume the pre-built images from the release bundle instead of rebuilding.
+zero-network: they pull the golang/distroless/alpine/nginx base images.
+Rebuilding the published images therefore needs registry access (or an
+internal mirror) and nothing else — no published image installs a package;
+the agent's `cap_net_raw` file capability is written by the vendored
+`tools/filecap` in the Go build stage, not by `setcap` from an Alpine
+package. Only the compose-dev `dev` stages, which are never published,
+still `apk add` (the agent's, for `iptables`/`iproute2`) and so need an
+Alpine package source. Truly air-gapped sites consume the pre-built images
+from the release bundle instead of rebuilding.
 `.dockerignore` trims the context but must never exclude `vendor/`,
 `internal/pb/`, or `web/dist/`.
 
@@ -84,15 +88,17 @@ A version tag (`vX.Y.Z`) triggers `.github/workflows/release.yml`:
 Prerequisites beyond this repository and Go 1.27.1:
 
 - Docker with the base images already present (`golang:1.27.1-alpine`;
-  `gcr.io/distroless/static-debian13:nonroot` at the digest pinned in
-  `deploy/docker/server.Dockerfile` — the server's runtime base, served
-  from gcr.io, so a second registry to mirror; `alpine:3.22` for the agent
-  release stage and the server's compose-dev `dev` stage;
+  `gcr.io/distroless/static-debian13:nonroot` at the digest pinned
+  identically in `deploy/docker/server.Dockerfile` and
+  `deploy/docker/agent.Dockerfile` — the runtime base of both published Go
+  images, served from gcr.io, so a second registry to mirror; `alpine:3.22`
+  for the server's and agent's compose-dev `dev` stages only;
   `nginx:1.30.4-alpine-slim` at the digest pinned in
   `deploy/docker/proxy.Dockerfile` — the *slim* official variant, which
   omits the dynamic-module packages and curl the stream-only proxy never
-  loads, so stage that one rather than the full `-alpine` image) and an
-  Alpine package source for `libcap` (see above).
+  loads, so stage that one rather than the full `-alpine` image). Building
+  the agent's `dev` stage additionally needs an Alpine package source (see
+  above); the published images need none.
   `timescale/timescaledb-ha:pg16-all` is needed to *run* a stack but is no
   longer part of any release artifact.
 
