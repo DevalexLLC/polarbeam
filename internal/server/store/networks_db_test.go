@@ -52,7 +52,7 @@ func enrollNetAgent(t *testing.T, ctx context.Context, s *store.Store, siteName,
 	if err != nil {
 		t.Fatalf("EnsureSite %q: %v", siteName, err)
 	}
-	netID := uuid.Nil
+	var netID uuid.UUID
 	if network != nil {
 		netID = *network
 	} else {

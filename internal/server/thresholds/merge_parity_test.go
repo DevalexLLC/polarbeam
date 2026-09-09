@@ -45,14 +45,7 @@ type parityT struct {
 	LossCritPct   float64 `json:"loss_crit_pct"`
 }
 
-func (p parityT) T() T {
-	return T{
-		LatencyWarnUS: p.LatencyWarnUS,
-		LatencyCritUS: p.LatencyCritUS,
-		LossWarnPct:   p.LossWarnPct,
-		LossCritPct:   p.LossCritPct,
-	}
-}
+func (p parityT) T() T { return T(p) }
 
 type parityFile struct {
 	Global parityT `json:"global"`

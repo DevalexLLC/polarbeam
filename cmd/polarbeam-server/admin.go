@@ -63,9 +63,9 @@ var cliSiteFields = configadmin.SiteFields{Name: "--name", Lat: "--lat", Lon: "-
 var cliTargetFields = configadmin.TargetFields{Name: "--name", Address: "--address", URL: "--url", Port: "--port"}
 
 func cmdSite(args []string) error {
-	const use = "usage: polarbeam-server site list|set ..."
+	const use = "usage: polarbeam-server site list|set [flags]"
 	if len(args) < 1 {
-		return fmt.Errorf(use)
+		return errors.New(use)
 	}
 	switch args[0] {
 	case "list":
@@ -157,9 +157,9 @@ func cmdSite(args []string) error {
 }
 
 func cmdTarget(args []string) error {
-	const use = "usage: polarbeam-server target add|list|rm ..."
+	const use = "usage: polarbeam-server target add|list|rm [flags]"
 	if len(args) < 1 {
-		return fmt.Errorf(use)
+		return errors.New(use)
 	}
 	switch args[0] {
 	case "add":
@@ -268,9 +268,9 @@ func cmdTarget(args []string) error {
 }
 
 func cmdProbe(args []string) error {
-	const use = "usage: polarbeam-server probe add|list|rm ..."
+	const use = "usage: polarbeam-server probe add|list|rm [flags]"
 	if len(args) < 1 {
-		return fmt.Errorf(use)
+		return errors.New(use)
 	}
 	switch args[0] {
 	case "add":
@@ -414,9 +414,9 @@ func cmdProbe(args []string) error {
 }
 
 func cmdMesh(args []string) error {
-	const use = "usage: polarbeam-server mesh create|add|rm|delete|list ..."
+	const use = "usage: polarbeam-server mesh create|add|rm|delete|list [flags]"
 	if len(args) < 1 {
-		return fmt.Errorf(use)
+		return errors.New(use)
 	}
 	switch args[0] {
 	case "delete":

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -25,7 +26,7 @@ func (l *stringList) Set(v string) error { *l = append(*l, v); return nil }
 func cmdUser(args []string) error {
 	const use = "usage: polarbeam-server user add --config <file> --username <name> [--role <role>] [--network <name>]... [--admin]"
 	if len(args) < 1 {
-		return fmt.Errorf(use)
+		return errors.New(use)
 	}
 	switch args[0] {
 	case "add":
