@@ -44,6 +44,10 @@ findings, including unfixed ones, and separate failed scans from zero
 findings in summaries. Keep per-image SARIF categories distinct. Scanner
 and database downloads belong only in online CI, never Make targets or
 air-gap bundles. The SHA-pinned action supplies the scanner version.
+`.trivyignore.yaml` suppresses only findings that provably cannot apply;
+each entry carries a `statement` and is backed by the offline
+`make trivyignore-check` guard, which must keep failing CI if the
+justification stops holding.
 
 After starting the stack, use `cd web && pnpm run dev` for Vite. Never run
 the base Compose file alone for development.

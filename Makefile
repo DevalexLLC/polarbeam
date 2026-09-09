@@ -19,7 +19,7 @@ COMPOSE      = docker compose -f $(COMPOSE_BASE) -f $(COMPOSE_DEV)
 # Published image registry/namespace (ghcr requires lowercase).
 REGISTRY ?= ghcr.io/devalexllc
 
-.PHONY: all build server agent test bench lint vet fmt-check proto web web-fix vendor notices up down reset logs ps seed clean images bundle
+.PHONY: all build server agent test bench lint vet fmt-check trivyignore-check proto web web-fix vendor notices up down reset logs ps seed clean images bundle
 
 all: build
 
@@ -56,12 +56,28 @@ fmt-check:
 	if [ -n "$$files" ]; then echo "gofmt needed on:"; echo "$$files"; fail=1; fi; \
 	exit $$fail
 
-lint: vet fmt-check
+lint: vet fmt-check trivyignore-check
 	@if command -v staticcheck >/dev/null 2>&1; then \
 		staticcheck ./...; \
 	else \
 		echo "staticcheck not installed; ran go vet only"; \
 	fi
+
+# Backs the GO-2026-5932 entry in .trivyignore.yaml: that suppression is
+# justified only while golang.org/x/crypto/openpgp stays out of the shipped
+# binaries. Inspect the build graph exactly as the release images build it
+# (CGO_ENABLED=0, both shipped Linux architectures) — build constraints
+# change the graph, so the host default (cgo on) could miss a !cgo-gated
+# import. Reads vendor/ only, so the offline-build job runs it. Never pipe
+# go list into grep here: a failed go list must fail the target, not pass it.
+trivyignore-check:
+	@for arch in amd64 arm64; do \
+		deps="$$(CGO_ENABLED=0 GOOS=linux GOARCH=$$arch $(GO) list -mod=vendor -deps ./...)" || exit 1; \
+		case "$$deps" in *"golang.org/x/crypto/openpgp"*) \
+			echo "linux/$$arch: golang.org/x/crypto/openpgp is in the build graph; drop GO-2026-5932 from .trivyignore.yaml" >&2; \
+			exit 1;; \
+		esac; \
+	done
 
 # Production images for the local architecture (CI does multi-arch via
 # buildx). Both Dockerfiles default to release (their last stage) but also

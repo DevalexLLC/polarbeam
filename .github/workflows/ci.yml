@@ -47,6 +47,11 @@ jobs:
         run: make vet
       - name: Format check
         run: make fmt-check
+      # Backs the .trivyignore.yaml suppression: proves, under the same
+      # offline vendored build, that the ignored advisory's package is not
+      # in the shipped binaries' build graph (see the Makefile target).
+      - name: Trivy suppressions must stay justified
+        run: make trivyignore-check
       # buf and the protoc plugins are pinned in go.mod's tool block and
       # compile from vendor/, so this runs under GOPROXY=off too — and
       # doubles as proof that proto regen itself needs no network. A proto
@@ -394,6 +399,8 @@ jobs:
       # must happen before the other two scans. The pinned action supplies
       # the Trivy version, so Dependabot updates both together. Only this
       # invocation restores/saves the daily cache; all scans share its path.
+      # All three scans apply .trivyignore.yaml (checked out above); every
+      # entry there is backed by `make trivyignore-check` in offline-build.
       - name: Scan server image
         id: scan-server
         continue-on-error: true
@@ -404,6 +411,7 @@ jobs:
           format: json
           output: ${{ runner.temp }}/trivy-reports/server.json
           scanners: vuln
+          trivyignores: .trivyignore.yaml
           vuln-type: os,library
           severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
           ignore-unfixed: false
@@ -421,6 +429,7 @@ jobs:
           format: json
           output: ${{ runner.temp }}/trivy-reports/agent.json
           scanners: vuln
+          trivyignores: .trivyignore.yaml
           vuln-type: os,library
           severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
           ignore-unfixed: false
@@ -439,6 +448,7 @@ jobs:
           format: json
           output: ${{ runner.temp }}/trivy-reports/proxy.json
           scanners: vuln
+          trivyignores: .trivyignore.yaml
           vuln-type: os,library
           severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
           ignore-unfixed: false

@@ -81,6 +81,16 @@ belong here too. Track one issue per advisory/root cause across affected
 images; use manual `govulncheck` for reachability follow-up rather than
 opening duplicate triage items. There is no automated `govulncheck` job.
 
+`.trivyignore.yaml` at the repo root suppresses findings that provably
+cannot apply to the shipped images — for example a module-granularity match
+on a `golang.org/x/crypto` subpackage that is never linked. Each entry
+carries a `statement` explaining why, and each is backed by an offline
+guard in `make trivyignore-check` (run by `offline-build` and `make lint`)
+that fails CI as soon as the justification stops holding, at which point
+the entry must be removed. Fixable or reachable findings are tracked, never
+suppressed. GitHub closes the matching code-scanning alerts on its own once
+the uploaded SARIF stops reporting a suppressed ID.
+
 Trivy uses the version supplied by its SHA-pinned action, so Dependabot
 action updates advance the scanner too. The three sequential scans share
 one daily database cache, with normal freshness checks enabled. Scanner
