@@ -30,7 +30,7 @@ polarbeam/
 ├── proto/polarbeam/v1/{common,enrollment,agent}.proto
 ├── internal/pb/polarbeamv1/            # committed generated code
 ├── cmd/polarbeam-server/               # subcommands: serve, ca init (--algorithm), migrate, user add (--admin | --role/--network), token create
-├── cmd/polarbeam-agent/                # subcommands: run, enroll, selfcheck
+├── cmd/polarbeam-agent/                # subcommands: run, enroll, selfcheck, identity retire
 ├── internal/server/
 │   ├── config/      # strict YAML + preflight (fail-loud: unknown keys = fatal)
 │   ├── ca/          # built-in CA, CSR signing (revocation lives in store + grpcapi)

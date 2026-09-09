@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/devalexllc/polarbeam/internal/agent/confcache"
 	"github.com/devalexllc/polarbeam/internal/agent/config"
@@ -24,6 +25,7 @@ import (
 	"github.com/devalexllc/polarbeam/internal/agent/spool"
 	"github.com/devalexllc/polarbeam/internal/agent/uplink"
 	pb "github.com/devalexllc/polarbeam/internal/pb/polarbeamv1"
+	"github.com/devalexllc/polarbeam/internal/retiredir"
 	"github.com/devalexllc/polarbeam/internal/version"
 )
 
@@ -38,6 +40,8 @@ Usage:
   polarbeam-agent selfcheck --config <file>         verify probe capabilities
                                                      (run performs the same
                                                      checks before starting)
+  polarbeam-agent identity retire --config <file>   move <state_dir>/pki aside
+                                                     (before re-enrolling)
   polarbeam-agent version                           print version and exit
 `
 
@@ -54,6 +58,8 @@ func main() {
 		err = cmdEnroll(os.Args[2:])
 	case "selfcheck":
 		err = cmdSelfcheck(os.Args[2:])
+	case "identity":
+		err = cmdIdentity(os.Args[2:])
 	case "version", "--version":
 		fmt.Println("polarbeam-agent", version.String())
 		return
@@ -94,6 +100,53 @@ func cmdEnroll(args []string) error {
 		Fingerprint:  *fingerprint,
 		ProbeAddress: *probeAddr,
 	})
+}
+
+const identityUsage = "usage: polarbeam-agent identity retire --config <file>"
+
+func cmdIdentity(args []string) error {
+	if len(args) < 1 {
+		return errors.New(identityUsage)
+	}
+	switch args[0] {
+	case "retire":
+		return cmdIdentityRetire(args[1:])
+	}
+	return errors.New(identityUsage)
+}
+
+// cmdIdentityRetire moves <state_dir>/pki aside so `enroll` can issue a
+// replacement identity (it refuses while one exists). It replaces the
+// former runbook's `rm -rf` through `--entrypoint sh`, which the
+// shell-less release image cannot run. Rename only, never delete. The
+// agent must be stopped first: the renewer writes into pki/ and there is
+// no lock to detect a running instance.
+func cmdIdentityRetire(args []string) error {
+	fs := flag.NewFlagSet("identity retire", flag.ExitOnError)
+	cfg, err := loadConfig(fs, args)
+	if err != nil {
+		return err
+	}
+	retired, err := retireIdentity(cfg.StateDir, time.Now())
+	if err != nil {
+		return err
+	}
+	fmt.Printf("identity retired: %s moved to %s\n"+
+		"next: polarbeam-agent enroll --config <file> --token … issues the replacement identity\n"+
+		"(same --probe-address as before); the spool is untouched and drains after re-enrollment.\n"+
+		"Keep the retired directory until the new identity reports on the dashboard.\n",
+		enroll.NewPKI(cfg.StateDir).Dir, retired)
+	return nil
+}
+
+// retireIdentity renames <stateDir>/pki to a timestamped sibling and
+// returns the new path.
+func retireIdentity(stateDir string, now time.Time) (string, error) {
+	retired, err := retiredir.Move(enroll.NewPKI(stateDir).Dir, now)
+	if err != nil {
+		return "", fmt.Errorf("identity retire: %w", err)
+	}
+	return retired, nil
 }
 
 // cmdSelfcheck verifies the capabilities the probers need (ICMP socket

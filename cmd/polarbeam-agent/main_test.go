@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devalexllc/polarbeam/internal/agent/config"
 	"github.com/devalexllc/polarbeam/internal/agent/probes"
@@ -106,5 +108,44 @@ func TestPreflightFatalSpoolBlocksRun(t *testing.T) {
 	}
 	if !strings.Contains(out, "spool              FAIL  cannot create "+stateDir) {
 		t.Errorf("fatal spool row missing:\n%s", out)
+	}
+}
+
+func TestRetireIdentity(t *testing.T) {
+	stamp := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	stateDir := t.TempDir()
+	pki := filepath.Join(stateDir, "pki")
+	if err := os.MkdirAll(pki, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pki, "agent.key"), []byte("k"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A sibling spool must be left alone.
+	if err := os.MkdirAll(filepath.Join(stateDir, "spool"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := retireIdentity(stateDir, stamp)
+	if err != nil {
+		t.Fatalf("retireIdentity: %v", err)
+	}
+	want := filepath.Join(stateDir, "pki.retired-20260909T120000Z")
+	if got != want {
+		t.Errorf("retired path = %s, want %s", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(got, "agent.key")); err != nil {
+		t.Errorf("agent.key missing under retired dir: %v", err)
+	}
+	if _, err := os.Stat(pki); !os.IsNotExist(err) {
+		t.Errorf("pki should be gone, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "spool")); err != nil {
+		t.Errorf("spool must be untouched: %v", err)
+	}
+
+	_, err = retireIdentity(stateDir, stamp)
+	if err == nil || !strings.Contains(err.Error(), "nothing to retire") || !strings.HasPrefix(err.Error(), "identity retire:") {
+		t.Errorf("second retire err = %v, want 'identity retire: … nothing to retire'", err)
 	}
 }
