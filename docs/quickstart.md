@@ -58,16 +58,11 @@ EOF
 
   docker compose config --quiet
   docker compose pull
-  docker compose run --rm --no-deps --user 0 --entrypoint sh \
+  docker compose run --rm --no-deps --user 0 \
     --volume "$PWD/server.crt:/in/server.crt:ro" \
     --volume "$PWD/server.key:/in/server.key:ro" \
-    server -ec '
-      cp /in/server.crt /etc/polarbeam/tls/server.crt
-      cp /in/server.key /etc/polarbeam/tls/server.key
-      chown 10001:10001 /etc/polarbeam/tls/server.crt /etc/polarbeam/tls/server.key
-      chmod 0644 /etc/polarbeam/tls/server.crt
-      chmod 0600 /etc/polarbeam/tls/server.key
-    '
+    server tls install --config /etc/polarbeam/server.yaml \
+      --cert /in/server.crt --key /in/server.key
 )
 ```
 

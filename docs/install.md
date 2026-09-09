@@ -463,21 +463,25 @@ needed it. When the two are hard to tell apart, keep both. A redundant
 certificate costs a few hundred bytes per handshake; a missing one costs
 availability.
 
-The server container runs as UID 10001. Copy the operator-managed dashboard
-certificate and key into the Compose `tls` volume and set readable ownership.
-Replace the two `/absolute/path/...` values:
+The server container runs as UID 10001. Install the operator-managed
+dashboard certificate and key into the Compose `tls` volume with the
+server's own `tls install` subcommand (the image has no shell). Replace the
+two `/absolute/path/...` values:
 
 ```sh
-docker compose run --rm --no-deps \
+docker compose run --rm --no-deps --user 0 \
   -v /absolute/path/dashboard-cert.pem:/in/cert.pem:ro \
   -v /absolute/path/dashboard-key.pem:/in/key.pem:ro \
-  --entrypoint sh --user 0 server -c \
-  'cp /in/cert.pem /etc/polarbeam/tls/server.crt && \
-   cp /in/key.pem /etc/polarbeam/tls/server.key && \
-   chown 10001:10001 /etc/polarbeam/tls/server.crt /etc/polarbeam/tls/server.key && \
-   chmod 0644 /etc/polarbeam/tls/server.crt && \
-   chmod 0600 /etc/polarbeam/tls/server.key'
+  server tls install --config /etc/polarbeam/server.yaml \
+  --cert /in/cert.pem --key /in/key.pem
 ```
+
+The command refuses a certificate and key that do not match, writes them to
+the paths named by `tls.cert_file` / `tls.key_file` as `0644` and `0600`, and
+— because it runs as root here (`--user 0`: the volume is root-owned) — hands
+both files to UID 10001. It prints the subject, SANs and expiry it installed.
+Rerunning it later with a renewed pair is the renewal procedure; the server
+reads the files only at startup, so restart it afterwards.
 
 On an SELinux-enforcing host, add the appropriate bind-mount relabel option
 for the two source files if Docker cannot read them.
@@ -1151,6 +1155,22 @@ Use **Test connection** before enabling: it runs discovery with the
 submitted values and reports the provider's endpoints, or the exact
 network/TLS error. Saving applies immediately — no restart.
 
+**Trust roots.** With the identity-provider CA field empty, IdP calls
+verify against the server image's public CA bundle
+(`/etc/ssl/certs/ca-certificates.crt`, Debian's `ca-certificates`,
+refreshed with every image release). That bundle is a default, not a
+commitment: a private-PKI provider goes in the **Identity provider CA**
+field, which replaces the system roots outright for IdP calls; a
+private-PKI database needs both parameters in `db.url`,
+`sslmode=verify-full&sslrootcert=/path/ca.pem` (the root alone does not
+enable verification — the driver's default `sslmode=prefer` skips it);
+and the whole bundle can be replaced by bind-mounting your own file over
+that path, or by setting **both** `SSL_CERT_FILE` (your bundle) and
+`SSL_CERT_DIR` (a mounted directory holding only the roots you intend, or
+an empty one — Go merges the file with every certificate directory, so
+setting the file alone still loads the shipped roots). Air-gapped sites
+that leave SSO off never use it.
+
 If you are mapping tenants, the four fields work together like this: role
 claim `groups`, admin values `polarbeam-admins`, one rule per tenant group
 (`acme-admins` → network admin on `acme`, `acme-viewers` → network viewer on
@@ -1702,13 +1722,15 @@ The cutover, on the control-plane host:
 
 2. **Retire the old CA and initialize the new one.** `ca init` refuses to
    overwrite, so move the CA directory aside inside the `server-state`
-   volume (this also retires the old auto-issued gRPC server certificate,
-   which lives in the same directory):
+   volume with `ca retire` (this also retires the old auto-issued gRPC
+   server certificate, which lives in the same directory). It renames the
+   directory to `ca.retired-<UTC timestamp>` and prints that path — note
+   it, the wrap-up step below refers to it:
 
    ```sh
    docker compose stop server
-   docker compose run --rm --entrypoint sh server \
-     -c 'mv /var/lib/polarbeam-server/ca /var/lib/polarbeam-server/ca.classical-retired'
+   docker compose run --rm server ca retire \
+     --config /etc/polarbeam/server.yaml
    docker compose run --rm server ca init \
      --config /etc/polarbeam/server.yaml
    docker compose up -d server
@@ -1812,10 +1834,11 @@ The cutover, on the control-plane host:
    deleting — removing the *new* row takes that agent's fresh identity
    with it.
 
-6. **Wrap up.** Once the fleet is healthy, the retired
-   `ca.classical-retired` directory inside the `server-state` volume can
-   be deleted; keep it until then as the rollback path (restore it over
-   `ca/` and re-enroll agents against the old fingerprints).
+6. **Wrap up.** Once the fleet is healthy, the retired directory that
+   `ca retire` printed (`ca.retired-<timestamp>`, inside the `server-state`
+   volume) can be deleted; keep it until then as the rollback path
+   (restore it over `ca/` and re-enroll agents against the old
+   fingerprints).
 
 ## Backup scope
 

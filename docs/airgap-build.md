@@ -50,11 +50,11 @@ runs with `GOPROXY=off`, `GOTOOLCHAIN=local`, and committed `vendor/`, so it
 cannot fetch Go dependencies or a replacement toolchain.
 
 Container image builds compile from vendor the same way, but are NOT
-zero-network: besides pulling the golang/alpine/nginx base images, the
-agent image's release stage installs one Alpine package (`libcap`, for
-`setcap`). Rebuilding images therefore needs registry + Alpine-mirror
-access (or an internal mirror); truly air-gapped sites consume the
-pre-built images from the release bundle instead of rebuilding.
+zero-network: besides pulling the golang/distroless/alpine/nginx base
+images, the agent image's release stage installs one Alpine package
+(`libcap`, for `setcap`). Rebuilding images therefore needs registry +
+Alpine-mirror access (or an internal mirror); truly air-gapped sites
+consume the pre-built images from the release bundle instead of rebuilding.
 `.dockerignore` trims the context but must never exclude `vendor/`,
 `internal/pb/`, or `web/dist/`.
 
@@ -83,9 +83,13 @@ A version tag (`vX.Y.Z`) triggers `.github/workflows/release.yml`:
 
 Prerequisites beyond this repository and Go 1.27.1:
 
-- Docker with the base images already present (`golang:1.27.1-alpine`,
-  `alpine:3.22`, `nginx:1.29-alpine`) and an Alpine package source for
-  `libcap` (see above). `timescale/timescaledb-ha:pg16-all` is needed to
+- Docker with the base images already present (`golang:1.27.1-alpine`;
+  `gcr.io/distroless/static-debian13:nonroot` at the digest pinned in
+  `deploy/docker/server.Dockerfile` — the server's runtime base, served
+  from gcr.io, so a second registry to mirror; `alpine:3.22` for the agent
+  release stage and the server's compose-dev `dev` stage;
+  `nginx:1.29-alpine`) and an Alpine package source for `libcap` (see
+  above). `timescale/timescaledb-ha:pg16-all` is needed to
   *run* a stack but is no longer part of any release artifact.
 
 ```sh
