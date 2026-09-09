@@ -4,10 +4,13 @@
 #   bundle  → per-arch air-gap bundles from the just-pushed images,
 #             attached to a GitHub release with SHA256SUMS
 #
-# The Go build stage cross-compiles on the build platform ($BUILDPLATFORM
-# in the Dockerfiles); QEMU only executes the agent image's tiny
-# final-stage RUNs (setcap/adduser) on the target arch. The server's
-# distroless release stage has no RUN at all.
+# Every Go build stage runs on the build platform ($BUILDPLATFORM in the
+# Dockerfiles) and cross-compiles, and no stage that targets the release
+# platform has a RUN: both distroless release stages are COPY-only (the
+# agent's file capability is written in its build stage) and the proxy is
+# a bare FROM. So the arm64 leg is pure layer assembly and needs no QEMU.
+# Adding a RUN to a base or release stage would fail here with "exec
+# format error" — keep them RUN-free.
 name: release
 
 on:
@@ -36,7 +39,8 @@ jobs:
           # release explicitly for the server too: its Dockerfile defaults to
           # release (last stage), but an explicit target survives reordering.
           - { name: server, file: deploy/docker/server.Dockerfile, target: release }
-          # release explicitly: the agent Dockerfile's default target is dev
+          # Same for the agent: release is its default too, but the dev stage
+          # exists in the same file, so name the target.
           - { name: agent, file: deploy/docker/agent.Dockerfile, target: release }
           - { name: proxy, file: deploy/docker/proxy.Dockerfile, target: "" }
     steps:
@@ -47,7 +51,6 @@ jobs:
         run: |
           echo "version=$(git describe --tags --always --dirty)" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
