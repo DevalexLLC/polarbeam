@@ -64,3 +64,12 @@ test('touch-target contract covers navigation, controls, disclosures, and row ac
   assert.match(styles, /--control-target:\s*40px/)
   assert.match(styles, /\(pointer:\s*coarse\)[^{]*\{[\s\S]*?--control-target:\s*44px/)
 })
+
+// #185: an absolutely positioned .sr-only heading inside a wide table
+// escapes its overflow clip unless the scroll container is its containing
+// block. Without position: relative here the 1px box lands past the
+// viewport edge and the whole document scrolls sideways on phones.
+test('scroll containers own their absolutely positioned descendants', () => {
+  const styles = readStyles()
+  assert.match(styles, /\.scroll-x\s*\{[^}]*position: relative;[^}]*overflow-x: auto;/)
+})

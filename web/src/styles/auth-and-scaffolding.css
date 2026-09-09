@@ -516,6 +516,10 @@ button.linklike:hover {
   color: var(--status-down);
 }
 
+/* A scroll container must own its absolutely positioned descendants (the
+   sr-only column headings in particular); otherwise they escape the
+   overflow clip and widen the document on narrow viewports (#185). */
 .scroll-x {
+  position: relative;
   overflow-x: auto;
 }
