@@ -35,6 +35,16 @@ default CodeQL setup disabled and do not replace the explicit build with
 autobuild. Its checks are advisory under the current ruleset; review
 reported alerts before merging.
 
+CI's `image-scan` is advisory and scans the actual amd64 server/agent
+release targets and proxy image from `docker-build`. Preserve all six
+required check names and the agent capability gates. Transfer images by
+successful artifact IDs so reruns cannot silently scan an older upload.
+Sequential Trivy scans share a database cache; keep OS and Go/library
+findings, including unfixed ones, and separate failed scans from zero
+findings in summaries. Keep per-image SARIF categories distinct. Scanner
+and database downloads belong only in online CI, never Make targets or
+air-gap bundles. The SHA-pinned action supplies the scanner version.
+
 After starting the stack, use `cd web && pnpm run dev` for Vite. Never run
 the base Compose file alone for development.
 

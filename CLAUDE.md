@@ -81,6 +81,13 @@ Full design + milestone plan: `docs/architecture.md`.
   and do not replace the explicit build with autobuild. Its checks are
   advisory under the current ruleset; review reported alerts before
   merging.
+- `image-scan` is advisory, like its three Trivy SARIF categories; the six
+  required checks stay unchanged. It scans the existing amd64 server/agent
+  release targets and proxy build via successful artifact IDs, preserving
+  the mandatory agent capability gates. Sequential scans share a daily DB
+  cache and include OS/Go findings; failed scans are unavailable, not clean.
+  Trivy and DB downloads are online CI only, outside the air-gap guarantee
+  proved by `offline-build`. Never add them to Make targets or bundles.
 - Regenerate protos: `make proto` — buf + protoc-gen-go{,-grpc} are pinned
   in go.mod's `tool` block and run from `vendor/`, no host tooling — and
   commit the diff under `internal/pb/` (the `offline-build` CI job
