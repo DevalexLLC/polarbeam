@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -35,6 +36,8 @@ Usage:
                              [--probe-address <host>]
                                                      enroll with the control plane
   polarbeam-agent selfcheck --config <file>         verify probe capabilities
+                                                     (run performs the same
+                                                     checks before starting)
   polarbeam-agent version                           print version and exit
 `
 
@@ -101,26 +104,46 @@ func cmdSelfcheck(args []string) error {
 	fs := flag.NewFlagSet("selfcheck", flag.ExitOnError)
 	cfg, err := loadConfig(fs, args)
 	if err != nil {
-		fmt.Printf("%-18s %-5s %v\n", "config", "FAIL", err)
-		return fmt.Errorf("selfcheck failed")
+		fmt.Printf(checkRow, "config", "FAIL", err)
+		return errSelfcheck
 	}
-	fmt.Printf("%-18s %-5s %s\n", "config", "ok", fs.Lookup("config").Value.String())
+	return preflight(os.Stdout, cfg, fs.Lookup("config").Value.String())
+}
 
-	failed := false
-	for _, c := range probes.SelfCheck(cfg.StateDir) {
+// checkRow is the selfcheck output format: name, ok/FAIL, detail.
+const checkRow = "%-18s %-5s %s\n"
+
+var errSelfcheck = errors.New("selfcheck failed")
+
+// preflight prints the config row and every selfcheck row for cfg and
+// returns errSelfcheck when a fatal check failed. `run` calls it before
+// starting so a misconfigured or capability-starved container fails loudly
+// at start instead of degrading silently — the guarantee the former shell
+// entrypoint wrapper (selfcheck && exec run) and, before it, the systemd
+// ExecStartPre provided. There is deliberately no way to skip it.
+func preflight(w io.Writer, cfg config.Config, cfgPath string) error {
+	fmt.Fprintf(w, checkRow, "config", "ok", cfgPath)
+	if !printChecks(w, probes.SelfCheck(cfg.StateDir)) {
+		return errSelfcheck
+	}
+	return nil
+}
+
+// printChecks writes one row per check and reports whether every fatal
+// check passed. Non-fatal failures print FAIL but do not block.
+func printChecks(w io.Writer, checks []probes.Check) bool {
+	ok := true
+	for _, c := range checks {
 		status := "ok"
 		if !c.OK {
 			status = "FAIL"
 			if c.Fatal {
-				failed = true
+				ok = false
 			}
 		}
-		fmt.Printf("%-18s %-5s %s\n", c.Name, status, c.Detail)
+		fmt.Fprintf(w, checkRow, c.Name, status, c.Detail)
 	}
-	if failed {
-		return fmt.Errorf("selfcheck failed")
-	}
-	return nil
+	return ok
 }
 
 func cmdRun(args []string) error {
@@ -128,6 +151,11 @@ func cmdRun(args []string) error {
 	cfg, err := loadConfig(fs, args)
 	if err != nil {
 		return err
+	}
+	// Fail-loud preflight: rows go to stdout before logging is configured,
+	// exactly as the former entrypoint wrapper printed them.
+	if err := preflight(os.Stdout, cfg, fs.Lookup("config").Value.String()); err != nil {
+		return fmt.Errorf("%w; not starting", err)
 	}
 	setupLogging(cfg.Log.Level)
 
