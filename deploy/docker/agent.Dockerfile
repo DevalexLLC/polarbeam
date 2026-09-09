@@ -64,7 +64,7 @@ RUN printf 'polarbeam:x:10001:65533::/home/polarbeam:/sbin/nologin\n' >> /out/et
 # from the bootstrap token volume. Declared before release so the default
 # target stays release. Never published; its apk step is the one image
 # build that still needs an Alpine package source.
-FROM alpine:3.22 AS dev
+FROM alpine:3.24 AS dev
 RUN apk add --no-cache iptables iproute2 \
     && adduser -S -D -H -u 10001 -s /sbin/nologin polarbeam \
     && mkdir -p /var/lib/polarbeam-agent \
