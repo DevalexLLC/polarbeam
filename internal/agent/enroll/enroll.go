@@ -85,7 +85,7 @@ func hybridCurvePreferences() []tls.CurveID {
 func Run(ctx context.Context, cfg config.Config, opts Options) error {
 	p := NewPKI(cfg.StateDir)
 	if p.Enrolled() {
-		return fmt.Errorf("already enrolled (%s exists); remove %s to re-enroll",
+		return fmt.Errorf("already enrolled (%s exists); run `polarbeam-agent identity retire --config <file>` to move %s aside before re-enrolling",
 			filepath.Join(p.Dir, certFile), p.Dir)
 	}
 	if opts.Token == "" {

@@ -1,10 +1,16 @@
 package probes
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/net/icmp"
@@ -60,6 +66,11 @@ func SelfCheck(stateDir string) []Check {
 				"path MTU probing requires a raw ICMP socket (CAP_NET_RAW) and Linux PMTU-probe socket options"),
 		},
 	)
+	// The socket rows say WHETHER raw ICMP works; this one says why not
+	// when it does not (capability granted but not effective, or absent).
+	if c, ok := capabilityCheck(); ok {
+		checks = append(checks, c)
+	}
 
 	if v6 := trySocket("udp6"); v6 == nil {
 		checks = append(checks, Check{Name: "icmp6 (datagram)", OK: true, Detail: "unprivileged datagram ICMPv6 available"})
@@ -78,9 +89,9 @@ func SelfCheck(stateDir string) []Check {
 }
 
 // identityChecks reports PKI state. Not being enrolled is OK-informational:
-// the container entrypoint runs selfcheck before `run`, and a fresh
-// deployment must be able to reach its first `enroll` without the
-// preflight refusing to explain itself.
+// `run` performs this selfcheck as its preflight, and a fresh deployment
+// must be able to reach its first `enroll` without the preflight refusing
+// to explain itself (`run` itself then refuses in uplink.New).
 func identityChecks(stateDir string, now time.Time) []Check {
 	pki := enroll.NewPKI(stateDir)
 	if !pki.Enrolled() {
@@ -177,7 +188,9 @@ func pick(ok bool, yes, no string) string {
 }
 
 // spoolCheck verifies the spool directory is creatable and writable by
-// creating and removing a probe file.
+// creating and removing a probe file, then reports what is on disk. The
+// usage figure replaces `du -sh` on the spool, which the shell-less image
+// cannot run; it is informational and never fails the check.
 func spoolCheck(stateDir string) Check {
 	dir := filepath.Join(stateDir, "spool")
 	c := Check{Name: "spool", Fatal: true}
@@ -192,6 +205,121 @@ func spoolCheck(stateDir string) Check {
 	}
 	os.Remove(probe)
 	c.OK = true
-	c.Detail = dir + " writable"
+	size, segments, err := spoolUsage(dir)
+	if err != nil {
+		c.Detail = fmt.Sprintf("%s writable; usage unknown: %v", dir, err)
+		return c
+	}
+	c.Detail = fmt.Sprintf("%s writable; %s on disk in %d segments", dir, fmtBytes(size), segments)
 	return c
+}
+
+// spoolUsage sums the regular files directly under dir (the spool is flat)
+// and counts *.seg segments. Read-only and safe beside a running agent: a
+// segment acked and deleted between ReadDir and Info is simply skipped.
+func spoolUsage(dir string) (size int64, segments int, err error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, e := range entries {
+		if !e.Type().IsRegular() {
+			continue
+		}
+		fi, err := e.Info()
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			return 0, 0, err
+		}
+		size += fi.Size()
+		if strings.HasSuffix(e.Name(), ".seg") {
+			segments++
+		}
+	}
+	return size, segments, nil
+}
+
+// fmtBytes renders a byte count in 1024-based units, one decimal from MiB up.
+func fmtBytes(n int64) string {
+	const (
+		kib = 1 << 10
+		mib = 1 << 20
+		gib = 1 << 30
+	)
+	switch {
+	case n >= gib:
+		return fmt.Sprintf("%.1f GiB", float64(n)/gib)
+	case n >= mib:
+		return fmt.Sprintf("%.1f MiB", float64(n)/mib)
+	case n >= kib:
+		return fmt.Sprintf("%d KiB", n/kib)
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
+}
+
+// capNetRaw is CAP_NET_RAW's bit index (<linux/capability.h>).
+const capNetRaw = 13
+
+// capabilityCheck reads the bounding and effective capability sets from
+// /proc/self/status and reports where NET_RAW stands. It explains a raw
+// ICMP failure that the socket rows only observe: the capability can be in
+// the bounding set yet not effective when the binary's file capability was
+// not applied (user-namespace remap, no-new-privileges, a nosuid mount).
+// The row is omitted, not failed, where /proc is unavailable. Note that a
+// container whose bounding set lacks NET_RAW normally never gets this far:
+// the kernel refuses to exec a binary whose effective file capability it
+// cannot grant.
+func capabilityCheck() (Check, bool) {
+	f, err := os.Open("/proc/self/status")
+	if err != nil {
+		return Check{}, false
+	}
+	defer f.Close()
+	bnd, eff, err := parseCapStatus(f)
+	if err != nil {
+		return Check{}, false
+	}
+	c := Check{Name: "capabilities", Fatal: false}
+	sets := fmt.Sprintf("CapBnd=%016x CapEff=%016x", bnd, eff)
+	switch {
+	case eff&(1<<capNetRaw) != 0:
+		c.OK = true
+		c.Detail = "NET_RAW effective (" + sets + ")"
+	case bnd&(1<<capNetRaw) != 0:
+		c.Detail = "NET_RAW is in the bounding set but not effective — the file capability was not applied (user-namespace remap, no-new-privileges, or a nosuid mount) (" + sets + ")"
+	default:
+		c.Detail = "NET_RAW is outside the bounding set — add --cap-add NET_RAW (" + sets + ")"
+	}
+	return c, true
+}
+
+// parseCapStatus extracts the CapBnd and CapEff hex masks from a
+// /proc/<pid>/status body.
+func parseCapStatus(r io.Reader) (bnd, eff uint64, err error) {
+	var haveBnd, haveEff bool
+	sc := bufio.NewScanner(r)
+	for sc.Scan() {
+		line := sc.Text()
+		if v, ok := strings.CutPrefix(line, "CapBnd:"); ok {
+			if bnd, err = strconv.ParseUint(strings.TrimSpace(v), 16, 64); err != nil {
+				return 0, 0, fmt.Errorf("CapBnd: %w", err)
+			}
+			haveBnd = true
+		} else if v, ok := strings.CutPrefix(line, "CapEff:"); ok {
+			if eff, err = strconv.ParseUint(strings.TrimSpace(v), 16, 64); err != nil {
+				return 0, 0, fmt.Errorf("CapEff: %w", err)
+			}
+			haveEff = true
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return 0, 0, err
+	}
+	if !haveBnd || !haveEff {
+		return 0, 0, errors.New("CapBnd/CapEff not found")
+	}
+	return bnd, eff, nil
 }

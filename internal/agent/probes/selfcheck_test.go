@@ -157,3 +157,94 @@ func TestSpoolCheckUnwritableIsFatal(t *testing.T) {
 		t.Errorf("unwritable spool dir must be fatal: %+v", c)
 	}
 }
+
+func TestSpoolCheckReportsUsage(t *testing.T) {
+	stateDir := t.TempDir()
+	dir := filepath.Join(stateDir, "spool")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]int{
+		"00000000000000000001.seg": 1500,
+		"00000000000000000002.seg": 2596,
+		"dropped":                  8,
+	}
+	for name, n := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), make([]byte, n), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := spoolCheck(stateDir)
+	if !c.OK {
+		t.Fatalf("spoolCheck failed: %+v", c)
+	}
+	// 1500+2596+8 = 4104 bytes = 4 KiB (integer KiB below MiB); 2 segments.
+	want := dir + " writable; 4 KiB on disk in 2 segments"
+	if c.Detail != want {
+		t.Errorf("detail = %q, want %q", c.Detail, want)
+	}
+	// The probe file must not linger and inflate the next reading.
+	if _, err := os.Stat(filepath.Join(dir, ".selfcheck")); !os.IsNotExist(err) {
+		t.Errorf(".selfcheck probe left behind (stat err = %v)", err)
+	}
+}
+
+func TestFmtBytes(t *testing.T) {
+	cases := []struct {
+		n    int64
+		want string
+	}{
+		{0, "0 B"},
+		{1023, "1023 B"},
+		{1024, "1 KiB"},
+		{4104, "4 KiB"},
+		{12*1024*1024 + 300*1024, "12.3 MiB"},
+		{256 * 1024 * 1024, "256.0 MiB"},
+		{3 * 1024 * 1024 * 1024 / 2, "1.5 GiB"},
+	}
+	for _, c := range cases {
+		if got := fmtBytes(c.n); got != c.want {
+			t.Errorf("fmtBytes(%d) = %q, want %q", c.n, got, c.want)
+		}
+	}
+}
+
+func TestParseCapStatus(t *testing.T) {
+	const status = "Name:\tpolarbeam-agent\nCapInh:\t0000000000000000\nCapPrm:\t0000000000002000\n" +
+		"CapEff:\t0000000000002000\nCapBnd:\t00000000a80425fb\nCapAmb:\t0000000000000000\n"
+	bnd, eff, err := parseCapStatus(strings.NewReader(status))
+	if err != nil {
+		t.Fatalf("parseCapStatus: %v", err)
+	}
+	if bnd != 0xa80425fb || eff != 0x2000 {
+		t.Errorf("bnd=%x eff=%x, want a80425fb/2000", bnd, eff)
+	}
+	if eff&(1<<capNetRaw) == 0 || bnd&(1<<capNetRaw) == 0 {
+		t.Error("NET_RAW (bit 13) must be set in both masks of the fixture")
+	}
+	if _, _, err := parseCapStatus(strings.NewReader("Name:\tx\nCapEff:\t0000000000002000\n")); err == nil {
+		t.Error("missing CapBnd must be an error")
+	}
+	if _, _, err := parseCapStatus(strings.NewReader("CapBnd:\tzz\nCapEff:\t0\n")); err == nil {
+		t.Error("non-hex mask must be an error")
+	}
+}
+
+// TestCapabilityCheckRunsHere only asserts the row is produced on Linux
+// with a consistent verdict; the bits depend on how the tests are run
+// (plain user vs. the CAP_NET_RAW CI job).
+func TestCapabilityCheckRunsHere(t *testing.T) {
+	if _, err := os.Stat("/proc/self/status"); err != nil {
+		t.Skip("no /proc/self/status")
+	}
+	c, ok := capabilityCheck()
+	if !ok {
+		t.Fatal("capabilityCheck must produce a row where /proc exists")
+	}
+	if c.Name != "capabilities" || c.Fatal {
+		t.Errorf("row = %+v, want non-fatal 'capabilities'", c)
+	}
+	if c.OK != (trySocket("ip4:icmp") == nil) && os.Geteuid() != 0 {
+		t.Errorf("capability verdict %v disagrees with raw socket availability: %s", c.OK, c.Detail)
+	}
+}
