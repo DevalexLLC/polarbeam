@@ -91,8 +91,9 @@ Prerequisites beyond this repository and Go 1.27.1:
   `gcr.io/distroless/static-debian13:nonroot` at the digest pinned
   identically in `deploy/docker/server.Dockerfile` and
   `deploy/docker/agent.Dockerfile` — the runtime base of both published Go
-  images, served from gcr.io, so a second registry to mirror; `alpine:3.22`
-  for the server's and agent's compose-dev `dev` stages only;
+  images, served from gcr.io, so a second registry to mirror; `alpine:3.24`
+  for the server's and agent's compose-dev `dev` stages, plus `alpine:3.22`
+  for the optional compose-dev `netem` sidecar;
   `nginx:1.30.4-alpine-slim` at the digest pinned in
   `deploy/docker/proxy.Dockerfile` — the *slim* official variant, which
   omits the dynamic-module packages and curl the stream-only proxy never
