@@ -369,7 +369,7 @@ func TestQueryOperationalTargetsAggregatesSortingPagingAndScope(t *testing.T) {
 		t.Errorf("port search = ids %v summary %+v", targetInventoryIDs(rows), summary)
 	}
 	filter.Query = "site-b"
-	rows, summary = query(filter)
+	_, summary = query(filter)
 	if summary.Total == 0 {
 		t.Error("probing/agent site search returned no targets")
 	}

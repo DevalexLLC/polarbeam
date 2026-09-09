@@ -2,7 +2,7 @@
 // store mutations the admin CLI performs. Reads are any-session. Writes are
 // network-scoped: a global admin writes any plane, a network_admin only its
 // own, and every handler here proves the touched resource's plane before it
-// mutates (see requireNetworkScope in httpapi.go). Changes propagate to
+// mutates (see requireNetworkScopeName in httpapi.go). Changes propagate to
 // agents without further action: the gRPC StreamConfig tick rebuilds
 // snapshots from the DB every ~30 s.
 package httpapi

@@ -13,7 +13,7 @@ import (
 var cliNetworkFields = configadmin.NetworkFields{Name: "--name"}
 
 func cmdNetwork(args []string) error {
-	const use = "usage: polarbeam-server network list|create|set|delete --config <file> ..."
+	const use = "usage: polarbeam-server network list|create|set|delete --config <file> [flags]"
 	if len(args) < 1 {
 		return errors.New(use)
 	}

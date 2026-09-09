@@ -110,10 +110,9 @@ func newHandler(sdb DB, static fs.FS, providers OIDCProviders) http.Handler {
 	// networkWrite admits the global admin AND the tenant admin. It is a
 	// gate, not a grant: every handler mounted here MUST prove the touched
 	// resource's network is in the caller's scope before it mutates
-	// anything — requireNetworkScope / requireNetworkScopeName / the
-	// store's own scope arguments — and must answer 404, never 403, when it
-	// is not, so an out-of-scope plane is indistinguishable from one that
-	// does not exist.
+	// anything — requireNetworkScopeName or the store's own scope
+	// arguments — and must answer 404, never 403, when it is not, so an
+	// out-of-scope plane is indistinguishable from one that does not exist.
 	//
 	// Deliberately a SEPARATE wrapper rather than a widening of
 	// requireRole: adminWrite's exact string compare is what keeps Users,
@@ -286,29 +285,20 @@ func scopeNames(ctx context.Context) []string {
 	return names
 }
 
-// requireNetworkScope reports whether the caller may WRITE on networkID,
-// answering the request itself when not. Global roles (nil scope) always
-// pass; a scoped caller passes only for its own planes.
+// requireNetworkScopeName resolves a network NAME to its id under the
+// caller's scope, answering the request itself when the caller may not
+// WRITE there. Global roles (nil scope) always pass; a scoped caller passes
+// only for its own planes. The scope check runs BEFORE existence resolution
+// — the same ordering pairEndpoints uses for ?network= — so an out-of-scope
+// plane and a typo produce byte-identical 404s. Resolving first would let a
+// tenant distinguish another tenant's plane from a name that was never
+// taken.
 //
 // The refusal is 404, never 403, and its wording matches the one a
 // nonexistent network produces: a tenant that could tell "forbidden" from
 // "no such thing" could enumerate the other planes on the control plane one
-// guess at a time. Every handler behind networkWrite calls this — or
-// requireNetworkScopeName — before it mutates anything.
-func (a *api) requireNetworkScope(w http.ResponseWriter, r *http.Request, networkID uuid.UUID, name string) bool {
-	scope := scopeIDs(r.Context())
-	if scope == nil || slices.Contains(scope, networkID) {
-		return true
-	}
-	writeError(w, http.StatusNotFound, fmt.Sprintf("network %q does not exist", name))
-	return false
-}
-
-// requireNetworkScopeName resolves a network NAME to its id under the
-// caller's scope. The scope check runs BEFORE existence resolution — the
-// same ordering pairEndpoints uses for ?network= — so an out-of-scope plane
-// and a typo produce byte-identical 404s. Resolving first would let a tenant
-// distinguish another tenant's plane from a name that was never taken.
+// guess at a time. Every handler behind networkWrite calls this — or passes
+// the caller's scope to the store — before it mutates anything.
 //
 // This is the only correct way for a scoped write to turn a network name
 // into an id: store.NetworkIDByName is deliberately scope-blind, so calling

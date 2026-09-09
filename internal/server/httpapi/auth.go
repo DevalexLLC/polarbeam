@@ -360,7 +360,7 @@ func requireRole(role string, next http.Handler) http.Handler {
 //
 // Admission is not authorization. A handler behind requireRoles has only
 // been told the caller MIGHT be allowed; it must still prove the touched
-// resource's network is in scope (requireNetworkScope) before mutating.
+// resource's network is in scope (requireNetworkScopeName) before mutating.
 func requireRoles(next http.Handler, roles ...string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s := sessionFrom(r.Context())
