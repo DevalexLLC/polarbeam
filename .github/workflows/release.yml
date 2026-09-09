@@ -5,8 +5,9 @@
 #             attached to a GitHub release with SHA256SUMS
 #
 # The Go build stage cross-compiles on the build platform ($BUILDPLATFORM
-# in the Dockerfiles); QEMU only executes the tiny final-stage RUNs
-# (adduser/setcap) on the target arch.
+# in the Dockerfiles); QEMU only executes the agent image's tiny
+# final-stage RUNs (setcap/adduser) on the target arch. The server's
+# distroless release stage has no RUN at all.
 name: release
 
 on:
@@ -32,7 +33,9 @@ jobs:
       max-parallel: 1
       matrix:
         include:
-          - { name: server, file: deploy/docker/server.Dockerfile, target: "" }
+          # release explicitly for the server too: its Dockerfile defaults to
+          # release (last stage), but an explicit target survives reordering.
+          - { name: server, file: deploy/docker/server.Dockerfile, target: release }
           # release explicitly: the agent Dockerfile's default target is dev
           - { name: agent, file: deploy/docker/agent.Dockerfile, target: release }
           - { name: proxy, file: deploy/docker/proxy.Dockerfile, target: "" }

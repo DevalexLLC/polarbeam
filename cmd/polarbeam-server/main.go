@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -33,6 +34,9 @@ Usage:
                                                      apply database migrations
   polarbeam-server ca init --config <file> [--algorithm mldsa65|ecdsa-p256] [--if-missing]
                                                      create the built-in CA
+  polarbeam-server ca retire --config <file>        move the CA directory aside (before a fresh ca init)
+  polarbeam-server tls install --config <file> --cert <pem> --key <pem> [--owner 10001]
+                                                     install the dashboard certificate and key
   polarbeam-server token create --config <file> --site <name> [--network <name>] [--ttl 24h] [--quiet]
                                                      issue an agent join token
   polarbeam-server site list|set --config <file> ...
@@ -67,6 +71,8 @@ func main() {
 		err = cmdMigrate(os.Args[2:])
 	case "ca":
 		err = cmdCA(os.Args[2:])
+	case "tls":
+		err = cmdTLS(os.Args[2:])
 	case "token":
 		err = cmdToken(os.Args[2:])
 	case "site":
@@ -149,15 +155,28 @@ func cmdMigrate(args []string) error {
 	return migrate.Apply(ctx, conn)
 }
 
+const caUsage = "usage: polarbeam-server ca init --config <file> [--algorithm mldsa65|ecdsa-p256] [--if-missing]\n" +
+	"       polarbeam-server ca retire --config <file>"
+
 func cmdCA(args []string) error {
-	if len(args) < 1 || args[0] != "init" {
-		return fmt.Errorf("usage: polarbeam-server ca init --config <file> [--algorithm mldsa65|ecdsa-p256] [--if-missing]")
+	if len(args) < 1 {
+		return errors.New(caUsage)
 	}
+	switch args[0] {
+	case "init":
+		return cmdCAInit(args[1:])
+	case "retire":
+		return cmdCARetire(args[1:])
+	}
+	return errors.New(caUsage)
+}
+
+func cmdCAInit(args []string) error {
 	fs := flag.NewFlagSet("ca init", flag.ExitOnError)
 	ifMissing := fs.Bool("if-missing", false, "succeed as a no-op when a CA already exists")
 	algFlag := fs.String("algorithm", string(ca.DefaultAlgorithm),
 		"CA key algorithm: mldsa65 (post-quantum, default) or ecdsa-p256 (classical)")
-	cfg, err := loadConfig(fs, args[1:])
+	cfg, err := loadConfig(fs, args)
 	if err != nil {
 		return err
 	}
@@ -178,6 +197,53 @@ func cmdCA(args []string) error {
 	fmt.Printf("CA ready in %s (algorithm %s)\nfingerprint sha256:%s\n",
 		cfg.CA.Dir, authority.Algorithm(), authority.Fingerprint())
 	return nil
+}
+
+// cmdCARetire moves the CA directory aside so `ca init` can create a
+// replacement (it refuses to overwrite). It replaces the former runbook's
+// `mv` through `--entrypoint sh`, which the shell-less release image
+// cannot run. Rename only, never delete: the retired directory is the
+// rollback path until the fleet is re-enrolled.
+func cmdCARetire(args []string) error {
+	fs := flag.NewFlagSet("ca retire", flag.ExitOnError)
+	cfg, err := loadConfig(fs, args)
+	if err != nil {
+		return err
+	}
+	retired, err := retireCA(cfg.CA.Dir, time.Now())
+	if err != nil {
+		return err
+	}
+	fmt.Printf("CA retired: %s moved to %s\n"+
+		"next: polarbeam-server ca init --config <file> creates the replacement;\n"+
+		"keep the retired directory as the rollback path until every agent is re-enrolled\n",
+		filepath.Clean(cfg.CA.Dir), retired)
+	return nil
+}
+
+// retireCA renames dir to <dir>.retired-<UTC stamp> and returns the new
+// path. dir is cleaned first: with a trailing slash the destination would
+// otherwise be computed inside the directory being moved.
+func retireCA(dir string, now time.Time) (string, error) {
+	dir = filepath.Clean(dir)
+	st, err := os.Stat(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("no CA directory at %s (nothing to retire)", dir)
+		}
+		return "", fmt.Errorf("ca retire: %w", err)
+	}
+	if !st.IsDir() {
+		return "", fmt.Errorf("ca retire: %s is not a directory", dir)
+	}
+	retired := dir + ".retired-" + now.UTC().Format("20060102T150405Z")
+	if _, err := os.Stat(retired); err == nil {
+		return "", fmt.Errorf("ca retire: %s already exists", retired)
+	}
+	if err := os.Rename(dir, retired); err != nil {
+		return "", fmt.Errorf("ca retire: %w", err)
+	}
+	return retired, nil
 }
 
 func cmdToken(args []string) error {

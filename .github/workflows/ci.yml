@@ -264,7 +264,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - { name: server, file: deploy/docker/server.Dockerfile, target: "" }
+          # release explicitly for the server too: its Dockerfile defaults to
+          # release (last stage), but an explicit target survives reordering.
+          - { name: server, file: deploy/docker/server.Dockerfile, target: release }
           # release explicitly: the agent Dockerfile's default target is dev
           - { name: agent, file: deploy/docker/agent.Dockerfile, target: release }
           - { name: proxy, file: deploy/docker/proxy.Dockerfile, target: "" }
