@@ -1,6 +1,7 @@
 // Package uplink maintains the agent's mTLS gRPC channel to the control
-// plane: the config stream (with reconnect/backoff) and, in later
-// milestones, batched result pushes and certificate renewal.
+// plane: the config stream (with reconnect/backoff), batched result pushes,
+// certificate renewal, and the reachability watchdog that exits the agent
+// when the channel stays down (see Watchdog).
 package uplink
 
 import (
@@ -10,9 +11,11 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 
@@ -44,12 +47,23 @@ type Uplink struct {
 	// scheduler wires in here at M2).
 	OnSnapshot func(*pb.ConfigSnapshot)
 
+	// FastestProbeInterval reports the shortest interval among scheduled
+	// probes able to produce OK results (0 = none); the scheduler wires in
+	// here so Watchdog can size its no-evidence budget. Set before Run.
+	FastestProbeInterval func() time.Duration
+
 	configHash string
+
+	// lastProbeOK is the unix-nanosecond time of the most recent OK probe
+	// result (0 = none yet), fed by NoteProbeOK from the scheduler sink and
+	// read by Watchdog.
+	lastProbeOK atomic.Int64
 
 	// Transport and clock seams (the gRPC stream in production, stubbed in
 	// tests — same convention as Pusher.push and Renewer.renew/now).
 	// Defaulted in New; tests build struct literals instead.
 	openStream func(ctx context.Context, hello *pb.AgentHello) (configRecv, error)
+	state      func() connectivity.State
 	now        func() time.Time
 	after      func(time.Duration) <-chan time.Time
 	jitterFn   func(time.Duration) time.Duration
@@ -68,6 +82,9 @@ func New(cfg config.Config) (*Uplink, error) {
 	u.openStream = func(ctx context.Context, hello *pb.AgentHello) (configRecv, error) {
 		return pb.NewAgentServiceClient(u.getConn()).StreamConfig(ctx, hello)
 	}
+	// Through getConn, so the watchdog follows Recycle's replacement
+	// connection after a certificate renewal.
+	u.state = func() connectivity.State { return u.getConn().GetState() }
 	return u, nil
 }
 

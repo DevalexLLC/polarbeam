@@ -36,6 +36,10 @@ type Scheduler struct {
 type worker struct {
 	specHash string
 	cancel   context.CancelFunc
+	interval time.Duration
+	// evidence is false for UNSUPPORTED/misconfigured stand-ins, whose
+	// results can never be OK and so say nothing about the network.
+	evidence bool
 }
 
 // New creates a scheduler delivering every completed result to sink (called
@@ -137,9 +141,31 @@ func (s *Scheduler) startWorkerLocked(id string, spec *pb.ProbeSpec) {
 	}
 
 	ctx, cancel := context.WithCancel(s.ctx)
-	s.workers[id] = &worker{specHash: specHash(spec), cancel: cancel}
+	_, standIn := prober.(unsupported)
+	_, misconf := prober.(misconfigured)
+	s.workers[id] = &worker{specHash: specHash(spec), cancel: cancel,
+		interval: interval, evidence: !standIn && !misconf}
 	s.wg.Add(1)
 	go s.runWorker(ctx, spec, prober, interval)
+}
+
+// FastestInterval is the shortest interval among scheduled probes that can
+// actually produce an OK result (UNSUPPORTED and misconfigured stand-ins
+// excluded), or 0 when there is none. The uplink watchdog uses it to give
+// the schedule a fair chance to prove the network works before it treats
+// the absence of any OK result as a dead container network: a probe's first
+// run is splayed across its whole interval, so "no OK in 10 minutes" means
+// nothing for an agent whose only probes run hourly.
+func (s *Scheduler) FastestInterval() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var fastest time.Duration
+	for _, w := range s.workers {
+		if w.evidence && (fastest == 0 || w.interval < fastest) {
+			fastest = w.interval
+		}
+	}
+	return fastest
 }
 
 // retire drops per-series prober state after a worker exits — unless a

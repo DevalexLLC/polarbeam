@@ -46,6 +46,15 @@ Full design + milestone plan: `docs/architecture.md`.
 - **Fail loud.** Unknown YAML keys are fatal (`internal/strictyaml`),
   preflight names every problem, spool overflow is reported to the server,
   unsupported probe types report `UNSUPPORTED` instead of being skipped.
+  The agent exits non-zero after `server.unreachable_timeout` (default 10 m,
+  minimum 2 m, `0s` disables; a bare `0` fails the load) without a Ready
+  gRPC channel and without any OK probe result (`uplink.Watchdog`; probe
+  successes prove the network works, so a control-plane-only outage never
+  restarts the agent, and the budget stretches to two intervals of the
+  fastest probe so slow-only schedules get a fair chance to report) and relies on the container restart
+  policy to rebuild its network namespace — a Podman network rebuilt under
+  a running container never regains egress in place, so the documented
+  `--restart unless-stopped` / `Restart=always` is mandatory, not optional.
 
 ## Architecture invariants
 

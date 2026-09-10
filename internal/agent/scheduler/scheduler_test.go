@@ -429,3 +429,27 @@ func TestStopTerminatesWorkers(t *testing.T) {
 		t.Error("Apply after Stop started a worker")
 	}
 }
+
+func TestFastestIntervalSkipsStandIns(t *testing.T) {
+	reg := probes.Registry{pb.ProbeType_PROBE_TYPE_TCP: &countingProber{}}
+	s := New(reg, func(*pb.ProbeResult) {})
+	defer s.Stop()
+	if got := s.FastestInterval(); got != 0 {
+		t.Fatalf("empty schedule: FastestInterval = %s, want 0", got)
+	}
+	s.Apply(&pb.ConfigSnapshot{Probes: []*pb.ProbeSpec{
+		{ProbeId: "hourly", Type: pb.ProbeType_PROBE_TYPE_TCP, Interval: durationpb.New(time.Hour)},
+		{ProbeId: "fast-unsupported", Type: pb.ProbeType_PROBE_TYPE_UNSPECIFIED, Interval: durationpb.New(time.Second)},
+		{ProbeId: "fast-misconfigured", Type: pb.ProbeType_PROBE_TYPE_TCP, Interval: durationpb.New(0)},
+	}})
+	if got := s.FastestInterval(); got != time.Hour {
+		t.Fatalf("FastestInterval = %s, want 1h (stand-ins excluded)", got)
+	}
+	s.Apply(&pb.ConfigSnapshot{Probes: []*pb.ProbeSpec{
+		{ProbeId: "hourly", Type: pb.ProbeType_PROBE_TYPE_TCP, Interval: durationpb.New(time.Hour)},
+		{ProbeId: "quick", Type: pb.ProbeType_PROBE_TYPE_TCP, Interval: durationpb.New(10 * time.Second)},
+	}})
+	if got := s.FastestInterval(); got != 10*time.Second {
+		t.Fatalf("FastestInterval = %s, want 10s", got)
+	}
+}

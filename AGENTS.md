@@ -206,4 +206,9 @@ login, and probing never depend on it.
 Package every required artifact so installation and operation remain fully
 disconnected in air-gapped environments — such sites simply leave SSO
 disabled. Treat shipped SQL migrations as immutable and never reuse
-development credentials in production.
+development credentials in production. The agent deliberately exits
+non-zero after `server.unreachable_timeout` (default 10 m, `0s` disables)
+without a reachable control plane and without any successful probe so the
+container runtime rebuilds its network namespace; deployments must keep `--restart unless-stopped` (or
+`Restart=always`) on the agent container, and docs must never present it
+as optional.

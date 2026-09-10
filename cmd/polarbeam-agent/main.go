@@ -228,7 +228,8 @@ func cmdRun(args []string) error {
 	}
 	defer up.Close()
 
-	slog.Info("polarbeam-agent starting", "version", version.String(), "server", cfg.Server.Address)
+	slog.Info("polarbeam-agent starting", "version", version.String(), "server", cfg.Server.Address,
+		"unreachable_timeout", cfg.Server.UnreachableTimeout)
 
 	// Spool-first single path: every result is written to disk, the pusher
 	// drains from there. A spool that cannot be opened is fatal — running
@@ -239,7 +240,17 @@ func cmdRun(args []string) error {
 	}
 	defer sp.Close()
 
-	sched := scheduler.New(probes.DefaultRegistry(), spoolSink(sp.Append, cancel))
+	// Every OK result is evidence the container's network works, which the
+	// reachability watchdog needs to tell a dead network from a
+	// control-plane outage (see uplink.Watchdog).
+	sink := spoolSink(sp.Append, cancel)
+	sched := scheduler.New(probes.DefaultRegistry(), func(res *pb.ProbeResult) {
+		if res.GetStatus() == pb.ProbeStatus_PROBE_STATUS_OK {
+			up.NoteProbeOK()
+		}
+		sink(res)
+	})
+	up.FastestProbeInterval = sched.FastestInterval
 	defer sched.Stop()
 	// The config cache is bound to the enrolled identity: re-enrollment
 	// (wiping only pki/) must never leave the OLD agent's schedule to
@@ -290,7 +301,7 @@ func cmdRun(args []string) error {
 
 	pusher := uplink.NewPusher(up, sp)
 	renewer := up.NewRenewer()
-	wg.Add(2)
+	wg.Add(3)
 	go func() {
 		defer wg.Done()
 		pusher.Run(ctx)
@@ -298,6 +309,17 @@ func cmdRun(args []string) error {
 	go func() {
 		defer wg.Done()
 		renewer.Run(ctx)
+	}()
+	// Reachability watchdog: a channel that stays down past
+	// server.unreachable_timeout with no probe succeeding either is fatal,
+	// exactly like an unwritable spool — the exit hands recovery to the
+	// container runtime's restart policy, which rebuilds the network
+	// namespace no in-process retry can.
+	go func() {
+		defer wg.Done()
+		if err := up.Watchdog(ctx, cfg.Server.UnreachableTimeout); err != nil {
+			cancel(err)
+		}
 	}()
 	runErr := up.Run(ctx)
 	if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, context.Canceled) {

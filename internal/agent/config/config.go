@@ -24,7 +24,19 @@ type Server struct {
 	// SNI overrides the TLS server name when it differs from the address
 	// host (the proxy routes agents by SNI, e.g. grpc.polarbeam.example).
 	SNI string `yaml:"sni"`
+	// UnreachableTimeout is how long the control plane may stay unreachable
+	// (gRPC channel not Ready) before the agent exits non-zero so the
+	// container runtime's restart policy restarts it — a running container
+	// whose network was rebuilt underneath it (Podman network reset) never
+	// regains egress in place. 0 disables. Spelled `0s` in YAML: yaml.v3
+	// rejects a bare numeric for a duration field, so `0` fails the load.
+	UnreachableTimeout time.Duration `yaml:"unreachable_timeout"`
 }
+
+// minUnreachableTimeout is the smallest enabled watchdog limit: it must
+// outlast the config stream's reconnect backoff cap (60 s) plus a short
+// proxy or server restart, or ordinary blips would restart the agent.
+const minUnreachableTimeout = 2 * time.Minute
 
 type Spool struct {
 	// MaxBytes bounds spool disk usage; overflow drops oldest segments and
@@ -41,6 +53,7 @@ type Log struct {
 // Defaults returns the configuration defaults applied before file values.
 func Defaults() Config {
 	return Config{
+		Server:   Server{UnreachableTimeout: 10 * time.Minute},
 		StateDir: "/var/lib/polarbeam-agent",
 		Spool: Spool{
 			MaxBytes: 256 << 20, // 256 MiB
@@ -66,6 +79,10 @@ func (c Config) validate() error {
 	var errs []error
 	if c.Server.Address == "" {
 		errs = append(errs, errors.New("server.address is required"))
+	}
+	if t := c.Server.UnreachableTimeout; t != 0 && t < minUnreachableTimeout {
+		errs = append(errs, fmt.Errorf("server.unreachable_timeout must be 0s (disabled) or at least %s, got %s",
+			minUnreachableTimeout, t))
 	}
 	if c.StateDir == "" {
 		errs = append(errs, errors.New("state_dir must not be empty"))
