@@ -228,7 +228,7 @@ browsers ──HTTPS────▶ │ nginx     │  SNI: lh.example ───
 
 ## Milestones
 
-**M0 — Scaffolding (~½ wk).** go.mod, Makefile (`build test lint proto web vendor up down seed`), buf config, empty mains, compose file with `timescale/timescaledb-ha:pg16-all`, strict-YAML loaders + preflight stubs, CONTRIBUTING.md (Conventional Commits).
+**M0 — Scaffolding (~½ wk).** go.mod, Makefile (`build test lint proto web vendor up down seed`), buf config, empty mains, compose file with `timescale/timescaledb-ha:pg18`, strict-YAML loaders + preflight stubs, CONTRIBUTING.md (Conventional Commits).
 *Verify:* `make build` emits both binaries; `make up` starts Timescale; bad YAML key → non-zero exit naming the key.
 
 **M1 — Proto, CA, enrollment, mTLS session (1–2 wk).** protos + committed pb, `ca`, `grpcapi`, `store`, migrations (sites/agents/join_tokens/certificates), agent `enroll`+`uplink`, StreamConfig registering hellos.

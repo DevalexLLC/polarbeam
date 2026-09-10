@@ -137,7 +137,7 @@ export POLARBEAM_VERSION=<version>
 docker pull ghcr.io/devalexllc/polarbeam-server:${POLARBEAM_VERSION}
 docker pull ghcr.io/devalexllc/polarbeam-proxy:${POLARBEAM_VERSION}
 docker pull ghcr.io/devalexllc/polarbeam-agent:${POLARBEAM_VERSION}
-docker pull timescale/timescaledb-ha:pg16-all
+docker pull timescale/timescaledb-ha:pg18
 ```
 
 The agent image is pulled here even though it is not a control-plane Compose
@@ -161,15 +161,16 @@ tar xzf polarbeam-<version>-<arch>-bundle.tar.gz
 docker pull --platform linux/<arch> \
   "$(cat polarbeam-<version>-<arch>-bundle/TIMESCALEDB-IMAGE)"
 docker tag "$(cat polarbeam-<version>-<arch>-bundle/TIMESCALEDB-IMAGE)" \
-  timescale/timescaledb-ha:pg16-all
-docker save -o timescaledb-<arch>.tar timescale/timescaledb-ha:pg16-all
+  timescale/timescaledb-ha:pg18
+docker save -o timescaledb-<arch>.tar timescale/timescaledb-ha:pg18
 ```
 
 The tag step matters: a by-digest pull leaves the image untagged, and the
 Compose file references the tag — saving the tagged image means the load on
 the offline host restores a tag that points at exactly the pinned bytes. The
-digest changes rarely, so upgrades usually reuse the copy you already
-transferred (compare `TIMESCALEDB-IMAGE` across bundles).
+saved archive is about 2.3 GB. The digest changes rarely, so upgrades
+usually reuse the copy you already transferred (compare `TIMESCALEDB-IMAGE`
+across bundles).
 
 Transfer both files to the control-plane host, then extract and verify the
 bundle and load all images:
@@ -1375,6 +1376,22 @@ proxy is restarted. Always follow a server recreate with
 `docker compose restart proxy`. The upgrade procedure below recreates
 both services together, which has the same effect.
 
+### Database container exits with "database files are incompatible with server"
+
+```sh
+docker compose logs --tail=20 timescaledb
+```
+
+A `FATAL: database files are incompatible with server` line (with the data
+directory's version and the server's version) means the `dbdata` volume was
+initialized by an older PostgreSQL major version than the image now
+running — typically a pg16 volume under the `pg18` image after `docker
+compose pull` and `up -d` across the release that changed the database
+image. Nothing is damaged: the server refuses to touch the directory. Put
+the previous compose file back and start the old image again, then follow
+[Upgrading across a database major version](#upgrading-across-a-database-major-version-pg16-to-pg18),
+which carries the data across with a dump and restore.
+
 ### Agents connect but mesh results are absent or target the proxy
 
 First check the network dimension: a mesh pairs only agents on its own
@@ -1512,6 +1529,15 @@ Read the release notes before starting: a release may add required
 proxy and server must agree on). Apply such config edits before the final
 recreate step so the new containers start against a matching configuration.
 
+One release is different: the one that moved the database image from
+`timescale/timescaledb-ha:pg16-all` to `timescale/timescaledb-ha:pg18`
+changed the PostgreSQL major version under the `dbdata` volume, and the
+steps below cannot carry data across that boundary. For that release follow
+[Upgrading across a database major version](#upgrading-across-a-database-major-version-pg16-to-pg18)
+instead — it replaces the compose file and edits `.env` itself, and its
+rollback depends on copies taken before anything is changed, so do not
+start with step 2 below.
+
 Work from the compose directory on the control-plane host:
 
 1. **Back up the database** (see [Backup scope](#backup-scope)). The
@@ -1586,6 +1612,391 @@ Work from the compose directory on the control-plane host:
    **Agents** page shows agents reconnecting (they retry on their own —
    no agent-side action is needed for a control-plane upgrade), and
    `docker compose logs --tail=50 server` is free of errors.
+
+### Upgrading across a database major version (pg16 to pg18)
+
+The release that moved the database image from
+`timescale/timescaledb-ha:pg16-all` to `timescale/timescaledb-ha:pg18`
+changed the PostgreSQL major version underneath the `dbdata` volume. A
+PostgreSQL data directory is specific to its major version: the pg18 image
+started against a pg16 volume refuses with
+`FATAL: database files are incompatible with server`, and no in-place
+conversion happens. Data crosses the boundary with a logical dump and
+restore, which is the procedure below. It replaces the live-upgrade steps
+for that one release; every later upgrade is a normal live upgrade again.
+
+The procedure is deliberately fail-fast. Check the exit status of every
+command. If any command fails, or any check does not show the expected
+result, **stop and go to the rollback step** — do not continue. Nothing is
+deleted until its replacement has been verified, so a rollback from any
+point recovers the original database.
+
+Expect downtime: the dump and the restore each read or write the whole
+database, and the raw results hypertable (bounded by its 14-day retention)
+dominates. Agents keep probing throughout and spool results locally, but a
+spool holds at most `spool.max_bytes` (256 MiB by default) before the
+oldest results are dropped, so a window of many hours on a busy fleet loses
+the earliest measurements. Free disk on the control-plane host must cover
+the dump file plus a second copy of the `dbdata` volume.
+
+1. **Preconditions.** The installation must be running **v0.10.0**, the
+   last release on the pg16 image, with a healthy server:
+
+   ```sh
+   grep POLARBEAM_VERSION .env
+   docker compose ps
+   ```
+
+   Older installations first follow the normal
+   [live upgrade](#control-plane-live-upgrade) to v0.10.0. That is what
+   pins the schema to a known state: a server only serves when no
+   migration is pending, so a healthy v0.10.0 server proves the migration
+   ledger is complete, and the restored database needs exactly the new
+   release's migrations and nothing older.
+
+   Back up all volumes and configuration as described in
+   [Backup scope](#backup-scope). Then copy the running configuration
+   aside — the rollback step relies on these copies:
+
+   ```sh
+   cp docker-compose.yml docker-compose.pg16.yml
+   cp .env .env.pg16
+   ```
+
+   Obtain the new release's `docker-compose.yml` (from the bundle, or the
+   repository at the release tag) but do **not** replace the running copy
+   yet, and do not edit `.env` yet. `POLARBEAM_VERSION` controls only the
+   PolarBEAM images; the database image is a literal line in the compose
+   file, which is why the file itself changes in this upgrade.
+
+   Note the compose project name: the shipped compose file sets
+   `name: polarbeam`, so unless you changed that, the project is
+   `polarbeam` and the database volume is `polarbeam_dbdata` regardless of
+   the installation directory (`docker compose ls` and `docker volume ls`
+   show the actual names). It is written `<project>` below. Getting it
+   wrong is not caught by Docker: a `-v` mount of a volume that does not
+   exist silently creates an empty one, which is why step 5 checks the
+   volume exists before copying it.
+
+2. **Stage the images** (no downtime). Online:
+
+   ```sh
+   docker pull timescale/timescaledb-ha:pg18
+   docker pull ghcr.io/devalexllc/polarbeam-server:<new-version>
+   docker pull ghcr.io/devalexllc/polarbeam-proxy:<new-version>
+   ```
+
+   Offline: load the new bundle's image archive and the separately
+   transferred pg18 database image as in
+   [section 2](#offline-installation) (the bundle's `TIMESCALEDB-IMAGE`
+   names the new digest, and the retag step now uses the `pg18` tag).
+   Either way, confirm the database image is present before continuing:
+
+   ```sh
+   docker image inspect timescale/timescaledb-ha:pg18 >/dev/null && echo ok
+   ```
+
+3. **Record the source extension versions and prove the target can
+   install them** (no downtime). A logical restore requires the same
+   TimescaleDB extension version on both sides, and the Toolkit is matched
+   the same way. Read the versions the running database has:
+
+   ```sh
+   docker compose exec timescaledb psql -X -U polarbeam -d polarbeam -Atc \
+     "SELECT extname, extversion FROM pg_extension
+      WHERE extname IN ('timescaledb', 'timescaledb_toolkit')"
+   ```
+
+   Then prove that the pg18 image can install exactly those versions, in a
+   disposable container on an empty volume. The first-start scripts of the
+   image create both extensions at their newest versions, so the check
+   drops them and recreates them at the recorded versions — the same
+   sequence step 7 performs on the real target. Substitute the two
+   versions from the query above:
+
+   ```sh
+   docker run -d --name pb-pg18-check -e POSTGRES_PASSWORD=check \
+     timescale/timescaledb-ha:pg18
+   # Repeat until it prints 2 (the initial server has no TCP listener, so
+   # this only succeeds once the final server is up with both extensions):
+   docker exec pb-pg18-check psql -X -h 127.0.0.1 -U postgres -Atc \
+     "SELECT count(*) FROM pg_extension WHERE extname IN ('timescaledb', 'timescaledb_toolkit')"
+   docker exec pb-pg18-check psql -X -U postgres -Atc \
+     "SELECT name, version FROM pg_available_extension_versions
+      WHERE (name, version) IN (('timescaledb', '<source ts>'), ('timescaledb_toolkit', '<source toolkit>'))"
+   docker exec pb-pg18-check psql -X -U postgres -c \
+     "DROP EXTENSION timescaledb_toolkit; DROP EXTENSION timescaledb CASCADE"
+   docker exec pb-pg18-check psql -X -U postgres -c \
+     "CREATE EXTENSION timescaledb VERSION '<source ts>'"
+   docker exec pb-pg18-check psql -X -U postgres -c \
+     "CREATE EXTENSION timescaledb_toolkit VERSION '<source toolkit>'"
+   docker exec pb-pg18-check psql -X -U postgres -Atc \
+     "SELECT extname, extversion FROM pg_extension
+      WHERE extname IN ('timescaledb', 'timescaledb_toolkit')"
+   docker rm -f pb-pg18-check
+   ```
+
+   The availability query must print both rows and the final query must
+   print the recorded versions. If a version is missing, update it on the
+   running pg16 database first — each `ALTER EXTENSION` must be the first
+   statement of a fresh session — then re-read the versions and repeat the
+   disposable check:
+
+   ```sh
+   docker compose exec timescaledb psql -X -U polarbeam -d polarbeam -c "ALTER EXTENSION timescaledb UPDATE"
+   docker compose exec timescaledb psql -X -U polarbeam -d polarbeam -c "ALTER EXTENSION timescaledb_toolkit UPDATE"
+   ```
+
+   If the pg16 image on the host cannot reach a version the pg18 image
+   provides, stop here; the installation needs a newer pg16 image before
+   this upgrade can proceed.
+
+4. **Downtime begins: pause the policies and dump.** Stop the server and
+   proxy; agents keep probing and spool locally. Leave the database
+   running. Record each policy job's schedule state and pause them all so
+   refresh and retention cannot change the data between the baseline count
+   and the dump:
+
+   ```sh
+   umask 077
+   docker compose stop server proxy
+   docker compose exec -T timescaledb psql -X -U polarbeam -d polarbeam -Atc \
+     "SELECT job_id, scheduled::text FROM timescaledb_information.jobs
+      WHERE proc_name IN ('policy_refresh_continuous_aggregate', 'policy_retention')
+      ORDER BY job_id" > jobs-pg16.txt \
+     && [ -s jobs-pg16.txt ] && cat jobs-pg16.txt
+   ```
+
+   `umask 077` makes every file this procedure writes owner-only for the
+   rest of the shell session. The dump is a complete copy of the database,
+   including credential hashes and any OIDC client secret, so it must not
+   be world-readable; if a dump from an earlier attempt already exists,
+   remove it first (`rm -f polarbeam-pg16.dump`) rather than overwriting
+   it in place with its old permissions.
+
+   Continue only if that printed the job list (an empty file means the
+   query failed, and nothing has been paused). Then pause the jobs and wait
+   until no policy run is in flight:
+
+   ```sh
+   docker compose exec timescaledb psql -X -U polarbeam -d polarbeam -c \
+     "SELECT alter_job(job_id, scheduled => false) FROM timescaledb_information.jobs
+      WHERE proc_name IN ('policy_refresh_continuous_aggregate', 'policy_retention')"
+   # Repeat until it prints 0:
+   docker compose exec timescaledb psql -X -U polarbeam -d polarbeam -Atc \
+     "SELECT count(*) FROM pg_stat_activity
+      WHERE application_name IN (SELECT application_name FROM timescaledb_information.jobs
+        WHERE proc_name IN ('policy_refresh_continuous_aggregate', 'policy_retention'))"
+   ```
+
+   A policy's background worker reports the job's own `application_name`
+   (for example `Retention Policy [1002]`), which is what the wait query
+   matches on.
+
+   Record the inventory the acceptance check compares against, then dump
+   with the running database's own client and confirm the archive is
+   readable before anything else is touched:
+
+   ```sh
+   docker compose exec -T timescaledb psql -X -U polarbeam -d polarbeam -Atc \
+     "SELECT 'probe_results', count(*) FROM probe_results
+      UNION ALL SELECT 'sites', count(*) FROM sites
+      UNION ALL SELECT 'agents', count(*) FROM agents
+      UNION ALL SELECT 'users', count(*) FROM users
+      UNION ALL SELECT 'schema_migrations', count(*) FROM schema_migrations
+      UNION ALL SELECT 'hypertables', count(*) FROM timescaledb_information.hypertables
+      UNION ALL SELECT 'caggs', count(*) FROM timescaledb_information.continuous_aggregates
+      UNION ALL SELECT 'jobs', count(*) FROM timescaledb_information.jobs
+        WHERE proc_name IN ('policy_refresh_continuous_aggregate', 'policy_retention')" > counts-pg16.txt \
+     && [ -s counts-pg16.txt ] && cat counts-pg16.txt
+   docker compose exec -T timescaledb pg_dump -U polarbeam -Fc polarbeam > polarbeam-pg16.dump
+   docker run --rm -i timescale/timescaledb-ha:pg18 pg_restore --list < polarbeam-pg16.dump > /dev/null && echo dump-ok
+   ```
+
+   Both inventory commands write straight to a file and then test that the
+   file is non-empty (piping through `tee` would hide a failed query
+   behind `tee`'s own success). `pg_dump` prints one expected warning,
+   `there are circular foreign-key constraints on this table:
+   continuous_agg`, about TimescaleDB's own catalog; it is harmless for a
+   full dump, and the restore below completes without it mattering. Any
+   other `pg_dump` error, or a non-zero exit, is a failed step. The
+   `pg_restore --list` pass must print `dump-ok`.
+
+5. **Preserve the pg16 volume, then retire it.** Stop the database, copy
+   its volume to a new one, verify the copy byte for byte, and only then
+   remove the live volume so the pg18 image initializes a fresh cluster on
+   the next start. The copy runs inside the pg18 image itself (it carries a
+   shell and coreutils, so an offline host needs no extra image) as root:
+   the image's default user is `postgres` (uid 1000) and a new volume is
+   root-owned, and root's `cp -a` preserves the uid 1000 ownership the
+   database files need.
+
+   The copy must land in an empty volume: if a `<project>_dbdata_pg16`
+   volume is left over from an earlier attempt, remove it first, because
+   `cp -a` into a non-empty volume merges and leaves stale files behind
+   that the `diff` then reports.
+
+   ```sh
+   docker compose stop timescaledb
+   docker compose rm -f timescaledb
+   docker volume inspect <project>_dbdata >/dev/null && echo source-volume-ok
+   docker volume inspect <project>_dbdata_pg16 >/dev/null 2>&1 && docker volume rm <project>_dbdata_pg16
+   docker volume create <project>_dbdata_pg16
+   docker run --rm --user 0 --entrypoint cp \
+     -v <project>_dbdata:/from:ro -v <project>_dbdata_pg16:/to \
+     timescale/timescaledb-ha:pg18 -a /from/. /to/
+   docker run --rm --user 0 --entrypoint diff \
+     -v <project>_dbdata:/from:ro -v <project>_dbdata_pg16:/to:ro \
+     timescale/timescaledb-ha:pg18 -r /from /to && echo copy-ok
+   docker volume rm <project>_dbdata
+   ```
+
+   Continue past the first line only if it printed `source-volume-ok` (a
+   wrong `<project>` fails there instead of copying an empty volume), and
+   remove the volume only after `copy-ok`. Up to this point the original
+   database is intact and the first rollback branch below simply restarts
+   it.
+
+6. **Switch to the new compose file and start the empty database.** Put
+   the new release's `docker-compose.yml` in place, set `POLARBEAM_VERSION`
+   in `.env` to the new release, and start only the database service. Its
+   first start creates the `polarbeam` role and database from `.env`, with
+   the same password as before.
+
+   ```sh
+   cp <path-to-new>/docker-compose.yml docker-compose.yml
+   # .env: POLARBEAM_VERSION=v<new-version>
+   docker compose up -d --wait timescaledb
+   # Repeat until it prints 2:
+   docker compose exec timescaledb psql -X -h 127.0.0.1 -U polarbeam -d polarbeam -Atc \
+     "SELECT count(*) FROM pg_extension WHERE extname IN ('timescaledb', 'timescaledb_toolkit')"
+   ```
+
+   `--wait` returns on the `pg_isready` health check, which the temporary
+   initialization server can also satisfy over the socket; the TCP query
+   succeeds only against the final server, once initialization has
+   created both extensions. In practice the first query usually already
+   prints `2`; the loop is the guarantee, not an expected wait.
+
+7. **Match the extension versions, then restore.** The fresh database has
+   both extensions at the image's newest versions. Replace them with the
+   versions recorded in step 3, each `CREATE` in its own session so the
+   loader picks the requested library, verify the versions match the
+   record, and restore. `pg_restore` must run without `-j` (parallel
+   restore does not restore the TimescaleDB catalog correctly) and stops at
+   the first error:
+
+   ```sh
+   docker compose exec timescaledb psql -X -U polarbeam -d polarbeam -c \
+     "DROP EXTENSION timescaledb_toolkit; DROP EXTENSION timescaledb CASCADE"
+   docker compose exec timescaledb psql -X -U polarbeam -d polarbeam -c \
+     "CREATE EXTENSION timescaledb VERSION '<source ts>'"
+   docker compose exec timescaledb psql -X -U polarbeam -d polarbeam -c \
+     "CREATE EXTENSION timescaledb_toolkit VERSION '<source toolkit>'"
+   docker compose exec timescaledb psql -X -U polarbeam -d polarbeam -Atc \
+     "SELECT extname, extversion FROM pg_extension
+      WHERE extname IN ('timescaledb', 'timescaledb_toolkit')"
+   docker compose exec timescaledb psql -X -U polarbeam -d polarbeam -c "SELECT timescaledb_pre_restore()"
+   docker compose exec -T timescaledb pg_restore -U polarbeam -d polarbeam \
+     --exit-on-error --no-owner --no-privileges -Fc < polarbeam-pg16.dump && echo restore-ok
+   docker compose exec timescaledb psql -X -U polarbeam -d polarbeam -c "SELECT timescaledb_post_restore()"
+   ```
+
+   The version query must print exactly the step-3 values before the
+   restore starts, and the restore must print `restore-ok`. A clean
+   restore prints nothing else (the pre-created extensions do not conflict:
+   the dump creates them with `IF NOT EXISTS`). A restore that stopped on
+   an error leaves a partial database: go to the second rollback branch.
+
+8. **Update the extensions and statistics.** TimescaleDB refuses to update
+   once its old library is loaded in a session, so each `ALTER EXTENSION`
+   runs as the first statement of its own session:
+
+   ```sh
+   docker compose exec timescaledb psql -X -U polarbeam -d polarbeam -c "ALTER EXTENSION timescaledb UPDATE"
+   docker compose exec timescaledb psql -X -U polarbeam -d polarbeam -c "ALTER EXTENSION timescaledb_toolkit UPDATE"
+   docker compose exec timescaledb psql -X -U polarbeam -d polarbeam -c "ANALYZE"
+   ```
+
+9. **Accept or roll back.** Re-run the step-4 inventory query into a
+   second file and compare. The restored database must have exactly what
+   the source had — the comparison is against your own record, not against
+   fixed numbers:
+
+   ```sh
+   docker compose exec -T timescaledb psql -X -U polarbeam -d polarbeam -Atc \
+     "<the same inventory query as in step 4>" > counts-pg18.txt
+   diff counts-pg16.txt counts-pg18.txt && echo inventory-ok
+   ```
+
+   Any difference means rollback. On `inventory-ok`, put each policy job
+   back to the schedule state it had before step 4 — a policy that was
+   deliberately disabled before the upgrade stays disabled — and confirm
+   the result matches the record:
+
+   ```sh
+   while IFS='|' read -r id sched; do
+     docker compose exec -T timescaledb psql -X -U polarbeam -d polarbeam -c \
+       "SELECT alter_job($id, scheduled => '$sched'::boolean)" < /dev/null
+   done < jobs-pg16.txt
+   docker compose exec -T timescaledb psql -X -U polarbeam -d polarbeam -Atc \
+     "SELECT job_id, scheduled::text FROM timescaledb_information.jobs
+      WHERE proc_name IN ('policy_refresh_continuous_aggregate', 'policy_retention')
+      ORDER BY job_id" > jobs-pg18.txt
+   diff jobs-pg16.txt jobs-pg18.txt && echo jobs-ok
+   ```
+
+   Job ids are catalog data and survive the dump unchanged. The
+   `< /dev/null` matters: `docker compose exec` forwards its standard input
+   by default and would otherwise swallow the remaining lines of the loop.
+
+10. **Finish as a normal upgrade.** Continue with steps 4 to 6 of the
+    [live upgrade](#control-plane-live-upgrade): `migrate` applies every
+    migration file the restored ledger does not list — because step 1
+    required v0.10.0, that is the new release's own migrations, possibly
+    none, and it prints each one it applies. A failing `migrate` is a
+    failed step: use the second rollback branch. Then `docker compose up
+    -d` and verify. Keep `polarbeam-pg16.dump`, `docker-compose.pg16.yml`,
+    `.env.pg16`, and the `<project>_dbdata_pg16` volume until the upgraded
+    system has been verified end to end, and longer if in doubt; remove
+    them afterwards (`docker volume rm <project>_dbdata_pg16`).
+
+11. **Rollback.** Which branch applies depends on whether the original
+    volume still exists:
+
+    - **Failed at or before the `docker volume rm` in step 5** — the
+      original `<project>_dbdata` volume is intact. Do **not** copy
+      anything back. If the compose file or `.env` was already replaced,
+      restore the copies (`cp docker-compose.pg16.yml docker-compose.yml`
+      and `cp .env.pg16 .env`), start the old stack (`docker compose up
+      -d`), restore the job schedule states with the loop from step 9 (the
+      jobs are still paused from step 4), and remove the
+      `<project>_dbdata_pg16` copy if one was created.
+    - **Failed after the original volume was removed** (steps 6 to 10,
+      including a failed `migrate`) — the verified `<project>_dbdata_pg16`
+      copy is the source of truth:
+
+      ```sh
+      docker compose down
+      cp docker-compose.pg16.yml docker-compose.yml
+      cp .env.pg16 .env
+      docker volume inspect <project>_dbdata >/dev/null 2>&1 && docker volume rm <project>_dbdata
+      docker volume create <project>_dbdata
+      docker run --rm --user 0 --entrypoint cp \
+        -v <project>_dbdata_pg16:/from:ro -v <project>_dbdata:/to \
+        timescale/timescaledb-ha:pg18 -a /from/. /to/
+      docker run --rm --user 0 --entrypoint diff \
+        -v <project>_dbdata_pg16:/from:ro -v <project>_dbdata:/to:ro \
+        timescale/timescaledb-ha:pg18 -r /from /to && echo copy-ok
+      docker compose up -d
+      ```
+
+      The conditional removal covers a failure in step 6 before Compose
+      created the replacement volume. Then restore the job schedule states
+      with the loop from step 9. The pg16 stack is back exactly as it was
+      before step 5, and the procedure can be retried from step 4 after
+      the cause is understood (step 5 replaces the leftover
+      `<project>_dbdata_pg16` copy with a fresh one).
 
 ### Agents
 
@@ -1891,6 +2302,11 @@ volumes **and** the installation directory's configuration:
   (`POSTGRES_PASSWORD` only applies on first initialization), so without the
   original `.env`/`server.yaml` the server cannot reconnect after a restore
   short of manual database recovery
+
+A volume copy restores only onto the same PostgreSQL major version it was
+taken from. Moving data to a newer major version (for example the pg16 to
+pg18 change) needs a logical dump instead; see
+[Upgrading across a database major version](#upgrading-across-a-database-major-version-pg16-to-pg18).
 
 Protect the database, CA, and configuration secrets as one security
 boundary. Restoring the database without the matching built-in CA, or the CA

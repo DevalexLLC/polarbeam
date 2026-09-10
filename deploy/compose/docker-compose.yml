@@ -42,7 +42,7 @@ services:
         condition: service_healthy
 
   timescaledb:
-    image: timescale/timescaledb-ha:pg16-all
+    image: timescale/timescaledb-ha:pg18
     restart: unless-stopped
     environment:
       POSTGRES_DB: polarbeam

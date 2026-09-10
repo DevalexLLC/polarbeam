@@ -109,7 +109,7 @@ Prerequisites beyond this repository and Go 1.27.1:
   loads, so stage that one rather than the full `-alpine` image). Building
   the agent's `dev` stage additionally needs an Alpine package source (see
   above); the published images need none.
-  `timescale/timescaledb-ha:pg16-all` is needed to *run* a stack but is no
+  `timescale/timescaledb-ha:pg18` is needed to *run* a stack but is no
   longer part of any release artifact.
 
 ```sh
