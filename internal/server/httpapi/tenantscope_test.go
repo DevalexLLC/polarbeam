@@ -87,6 +87,7 @@ var routeDispositions = map[string]string{
 	"GET /api/v1/auth/me":                   "session",
 	"PUT /api/v1/auth/password":             "session",
 	"GET /api/v1/sites":                     "session",
+	"GET /api/v1/sites/scores":              "session",
 	"GET /api/v1/agents":                    "session",
 	"GET /api/v1/agents/health":             "session",
 	"GET /api/v1/agents/{id}/health":        "session",
@@ -309,6 +310,7 @@ func TestScopedReadsPassScope(t *testing.T) {
 		method string // recorded fake method name
 	}{
 		{"/api/v1/sites", "ListSites"},
+		{"/api/v1/sites/scores", "SiteScores"},
 		{"/api/v1/agents", "ListAgents"},
 		{"/api/v1/agents?q=edge", "QueryAgents"},
 		{"/api/v1/agents/health", "AgentHealthSeries"},

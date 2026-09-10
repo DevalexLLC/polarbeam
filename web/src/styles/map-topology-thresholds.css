@@ -366,6 +366,38 @@ button.map-marker {
   font-weight: 500;
 }
 
+/* Month-to-date score rows: label left, tabular value right. The tone
+   classes (stat-warning / stat-critical > strong) come from the stat tiles
+   in workspace.css, so no new color tokens are introduced here. */
+.map-tip-scores {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.15rem 0.6rem;
+  margin-top: 0.4rem;
+}
+
+.map-tip-score {
+  display: contents;
+}
+
+.map-tip-score > span {
+  color: var(--ink-2);
+  font-size: 0.75rem;
+}
+
+.map-tip-score > strong {
+  font-size: 0.85rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.map-tip-score > strong small {
+  color: var(--ink-3);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
 .map-tip-bar {
   display: flex;
   gap: 2px;

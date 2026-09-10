@@ -7,6 +7,7 @@ import { fmtAgo } from '../format'
 import { matchesNetworkFilter, useNetworkFilter } from '../networkFilter'
 import { inheritRouteNetwork } from '../routeState'
 import { agentIsLive, ratioStatus } from '../siteHealth'
+import { SITE_SCORES_POLL_MS, siteScoresPath } from '../siteScores'
 import { buildSiteTopology, topologyUrgentSites } from '../siteTopology'
 import { buildThresholdResolver, cellSeverity } from '../severity'
 import { resolveTopologyMode } from '../topologyMode'
@@ -20,6 +21,7 @@ import type {
   OutageEvent,
   OutagesResponse,
   SettingsResponse,
+  SiteScoresResponse,
 } from '../types'
 
 const NARROW_TOPOLOGY = '(max-width: 640px)'
@@ -118,6 +120,27 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
   const settings = data?.settings ?? null
   const health = data?.health ?? null
 
+  // Month-to-date site scores for the map card ride their own, slower
+  // poll, keyed on the plane so the filter narrows them server-side.
+  // resetOnChange drops the previous plane's tallies the moment the filter
+  // moves, and the loadedKey gate below keeps a slow or failed request for
+  // the new plane from ever leaving the old plane's percentages on a card
+  // whose topology is already filtered.
+  const scoresPath = siteScoresPath(netFilter)
+  const {
+    data: scoresData,
+    error: scoresError,
+    loadedKey: scoresLoadedKey,
+    reload: reloadScores,
+  } = usePolledResource(() => apiGet<SiteScoresResponse>(scoresPath), {
+    pollMs: SITE_SCORES_POLL_MS,
+    key: scoresPath,
+    resetOnChange: true,
+    onAuthError,
+    logLabel: 'site scores',
+  })
+  const scores = scoresLoadedKey === scoresPath ? scoresData : null
+
   const resolveThresholds = useMemo(() => buildThresholdResolver(settings), [settings])
   // With a plane selected, each cell narrows to its sub-cell (same fields,
   // folded server-side at (src, dst, network)). A pair with no sub-cell on
@@ -193,7 +216,14 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
         </div>
         <div className="page-actions">
           <span className="freshness">Updated {fmtAgo(updatedAt?.toISOString() ?? null)}</span>
-          <button className="secondary-button" disabled={refreshing} onClick={() => void reload()}>
+          <button
+            className="secondary-button"
+            disabled={refreshing}
+            onClick={() => {
+              void reload()
+              void reloadScores()
+            }}
+          >
             {refreshing ? 'Refreshing…' : 'Refresh'}
           </button>
         </div>
@@ -267,6 +297,8 @@ export default function Overview({ onAuthError }: { onAuthError: (err: unknown) 
           cells={shownCells}
           thresholds={resolveThresholds}
           topology={siteTopology}
+          scores={scores}
+          scoresError={scoresError}
           mode={connMode}
           onModeChange={setTopology}
         />

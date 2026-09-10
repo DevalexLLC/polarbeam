@@ -473,6 +473,7 @@ func TestTenantScopeEndToEnd(t *testing.T) {
 		markers := []string{"tenant-b", "site-b1", "site-b2", env.agentB.String(), env.extB.String()}
 		for _, path := range []string{
 			"/api/v1/sites",
+			"/api/v1/sites/scores",
 			"/api/v1/matrix",
 			"/api/v1/outages",
 			"/api/v1/path-events",

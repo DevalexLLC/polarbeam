@@ -100,6 +100,25 @@ export interface AgentHealthResponse {
   agents: AgentHealth[]
 }
 
+// GET /api/v1/sites/scores — one row per visible site with month-to-date
+// sample tallies (UTC calendar month). Counts, not ratios: availability is
+// ok_samples / samples and performance is healthy_ok_samples / ok_samples,
+// derived in siteScores.ts so a zero denominator stays "no data".
+export interface SiteScoreRow {
+  name: string
+  samples: number
+  ok_samples: number
+  healthy_ok_samples: number
+}
+
+export interface SiteScoresResponse {
+  month: string // "2026-09", formatted server-side in UTC
+  since: string
+  as_of: string
+  network: string // the applied ?network= narrowing, '' = all visible planes
+  sites: SiteScoreRow[]
+}
+
 // GET /api/v1/agents/{id}/health — one agent's per-probe 24h buckets. The
 // series list comes from series_state, so a configured-but-silent series
 // appears with empty buckets. target is the external target's name and is
