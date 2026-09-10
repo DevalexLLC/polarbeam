@@ -619,6 +619,7 @@ that host:
 server:
   address: <grpc-name>:443
   sni: <grpc-name>
+  unreachable_timeout: 10m
 
 state_dir: /var/lib/polarbeam-agent
 
@@ -636,6 +637,24 @@ The fields mean:
   this is `<grpc-name>:443`.
 - `server.sni`: must equal the control plane's `listen.grpc_hostname` and
   `POLARBEAM_GRPC_SNI`.
+- `server.unreachable_timeout`: how long the control plane may be
+  unreachable, with no probe succeeding either, before the agent exits
+  non-zero so the container runtime restarts it. The agent already
+  reconnects forever on its own; this exists because a running container
+  never regains egress in place after the host's container network is
+  rebuilt underneath it (see
+  [the troubleshooting entry](#agent-shows-offline-while-its-container-keeps-running)).
+  Probe successes hold the exit back because they prove the container's
+  network works: when only the control plane is down the agent keeps
+  measuring and spooling instead of restarting. The agent also waits at
+  least two intervals of its fastest probe before it reads "no success" as
+  a dead network, so a site whose only probes run hourly restarts after two
+  hours rather than ten minutes. Default `10m` (the exit
+  lands roughly 10 to 12 minutes after the fault, once the keepalive has
+  declared the connection dead), minimum `2m`, and `0s` disables it. Write
+  the duration with a unit: a bare `0` is rejected at load. Results wait in
+  the spool across the restart and the cached configuration keeps probing
+  running, so the restart loses nothing.
 - `state_dir`: persistent PKI identity and offline result spool. Do not share
   one state directory or volume between agents.
 - `spool.max_bytes`: maximum local spool size; the oldest results are dropped
@@ -781,6 +800,15 @@ docker logs --tail=100 polarbeam-agent
 `NET_RAW` enables ICMP, traceroute, and path MTU probing. TCP, TLS, HTTP,
 DNS, and NTP probes do not need it, but the recommended standard agent
 includes it so all supported probe types work.
+
+`--restart unless-stopped` is load-bearing, not a convenience: the agent
+deliberately exits after `server.unreachable_timeout` (default about ten
+minutes) without a working connection to the control plane and without a
+single successful probe, and relies on the runtime to restart it with a
+freshly built network namespace. Podman
+honors `--restart` without a daemon; a Quadlet or hand-written systemd unit
+needs `Restart=always`. An agent whose container has no restart policy
+stays down after such an exit.
 
 ## 9. Enroll the remaining sites
 
@@ -1339,6 +1367,62 @@ Agents expose no operator-facing management port.
   agent image first (see
   [Upgrading across a CA algorithm change](#upgrading-across-a-ca-algorithm-change)).
 - Check middlebox idle timeouts if logs repeatedly show `config stream failed`.
+- While the control plane is down for longer than `server.unreachable_timeout`
+  (default about ten minutes), agents whose probes still succeed log
+  `control plane unreachable but probes still succeed; not restarting` once
+  and keep measuring into their spools. An agent with no probes assigned, or
+  whose probes all fail as well, exits with `control plane unreachable` and
+  its runtime restarts it, over and over, until the control plane is back.
+  That restart loop is expected during a control-plane outage and not a
+  fault in the agent; spooled results drain once the connection returns.
+
+### Agent shows offline while its container keeps running
+
+Symptom: the dashboard shows an agent offline; on its host the container is
+running and healthy and the host itself has connectivity, yet the agent log
+repeats `config stream failed` with `dns: A record lookup error` (or a
+connection timeout) forever. A container restart fixes it.
+
+Cause: the host's container network was torn down and rebuilt underneath the
+running container — a Podman network reset, a firewall reload that wiped
+netavark's rules, a NetworkManager restart. A running container is not
+re-plumbed: its veth, routes, and the bind-mounted `/etc/resolv.conf` (still
+pointing at the old gateway's aardvark-dns) stay as they were at container
+start, so from inside nothing works again until the container is recreated.
+The agent's own reconnect loops retry forever at every layer and cannot help.
+
+What the agent does about it: after `server.unreachable_timeout` (default
+about ten minutes, or two intervals of the fastest probe if that is longer)
+without a working connection and without any probe succeeding (a dead
+container network fails every probe too, which is how the agent tells this
+apart from a control-plane outage) it exits non-zero and
+logs `control plane unreachable and no probe succeeded; exiting so the
+container runtime can restart the agent`. With `--restart unless-stopped` (or `Restart=always` under systemd)
+the runtime rebuilds the network namespace on restart and the agent
+reconnects with nothing lost. If you see the offline state persist beyond
+that, check that the container actually has a restart policy.
+
+To confirm which layer broke, inspect from the host (the release image has no
+shell):
+
+```sh
+pid=$(sudo podman inspect -f '{{.State.Pid}}' polarbeam-agent)
+sudo nsenter -t "$pid" -n ip addr
+sudo nsenter -t "$pid" -n ip route
+sudo cat "$(sudo podman inspect -f '{{.ResolvConfPath}}' polarbeam-agent)"
+sudo nsenter -t "$pid" -n dig @<nameserver-from-resolv.conf> <grpc-name>
+```
+
+A missing interface or default route means only a restart can help. An
+interface that is fine but a nameserver that no longer answers means the
+container's DNS depends on the container network's own resolver.
+
+To take the container network out of the failure domain entirely, run the
+agent with `--network host`: no bridge, veth, NAT rules, or container DNS are
+involved, the agent listens on nothing, and its source address becomes the
+host address that `--probe-address` already names (`docs/probes.md` recommends
+the same for jumbo-frame probing). To keep the bridge but drop the dependency
+on the container network's resolver, pass `--dns <site-resolver>` instead.
 
 ### Dashboard works but agents do not
 

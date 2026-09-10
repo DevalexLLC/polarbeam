@@ -11,6 +11,14 @@ server:
   # SNI routing the proxy to the gRPC listener. Must match the server's
   # listen.grpc_hostname (default deployment uses grpc.<dashboard-domain>).
   #sni: grpc.polarbeam.example.com
+  # Exit (non-zero) after the control plane has been unreachable this long
+  # with no probe succeeding either, so the container runtime's restart
+  # policy rebuilds the container's network — a running container never
+  # regains egress in place after the host's container network is reset.
+  # Successful probes hold the exit back (a control-plane outage alone never
+  # restarts the agent). Minimum 2m; `0s` disables (a bare 0 is rejected).
+  # Keep --restart unless-stopped on the container.
+  #unreachable_timeout: 10m
 
 # Spool + PKI live here; must match the container's state volume mount.
 state_dir: /var/lib/polarbeam-agent
