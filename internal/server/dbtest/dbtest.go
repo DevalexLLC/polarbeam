@@ -6,7 +6,7 @@
 // and the offline-build CI job network-free; the db-test CI job sets it
 // against a service container. Locally:
 //
-//	docker run -d --rm -e POSTGRES_PASSWORD=t -p 54329:5432 timescale/timescaledb-ha:pg16-all
+//	docker run -d --rm -e POSTGRES_PASSWORD=t -p 54329:5432 timescale/timescaledb-ha:pg18
 //	POLARBEAM_TEST_DB_URL=postgres://postgres:t@localhost:54329/postgres go test ./internal/server/...
 //
 // Each call creates a uniquely named database so tests never share state —

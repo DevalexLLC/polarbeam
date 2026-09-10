@@ -164,7 +164,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       timescaledb:
-        image: timescale/timescaledb-ha:pg16-all
+        image: timescale/timescaledb-ha:pg18
         env:
           POSTGRES_PASSWORD: polarbeam-test
         ports:

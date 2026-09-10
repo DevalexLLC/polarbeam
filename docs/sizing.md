@@ -128,7 +128,7 @@ add headroom above these for WAL, temporary bloat before retention jobs run,
 and growth in the workload.
 
 Budget separately for images and fixed data: the server, agent, and proxy
-images total under 150 MB, but the TimescaleDB image is ~4.7 GB. Traceroute
+images total under 150 MB, but the TimescaleDB image is ~2.3 GB. Traceroute
 paths, path-MTU results, and outage events are stored on change only and are
 negligible next to the results hypertable. Login events are retained
 indefinitely by design; at interactive-login volumes this stays in the
