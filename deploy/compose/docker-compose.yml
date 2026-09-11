@@ -44,10 +44,44 @@ services:
   timescaledb:
     image: timescale/timescaledb-ha:pg18
     restart: unless-stopped
+    # Server flags applied on every start (the image's own tuning runs once,
+    # at first initialization, and never revisits an existing volume).
+    command:
+      - postgres
+      # Air-gap constraint: TimescaleDB's telemetry phones home by default.
+      # TIMESCALEDB_TELEMETRY below only takes effect on a fresh volume; this
+      # flag covers every start of an existing one.
+      - -c
+      - timescaledb.telemetry_level=off
+      # Ingest is a steady stream of small inserts; lz4-compressed full-page
+      # images cut WAL volume at negligible CPU cost.
+      - -c
+      - wal_compression=lz4
+      # Query-level observability for operators (docs/sizing.md, "Measuring
+      # your deployment"). Preloading is the part that needs a restart; the
+      # extension itself is created on demand, never by a migration. This
+      # list replaces the image default (timescaledb,pg_textsearch);
+      # pg_textsearch is unused by PolarBEAM.
+      - -c
+      - shared_preload_libraries=timescaledb,pg_stat_statements
+      # Planning time is invisible in pg_stat_statements without this, and
+      # on a hypertable planning cost grows with chunk count — the thing to
+      # look at when a windowed read slows down for no execution reason.
+      - -c
+      - pg_stat_statements.track_planning=on
+      - -c
+      - track_io_timing=on
     environment:
       POSTGRES_DB: polarbeam
       POSTGRES_USER: polarbeam
       POSTGRES_PASSWORD: ${POLARBEAM_DB_PASSWORD:?POLARBEAM_DB_PASSWORD must be set}
+      # Image-native switch: a fresh initialization also unschedules the
+      # telemetry job. Keep both this and the -c flag above.
+      TIMESCALEDB_TELEMETRY: "off"
+      # Memory basis for the image's one-time tuning (first start only, see
+      # docs/sizing.md). Empty means "size from the container limit, else
+      # from host RAM".
+      TS_TUNE_MEMORY: ${TS_TUNE_MEMORY:-}
     volumes:
       - dbdata:/home/postgres/pgdata
     healthcheck:
