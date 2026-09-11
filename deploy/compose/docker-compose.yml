@@ -64,11 +64,10 @@ services:
       # pg_textsearch is unused by PolarBEAM.
       - -c
       - shared_preload_libraries=timescaledb,pg_stat_statements
-      # Planning time is invisible in pg_stat_statements without this, and
-      # on a hypertable planning cost grows with chunk count — the thing to
-      # look at when a windowed read slows down for no execution reason.
-      - -c
-      - pg_stat_statements.track_planning=on
+      # pg_stat_statements.track_planning is deliberately NOT set here: it
+      # contends between many connections running the same statements
+      # (this server's shape), and being absent from the command line lets
+      # an operator toggle it live with ALTER SYSTEM (docs/sizing.md).
       - -c
       - track_io_timing=on
     environment:

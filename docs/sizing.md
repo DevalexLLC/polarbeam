@@ -337,12 +337,9 @@ docker compose exec timescaledb psql -U polarbeam -d polarbeam -c "
 ```
 
 Query-level statistics: the shipped compose file preloads
-`pg_stat_statements` with `track_planning` on (and enables
-`track_io_timing`, which gives the `pg_stat_io` view and
-`EXPLAIN (ANALYZE, BUFFERS)` real read/write times). Create the extension
-once, then rank statements by total time; the planning column matters on
-hypertables, where planning cost grows with the number of chunks a query
-has to consider rather than the number it reads:
+`pg_stat_statements` (and enables `track_io_timing`, which gives the
+`pg_stat_io` view and `EXPLAIN (ANALYZE, BUFFERS)` real read/write times).
+Create the extension once, then rank statements by total time:
 
 ```sh
 docker compose exec timescaledb psql -U polarbeam -d polarbeam -c "
@@ -362,6 +359,29 @@ docker compose exec timescaledb psql -U polarbeam -d polarbeam -c "
 Statistics accumulate for the life of the cluster; `SELECT
 pg_stat_statements_reset();` before a measurement window. Constants are
 normalized away, so one row covers every window size of the same query.
+
+The `plan_s` column stays at zero until planning-time tracking is on. It
+is off by default on purpose: PostgreSQL warns that it contends when many
+connections run the same statements, which is this server's shape. On a
+hypertable, planning cost grows with the number of chunks a query has to
+consider rather than the number it reads, so when a windowed read slows
+down with no execution-time explanation, switch tracking on for the
+investigation and off again afterwards — no restart needed, because the
+compose file leaves this setting off the command line:
+
+```sh
+docker compose exec timescaledb psql -U polarbeam -d polarbeam \
+  -c "ALTER SYSTEM SET pg_stat_statements.track_planning = on" \
+  -c "SELECT pg_reload_conf()"
+# ... investigate, then:
+docker compose exec timescaledb psql -U polarbeam -d polarbeam \
+  -c "ALTER SYSTEM RESET pg_stat_statements.track_planning" \
+  -c "SELECT pg_reload_conf()"
+```
+
+(`ALTER SYSTEM` refuses to run inside a transaction, and two statements in
+one `-c` string are sent as one implicit transaction — hence one
+statement per `-c`.)
 
 The server's connections report as `application_name = polarbeam-server`
 in `pg_stat_activity`, so its statements are easy to tell apart from
