@@ -360,73 +360,6 @@ export default function SiteDetail({
         </button>
       </section>
 
-      {timeline && (
-        <section className="card chart-card incident-timeline-card" id="site-incidents">
-          <div className="card-head">
-            <div>
-              <h2>Incident timeline</h2>
-            </div>
-          </div>
-          <IncidentTimeline
-            events={events}
-            win={timeline.win}
-            nowMs={fetchedAt}
-            selected={bucket}
-            onSelect={(value) => setSelectedSlice(value ?? 0)}
-          />
-          <p className="card-foot">
-            Incidents whose source or destination is this site, colored by kind, with resolved ones muted. Click a bar
-            to filter the list below.
-            {outages.history_truncated ? ' Resolved incidents past the newest 500 are omitted.' : ''}
-            {outages.truncated ? ' The oldest open incidents are omitted (server cap).' : ''}
-          </p>
-        </section>
-      )}
-
-      <section className="card incident-card">
-        <div className="card-head">
-          <div>
-            <h2>Incident groups</h2>
-          </div>
-          {bucket != null && timeline ? (
-            <button className="chip bucket-filter-chip" onClick={() => setSelectedSlice(0)}>
-              {bucketRangeLabel(
-                bucket,
-                timeline.grid.bucketMs,
-                timeline.win,
-                mode === 'utc',
-                gridWithZone(timeline.grid, timeline.win, mode === 'utc'),
-                gridWithYear(timeline.grid),
-              )}{' '}
-              <span aria-hidden="true">×</span>
-              <span className="sr-only">Clear time filter</span>
-            </button>
-          ) : null}
-        </div>
-        {groups.length === 0 ? (
-          <div className="empty-state">
-            <strong>{bucket != null ? 'No incidents in this slice' : `No incidents in the last ${snapshotWin}`}</strong>
-            <span>
-              {bucket != null ? 'Clear the time filter or pick another bar.' : 'The network watch continues.'}
-            </span>
-          </div>
-        ) : (
-          groups.map((group) => (
-            <IncidentGroupRow
-              key={group.key}
-              group={group}
-              win={snapshotWin}
-              expanded={expandedIncident === group.id}
-              onToggle={() => setExpandedIncident(expandedIncident === group.id ? '' : group.id)}
-            />
-          ))
-        )}
-        <p className="card-foot">
-          Active groups come first, then resolved ones newest first. Open a group for its affected targets and
-          investigation links.
-        </p>
-      </section>
-
       <section className="card site-peers-card" id="site-peers">
         <div className="card-head">
           <div>
@@ -525,6 +458,73 @@ export default function SiteDetail({
           <FleetAgentsCard agents={siteAgents} health={health} multiNetwork={multiNetwork} />
         )}
       </div>
+
+      {timeline && (
+        <section className="card chart-card incident-timeline-card" id="site-incidents">
+          <div className="card-head">
+            <div>
+              <h2>Incident timeline</h2>
+            </div>
+          </div>
+          <IncidentTimeline
+            events={events}
+            win={timeline.win}
+            nowMs={fetchedAt}
+            selected={bucket}
+            onSelect={(value) => setSelectedSlice(value ?? 0)}
+          />
+          <p className="card-foot">
+            Incidents whose source or destination is this site, colored by kind, with resolved ones muted. Click a bar
+            to filter the list below.
+            {outages.history_truncated ? ' Resolved incidents past the newest 500 are omitted.' : ''}
+            {outages.truncated ? ' The oldest open incidents are omitted (server cap).' : ''}
+          </p>
+        </section>
+      )}
+
+      <section className="card incident-card">
+        <div className="card-head">
+          <div>
+            <h2>Incident groups</h2>
+          </div>
+          {bucket != null && timeline ? (
+            <button className="chip bucket-filter-chip" onClick={() => setSelectedSlice(0)}>
+              {bucketRangeLabel(
+                bucket,
+                timeline.grid.bucketMs,
+                timeline.win,
+                mode === 'utc',
+                gridWithZone(timeline.grid, timeline.win, mode === 'utc'),
+                gridWithYear(timeline.grid),
+              )}{' '}
+              <span aria-hidden="true">×</span>
+              <span className="sr-only">Clear time filter</span>
+            </button>
+          ) : null}
+        </div>
+        {groups.length === 0 ? (
+          <div className="empty-state">
+            <strong>{bucket != null ? 'No incidents in this slice' : `No incidents in the last ${snapshotWin}`}</strong>
+            <span>
+              {bucket != null ? 'Clear the time filter or pick another bar.' : 'The network watch continues.'}
+            </span>
+          </div>
+        ) : (
+          groups.map((group) => (
+            <IncidentGroupRow
+              key={group.key}
+              group={group}
+              win={snapshotWin}
+              expanded={expandedIncident === group.id}
+              onToggle={() => setExpandedIncident(expandedIncident === group.id ? '' : group.id)}
+            />
+          ))
+        )}
+        <p className="card-foot">
+          Active groups come first, then resolved ones newest first. Open a group for its affected targets and
+          investigation links.
+        </p>
+      </section>
 
       <section className="card site-investigate">
         <div className="card-head">

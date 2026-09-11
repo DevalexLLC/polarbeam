@@ -22,6 +22,7 @@ import {
   fmtTime,
   latencyAxisLabel,
   latencySourceName,
+  latencyStatName,
 } from '../format'
 import { buildThresholdResolver } from '../severity'
 import {
@@ -136,7 +137,7 @@ function SourceCard({ s, label, pairHref }: { s: TargetSourceSummary; label: str
           {fmtLatencyParts(s.latency.avg_us).value}
           <span className="unit"> {fmtLatencyParts(s.latency.avg_us).unit}</span>
         </span>
-        <span className="label">avg {latencyAxisLabel(s.latency_source).replace(' (ms)', '')}</span>
+        <span className="label">avg {latencyStatName(s.latency_source)}</span>
       </div>
       <dl>
         <div>
