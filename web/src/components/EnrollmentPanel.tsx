@@ -87,14 +87,20 @@ export default function EnrollmentPanel({
   const [actionRow, setActionRow] = useState<string | null>(null)
   const [expandedRow, setExpandedRow] = useState<string | null>(null)
   const feedback = useSettingsMutation()
+  // The inputs are consumed by a successful issue: the minted banner names
+  // the site and network, and leaving the selects filled would keep the
+  // leave guard prompting about a "draft" long after Dismiss.
+  const resetForm = () => {
+    setSite('')
+    setNetwork(null)
+    setTtlMS(86_400_000)
+  }
   useSettingsDraft(
     'enrollment-token-form',
     minted ? `One-time enrollment token for ${minted.site}` : 'New enrollment token',
     site !== '' || networkDraft !== null || ttlMS !== 86_400_000 || minted !== null,
     () => {
-      setSite('')
-      setNetwork(null)
-      setTtlMS(86_400_000)
+      resetForm()
       setMinted(null)
       setActionError('')
     },
@@ -142,6 +148,7 @@ export default function EnrollmentPanel({
         ttl_ms: ttlMS,
         ...networkField(network),
       })
+      resetForm()
       setMinted(res)
       feedback.success('Enrollment token issued.')
       await reload()

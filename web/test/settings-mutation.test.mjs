@@ -180,6 +180,15 @@ test('one-time secrets name their irreversible discard consequence', async () =>
   assert.match(users, /resetting the password again/)
 })
 
+test('issuing an enrollment token consumes the form so Dismiss leaves no draft', async () => {
+  const enrollment = await readFile(new URL('../src/components/EnrollmentPanel.tsx', import.meta.url), 'utf8')
+  // The inputs reset in the success path, before the minted token is
+  // stored, so the only dirty state left after Dismiss is nothing at all.
+  assert.match(enrollment, /resetForm\(\)\s*\n\s*setMinted\(res\)/)
+  // The discard path uses the same reset, so the two cannot drift apart.
+  assert.match(enrollment, /resetForm\(\)\s*\n\s*setMinted\(null\)/)
+})
+
 test('create collisions preserve target input and destructive labels use verbs', async () => {
   const targets = await readFile(new URL('../src/components/TargetsPanel.tsx', import.meta.url), 'utf8')
   const meshes = await readFile(new URL('../src/components/MeshesPanel.tsx', import.meta.url), 'utf8')
