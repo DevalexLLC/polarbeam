@@ -579,7 +579,22 @@ docker compose exec server polarbeam-server user add \
   --username acme-ops --role network_admin --network acme
 ```
 
-Repeat `--network` to span several planes. Scoped accounts never reach
+Repeat `--network` to span several planes. The same account signing in
+through SSO is not created this way: federated users are provisioned on
+their first login, and their role and networks come from the identity
+provider's group claim through the network role rules in **Settings →
+Authentication**. The `network_viewer` equivalent for a tenant is a
+Keycloak group such as `acme-viewers` holding the tenant's users, plus one
+rule:
+
+| Claim value | Role | Networks |
+|---|---|---|
+| `acme-viewers` | `network_viewer` | `acme` |
+
+with **Unmatched users** set to denied. Adding the next viewer is then a
+group-membership change at the IdP and nothing on the PolarBEAM side; see
+[Optional: single sign-on (OIDC)](#optional-single-sign-on-oidc) for the
+full mapping semantics. Scoped accounts never reach
 **Settings → Users**, **Authentication**, **Banner**, **Networks**, or
 **Sites**, and cannot change the deployment-wide thresholds — those are
 yours. §10.4 walks through a worked two-network example. Skip all of this
