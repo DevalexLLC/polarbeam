@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	pb "github.com/devalexllc/polarbeam/internal/pb/polarbeamv1"
+	"github.com/devalexllc/polarbeam/internal/server/dbtest"
 	"github.com/devalexllc/polarbeam/internal/server/mtuwatch"
 	"github.com/devalexllc/polarbeam/internal/server/outage"
 	"github.com/devalexllc/polarbeam/internal/server/pathwatch"
@@ -140,7 +141,10 @@ func BenchmarkIngestTx(b *testing.B) {
 	if err := warmTx.Commit(ctx); err != nil {
 		b.Fatalf("warm commit: %v", err)
 	}
+	dbtest.LogServerFlags(b, ctx, s.Pool())
 	b.ReportAllocs()
+	wal := dbtest.StartWALMeter(b, ctx, s.Pool())
+	defer wal.Report(b, ctx)
 	for b.Loop() {
 		if err := ingestTx(ctx, b, s, agentID, assigned, batch).Rollback(ctx); err != nil {
 			b.Fatalf("rollback: %v", err)

@@ -33,7 +33,7 @@ func newStore(t testing.TB) (context.Context, *store.Store) {
 	return ctx, s
 }
 
-func insertResults(t *testing.T, ctx context.Context, s *store.Store, agentID uuid.UUID, rows []store.ResultRow) []store.ResultRow {
+func insertResults(t testing.TB, ctx context.Context, s *store.Store, agentID uuid.UUID, rows []store.ResultRow) []store.ResultRow {
 	t.Helper()
 	tx, err := s.Begin(ctx)
 	if err != nil {

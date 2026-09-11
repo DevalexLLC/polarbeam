@@ -99,33 +99,50 @@ as the workload is stable.
 
 Measured constants from the reference deployment:
 
-- One raw result costs **~500 bytes on disk** (hypertable plus its two
-  indexes, stored uncompressed).
-- With the default cadences, the retained rollups add roughly half of the raw
-  footprint again, giving a steady-state total of about **22 days' worth of
-  raw growth**.
+- One raw result costs **~500 bytes on disk** while its chunk is in the
+  rowstore (hypertable plus its two indexes). Chunks older than 8 days are
+  converted to the columnstore by a background job, which drops the
+  per-chunk indexes and encodes each column; on seeded fixtures that is a
+  **13–19× reduction (30–40 bytes per result)**. Raw retention is 14 days,
+  so the raw plateau is 8 days of rowstore plus 6 days of columnstore —
+  about **8.5 days' worth of raw growth**, where it used to be 14.
+- The hourly rollups (latency and stage breakdown) are compressed after
+  10 days at a measured 4–6× (latency; the percentile sketch dominates)
+  and 13× (stage) on the same fixtures; over their 100-day retention that
+  is roughly a four-fold reduction. The 30-minute health strips (14 days)
+  and the daily rollups (400 days, one row per series per day) stay in
+  the rowstore: the health strips age out before compression would pay
+  off, and the daily rollups measured under 2× because their chunks hold
+  too few rows per series to compress well.
+- With the default cadences, the retained rollups now add roughly a third
+  of the raw plateau again, giving a steady-state total of about
+  **12 days' worth of raw growth** (modeled from the measured ratios;
+  before compression the constant was 22).
 
 So the planning formula is:
 
 ```text
 raw growth/day    ≈ results/day × 500 bytes
-steady-state size ≈ raw growth/day × 22
+steady-state size ≈ raw growth/day × 12
 ```
 
-The 22× factor is tied to the fast-cadence probe mix it was measured under
+The 12× factor is tied to the fast-cadence probe mix it was measured under
 (dominated by 30–60 second intervals). Rollup volume scales with the number
 of probe series and their long retention — one hourly row per series for 100
 days, one daily row for 400 — not with how often each series produces raw
 results. A workload dominated by slow cadences (intervals of several minutes
 or more) produces few raw rows per series but just as many rollup rows, so
-the rollups can outweigh the raw data and the 22× shortcut underestimates.
+the rollups can outweigh the raw data and the 12× shortcut underestimates.
 For such workloads, measure the aggregate sizes directly with the query in
-the last section instead of applying the factor.
+the last section instead of applying the factor. Compression ratios also
+depend on the data: results that fail with varied error text or probe
+values that change every sample compress less than steady, healthy paths.
 
-Modeled examples: 10 sites ≈ 130 MB/day ≈ 3 GB steady state; 50 sites ≈
-3.5 GB/day ≈ 80 GB; 100 sites ≈ 14 GB/day ≈ 310 GB. The quick-reference tiers
-add headroom above these for WAL, temporary bloat before retention jobs run,
-and growth in the workload.
+Modeled examples: 10 sites ≈ 130 MB/day ≈ 1.6 GB steady state; 50 sites ≈
+3.5 GB/day ≈ 45 GB; 100 sites ≈ 14 GB/day ≈ 170 GB. The quick-reference tiers
+keep their pre-compression disk figures as headroom for WAL, the transient
+extra copy of a chunk while it is being compressed, temporary bloat before
+retention jobs run, and growth in the workload.
 
 Budget separately for images and fixed data: the server, agent, and proxy
 images total under 150 MB, but the TimescaleDB image is ~2.3 GB. Traceroute
@@ -145,7 +162,8 @@ sizing `shared_buffers` and related settings from the container's memory
 limit — or, since the shipped compose files set no limit, from the **host's
 total RAM**. On a dedicated 4–16 GB control-plane host that is what you want.
 On a large shared host, add a memory limit to the `timescaledb` service (or
-set `TS_TUNE_MEMORY`) **before the first start**: the tuning runs only once,
+set `TS_TUNE_MEMORY` in `.env`; the compose file passes it through) **before
+the first start**: the tuning runs only once,
 so a limit added to an already-initialized deployment caps a database still
 configured for the full host, which invites the kernel's out-of-memory
 killer. In that case re-run `timescaledb-tune` inside the container (or set
@@ -268,9 +286,12 @@ docker compose exec timescaledb psql -U polarbeam -d polarbeam -c "
     AND bucket <  date_trunc('hour', now());"
 ```
 
-Multiply `results_last_24h × bytes_per_result × 22` for your projected
+Multiply `results_last_24h × bytes_per_result × 12` for your projected
 steady-state database size before the retention plateau is reached (the raw
 hypertable stops growing after day 14; the hourly rollup after day 100).
+Measure `bytes_per_result` before the first compression job has run (or
+during the first 8 days), since afterwards the size query above blends
+rowstore and columnstore chunks.
 That shortcut assumes a fast-cadence workload, as explained above; check the
 rollup sizes directly, especially when slow-cadence probes dominate:
 
@@ -286,6 +307,65 @@ docker compose exec timescaledb psql -U polarbeam -d polarbeam -c "
 The hourly and daily rollups keep growing until days 100 and 400
 respectively; project their growth over the remaining retention window and
 add it to the raw plateau.
+
+Compression state and ratio for the raw hypertable and every rollup, as the
+columnstore jobs convert chunks past their offsets (the rollups'
+materialization hypertables are not listed by
+`timescaledb_information.hypertables`, hence the union):
+
+```sh
+docker compose exec timescaledb psql -U polarbeam -d polarbeam -c "
+  WITH r AS (
+    SELECT hypertable_name AS name, hypertable_schema AS s, hypertable_name AS t
+      FROM timescaledb_information.hypertables
+    UNION ALL
+    SELECT view_name, materialization_hypertable_schema, materialization_hypertable_name
+      FROM timescaledb_information.continuous_aggregates)
+  SELECT r.name,
+         (SELECT count(*) FILTER (WHERE c.is_compressed) || '/' || count(*)
+            FROM timescaledb_information.chunks c
+           WHERE c.hypertable_schema = r.s AND c.hypertable_name = r.t) AS compressed_chunks,
+         pg_size_pretty(hypertable_size(format('%I.%I', r.s, r.t)::regclass)) AS size,
+         pg_size_pretty(cs.before) AS compressed_before, pg_size_pretty(cs.after) AS compressed_after,
+         round(cs.before::numeric / nullif(cs.after, 0), 1) AS ratio
+    FROM r
+    CROSS JOIN LATERAL (
+      SELECT sum(before_compression_total_bytes) AS before,
+             sum(after_compression_total_bytes)  AS after
+        FROM hypertable_columnstore_stats(format('%I.%I', r.s, r.t)::regclass)) cs
+   ORDER BY 1;"
+```
+
+Query-level statistics: the shipped compose file preloads
+`pg_stat_statements` with `track_planning` on (and enables
+`track_io_timing`, which gives the `pg_stat_io` view and
+`EXPLAIN (ANALYZE, BUFFERS)` real read/write times). Create the extension
+once, then rank statements by total time; the planning column matters on
+hypertables, where planning cost grows with the number of chunks a query
+has to consider rather than the number it reads:
+
+```sh
+docker compose exec timescaledb psql -U polarbeam -d polarbeam -c "
+  CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"
+docker compose exec timescaledb psql -U polarbeam -d polarbeam -c "
+  SELECT left(query, 60) AS query, calls,
+         round(total_exec_time::numeric / 1000, 1) AS exec_s,
+         round(mean_exec_time::numeric, 2) AS mean_ms,
+         round(total_plan_time::numeric / 1000, 1) AS plan_s,
+         round(rows::numeric / nullif(calls, 0), 1) AS avg_rows,
+         round(100.0 * shared_blks_hit / nullif(shared_blks_hit + shared_blks_read, 0), 1) AS hit_pct
+    FROM pg_stat_statements
+   WHERE query NOT ILIKE '%pg_stat_statements%'
+   ORDER BY total_exec_time DESC LIMIT 10;"
+```
+
+Statistics accumulate for the life of the cluster; `SELECT
+pg_stat_statements_reset();` before a measurement window. Constants are
+normalized away, so one row covers every window size of the same query.
+
+The server's connections report as `application_name = polarbeam-server`
+in `pg_stat_activity`, so its statements are easy to tell apart from
+maintenance jobs and ad-hoc sessions.
 
 On agent hosts, check spool pressure inside the state volume with the
 `spool` row of `selfcheck`, which reports bytes on disk and the segment

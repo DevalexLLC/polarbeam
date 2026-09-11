@@ -18,7 +18,7 @@ import (
 // seedAgent inserts a minimal agents row in siteName (created on demand)
 // and returns the agent ID. probe_results has no agent FK, but
 // TargetEndpoints/TargetProbeHealth join real agents+sites rows.
-func seedAgent(t *testing.T, ctx context.Context, s *store.Store, siteName, hostname string) uuid.UUID {
+func seedAgent(t testing.TB, ctx context.Context, s *store.Store, siteName, hostname string) uuid.UUID {
 	t.Helper()
 	siteID, err := s.EnsureSite(ctx, siteName)
 	if err != nil {

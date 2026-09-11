@@ -78,6 +78,10 @@ shipped migrations and are not configurable:
 | Daily aggregates (latency and stage breakdown) | 400 days |
 | Agent health strips (30-minute buckets) | 14 days |
 
+Within those horizons, chunks older than 8 days (raw results) and 10 days
+(hourly aggregates) are stored compressed by the database's own background
+jobs; that changes disk usage, not what is kept or for how long.
+
 On the agent host, keep free space above the
 result-spool cap (256 MiB by default): the agent deliberately exits rather
 than drop measurements when its state volume cannot be written.
@@ -232,6 +236,16 @@ Copy the environment example:
 cp env.example .env
 chmod 600 .env
 ```
+
+`TS_TUNE_MEMORY` is optional: it is the memory basis for the database
+image's one-time self-tuning at first start (see `docs/sizing.md`,
+"Memory"). Leave it empty on a dedicated host; set it (for example `4GB`)
+when the host is shared and the database service has no memory limit.
+
+The database service in `docker-compose.yml` starts PostgreSQL with
+TimescaleDB's telemetry switched off (`timescaledb.telemetry_level=off`
+plus the image's `TIMESCALEDB_TELEMETRY` switch), so an air-gapped control
+plane never attempts to reach the internet; do not remove those flags.
 
 Generate a long database password. A hexadecimal value avoids URL-encoding
 problems when the same password is placed in `server.yaml`:
@@ -1657,6 +1671,15 @@ Work from the compose directory on the control-plane host:
    POLARBEAM_VERSION=v<new-version>
    ```
 
+   Then compare the release's `docker-compose.yml` with the one you are
+   running and carry over any changes (the file is versioned with the
+   release; for example, the release that introduced database server
+   flags added a `command:` block and two environment entries to the
+   `timescaledb` service). A changed database service is recreated in
+   step 5 (step 4 passes `--no-deps` precisely so the migration does not
+   recreate it early); that restarts the database for a few seconds —
+   agents spool through it, and the server reconnects on its own.
+
 3. **Fetch the new images.** Online:
 
    ```sh
@@ -1683,15 +1706,39 @@ Work from the compose directory on the control-plane host:
    converges:
 
    ```sh
-   docker compose run --rm server migrate \
+   docker compose run --rm --no-deps server migrate \
      --config /etc/polarbeam/server.yaml
    ```
 
    This starts a one-off container from the *new* server image (that is
    why step 3 comes first), applies whatever is pending, prints each
-   file as it lands, and exits. Large upgrades that backfill aggregates
+   file as it lands, and exits. `--no-deps` runs it against the database
+   that is already up; without it, `run` would also reconcile the
+   `timescaledb` service and recreate it right here if its compose
+   definition changed, moving the database restart ahead of step 5. Large upgrades that backfill aggregates
    may need a larger `migrate --timeout` (default 30 m); do not
    interrupt a running backfill.
+
+   The release that added columnstore compression (migration 0026)
+   registers three compression jobs whose first runs start as soon as
+   the migration commits and compress every already-eligible chunk in the
+   background, one chunk per transaction. On a large, long-running
+   installation that is a few hours of extra disk I/O and a transient
+   extra copy of one chunk at a time; ingest and the dashboard keep
+   working throughout, and nothing here needs to wait for it. The job
+   reads its configuration once when a run starts, so a cap set with
+   `alter_job` applies to *later* runs, not to one already in progress.
+   To pace the initial backlog anyway: cancel the running job's session
+   (it stops cleanly at the next chunk boundary), cap the chunks per run,
+   and let the schedule pick the rest up:
+
+   ```sh
+   docker compose exec timescaledb psql -U polarbeam -d polarbeam -c "
+     SELECT pg_cancel_backend(pid) FROM pg_stat_activity
+      WHERE application_name LIKE 'Columnstore Policy [%';
+     SELECT alter_job(job_id, config => config || '{\"maxchunks_to_compress\": 1}')
+       FROM timescaledb_information.jobs WHERE proc_name = 'policy_compression';"
+   ```
 
 5. **Recreate the services on the new version:**
 
@@ -1757,7 +1804,10 @@ the dump file plus a second copy of the `dbdata` volume.
    pins the schema to a known state: a server only serves when no
    migration is pending, so a healthy v0.10.0 server proves the migration
    ledger is complete, and the restored database needs exactly the new
-   release's migrations and nothing older.
+   release's migrations and nothing older. It also means the job
+   inventory below is complete as written: the columnstore compression
+   jobs exist only from the release that added migration 0026, which
+   runs after this procedure.
 
    Back up all volumes and configuration as described in
    [Backup scope](#backup-scope). Then copy the running configuration

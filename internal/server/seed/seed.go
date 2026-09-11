@@ -146,17 +146,76 @@ func Percentiles(rows []Row) (p50, p95, p99 float64) {
 	return at(0.50), at(0.95), at(0.99)
 }
 
-// Run resolves every ordered site pair from live enrollment state, loads
-// `days` of synthetic history for each, refreshes both continuous
-// aggregates, and prints per-direction row counts and exact empirical
-// percentiles for the gate to compare against the API.
+// Direction is one seeded direction as resolved against live enrollment
+// state: the source agent, the destination's agent-kind target, and the
+// deterministic seed-owned probe ID. Exposed so harnesses can build the
+// probe configurations and expectations that match the loaded rows.
+type Direction struct {
+	Src, Dst string
+	AgentID  uuid.UUID
+	TargetID uuid.UUID
+	ProbeID  uuid.UUID
+}
+
+// Continuous aggregate view names in refresh dependency order (a daily
+// view folds FROM its hourly sibling, so hourly must be refreshed first).
+const (
+	ViewHourly      = "probe_results_hourly"
+	ViewDaily       = "probe_results_daily"
+	ViewHealth30m   = "probe_results_health_30m"
+	ViewStageHourly = "probe_results_stage_hourly"
+	ViewStageDaily  = "probe_results_stage_daily"
+)
+
+// AllViews lists every continuous aggregate in dependency order.
+var AllViews = []string{ViewHourly, ViewDaily, ViewHealth30m, ViewStageHourly, ViewStageDaily}
+
+// Run resolves every ordered site pair with enrolled agents, loads `days`
+// of synthetic history for each (Load), refreshes every continuous
+// aggregate (Refresh), and prints per-direction row counts and exact
+// empirical percentiles for the gate to compare against the API.
+//
+// Re-running against a database whose older chunks the columnstore
+// policies have already compressed works but is slow (the delete and the
+// reload go through the compressed-chunk DML path); `make reset` first for
+// a clean baseline.
 func Run(ctx context.Context, pool *pgxpool.Pool, days int, out io.Writer) error {
-	pairs, err := resolvePairs(ctx, pool)
-	if err != nil {
+	if _, err := Load(ctx, pool, days, out); err != nil {
 		return err
 	}
+	// Refresh the caggs over everything now, before the retention job can
+	// drop the >14 d raw region the hourly aggregate must fold first.
+	//
+	// The health cagg's refresh is bounded one bucket behind now: a full
+	// refresh would materialize the current partial bucket and push the
+	// watermark past it, and real-time aggregation only reads raw ABOVE the
+	// watermark — rows live agents insert into that bucket afterwards would
+	// stay invisible until a policy run catches up. Bounding keeps the live
+	// edge served from raw, exactly as the 30-min end_offset policy does in
+	// production. The other views keep the full refresh: their readers are
+	// 30d+ windows where the current partial bucket is invisible anyway.
+	now := time.Now()
+	if err := Refresh(ctx, pool, now, ViewHourly, ViewDaily, ViewStageHourly, ViewStageDaily); err != nil {
+		return err
+	}
+	if err := Refresh(ctx, pool, now.Add(-30*time.Minute), ViewHealth30m); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "note: raw rows older than 14 d are dropped by retention later; hourly/daily keep them — that is the design under test\n")
+	return nil
+}
+
+// Load resolves the seeded directions, deletes any prior seed run's rows,
+// and loads `days` of synthetic history for each direction via COPY in one
+// transaction. It does NOT refresh the continuous aggregates — Run does, and
+// harnesses that need a controlled watermark call Refresh themselves.
+func Load(ctx context.Context, pool *pgxpool.Pool, days int, out io.Writer) ([]Direction, error) {
+	pairs, err := resolvePairs(ctx, pool)
+	if err != nil {
+		return nil, err
+	}
 	if len(pairs) == 0 {
-		return fmt.Errorf("seed: no ordered site pairs with enrolled agents and agent targets — run `make up` and wait for agents to enroll")
+		return nil, fmt.Errorf("seed: no ordered site pairs with enrolled agents and agent targets — run `make up` and wait for agents to enroll")
 	}
 
 	n := days * 24 * 60
@@ -166,7 +225,7 @@ func Run(ctx context.Context, pool *pgxpool.Pool, days int, out io.Writer) error
 
 	tx, err := pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("seed: begin: %w", err)
+		return nil, fmt.Errorf("seed: begin: %w", err)
 	}
 	defer tx.Rollback(ctx)
 	// Idempotency: seed probe IDs are deterministic, so this deletes
@@ -180,19 +239,19 @@ func Run(ctx context.Context, pool *pgxpool.Pool, days int, out io.Writer) error
 	var allAgents []uuid.UUID
 	rows, err := tx.Query(ctx, `SELECT id FROM agents`)
 	if err != nil {
-		return fmt.Errorf("seed: list agents: %w", err)
+		return nil, fmt.Errorf("seed: list agents: %w", err)
 	}
 	for rows.Next() {
 		var id uuid.UUID
 		if err := rows.Scan(&id); err != nil {
 			rows.Close()
-			return fmt.Errorf("seed: scan agent: %w", err)
+			return nil, fmt.Errorf("seed: scan agent: %w", err)
 		}
 		allAgents = append(allAgents, id)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("seed: list agents: %w", err)
+		return nil, fmt.Errorf("seed: list agents: %w", err)
 	}
 	agentIDs := make([]uuid.UUID, 0, len(allAgents)*len(pairs))
 	probeIDs := make([]uuid.UUID, 0, len(allAgents)*len(pairs))
@@ -207,7 +266,7 @@ func Run(ctx context.Context, pool *pgxpool.Pool, days int, out io.Writer) error
 		USING unnest($1::uuid[], $2::uuid[]) AS u(agent_id, probe_id)
 		WHERE pr.agent_id = u.agent_id AND pr.probe_id = u.probe_id`,
 		agentIDs, probeIDs); err != nil {
-		return fmt.Errorf("seed: delete prior seed rows: %w", err)
+		return nil, fmt.Errorf("seed: delete prior seed rows: %w", err)
 	}
 	// Mirror the raw cleanup for series_state: a rerun can pick a different
 	// source agent for the same deterministic probe ID (enrollment order),
@@ -218,7 +277,7 @@ func Run(ctx context.Context, pool *pgxpool.Pool, days int, out io.Writer) error
 		USING unnest($1::uuid[], $2::uuid[]) AS u(agent_id, probe_id)
 		WHERE ss.agent_id = u.agent_id AND ss.probe_id = u.probe_id`,
 		agentIDs, probeIDs); err != nil {
-		return fmt.Errorf("seed: delete prior seed state: %w", err)
+		return nil, fmt.Errorf("seed: delete prior seed state: %w", err)
 	}
 
 	type summary struct {
@@ -237,7 +296,7 @@ func Run(ctx context.Context, pool *pgxpool.Pool, days int, out io.Writer) error
 				r.Sent, r.Received, r.LossPct, r.RTTMinUS, r.RTTAvgUS, r.RTTMaxUS, r.RTTStdUS, r.JitterUS}
 		}
 		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"probe_results"}, cols, pgx.CopyFromRows(src)); err != nil {
-			return fmt.Errorf("seed: copy %s→%s: %w", p.src, p.dst, err)
+			return nil, fmt.Errorf("seed: copy %s→%s: %w", p.src, p.dst, err)
 		}
 		// The matrix serves "latest per series" from series_state (0023),
 		// which production ingest maintains — seeded history must land
@@ -268,38 +327,13 @@ func Run(ctx context.Context, pool *pgxpool.Pool, days int, out io.Writer) error
 			WHERE EXCLUDED.last_time > series_state.last_time`,
 			p.agentID, p.probeID, p.targetID, probeTypeICMP,
 			last.Status, last.Time, last.LossPct, lastLatency, lastSource); err != nil {
-			return fmt.Errorf("seed: series_state %s→%s: %w", p.src, p.dst, err)
+			return nil, fmt.Errorf("seed: series_state %s→%s: %w", p.src, p.dst, err)
 		}
 		p50, p95, p99 := Percentiles(rows)
 		summaries = append(summaries, summary{p, len(rows), p50, p95, p99})
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("seed: commit: %w", err)
-	}
-
-	// Refresh the caggs over everything now, before the retention job can
-	// drop the >14 d raw region the hourly aggregate must fold first. The
-	// CALLs manage their own transactions, so they need the simple protocol
-	// and must not run inside an explicit tx.
-	//
-	// The health cagg's refresh is bounded one bucket behind now: a full
-	// refresh would materialize the current partial bucket and push the
-	// watermark past it, and real-time aggregation only reads raw ABOVE the
-	// watermark — rows live agents insert into that bucket afterwards would
-	// stay invisible until a policy run catches up. Bounding keeps the live
-	// edge served from raw, exactly as the 30-min end_offset policy does in
-	// production. Hourly/daily keep the full refresh: their readers are
-	// 30d+ windows where the current partial bucket is invisible anyway.
-	for _, v := range []struct{ view, end string }{
-		{"probe_results_hourly", "NULL"}, // before daily: daily folds FROM hourly
-		{"probe_results_daily", "NULL"},
-		{"probe_results_health_30m", "now() - interval '30 minutes'"},
-	} {
-		if _, err := pool.Exec(ctx, fmt.Sprintf(
-			`CALL refresh_continuous_aggregate('%s', NULL, %s)`, v.view, v.end),
-			pgx.QueryExecModeSimpleProtocol); err != nil {
-			return fmt.Errorf("seed: refresh %s: %w", v.view, err)
-		}
+		return nil, fmt.Errorf("seed: commit: %w", err)
 	}
 
 	fmt.Fprintf(out, "seeded %d days (%d rows/direction, %s cadence), window %s → now-2m\n",
@@ -309,7 +343,37 @@ func Run(ctx context.Context, pool *pgxpool.Pool, days int, out io.Writer) error
 		fmt.Fprintf(out, "  %s → %s: rows=%d p50=%.0f p95=%.0f p99=%.0f\n",
 			s.p.src, s.p.dst, s.rows, s.p50, s.p95, s.p99)
 	}
-	fmt.Fprintf(out, "note: raw rows older than 14 d are dropped by retention later; hourly/daily keep them — that is the design under test\n")
+	dirs := make([]Direction, len(pairs))
+	for i, p := range pairs {
+		dirs[i] = Direction{Src: p.src, Dst: p.dst, AgentID: p.agentID, TargetID: p.targetID, ProbeID: p.probeID}
+	}
+	return dirs, nil
+}
+
+// Refresh materializes the named continuous aggregates (every view in
+// AllViews when none is given) from the beginning of time up to end, in
+// dependency order regardless of the order given. TimescaleDB floors the
+// window to whole buckets, so the resulting watermark is the last bucket
+// boundary at or before end. Watermarks only move forward: refreshing to an
+// earlier end than a previous refresh is a no-op.
+//
+// The CALLs manage their own transactions, so they need the simple protocol
+// and must not run inside an explicit tx.
+func Refresh(ctx context.Context, pool *pgxpool.Pool, end time.Time, views ...string) error {
+	want := map[string]bool{}
+	for _, v := range views {
+		want[v] = true
+	}
+	for _, v := range AllViews {
+		if len(views) > 0 && !want[v] {
+			continue
+		}
+		if _, err := pool.Exec(ctx,
+			fmt.Sprintf(`CALL refresh_continuous_aggregate('%s', NULL, $1::timestamptz)`, v),
+			pgx.QueryExecModeSimpleProtocol, end); err != nil {
+			return fmt.Errorf("seed: refresh %s: %w", v, err)
+		}
+	}
 	return nil
 }
 

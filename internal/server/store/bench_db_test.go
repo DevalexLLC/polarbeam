@@ -8,12 +8,14 @@ package store_test
 // are timed as real, constant round trips of the real ingest path.
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/devalexllc/polarbeam/internal/server/dbtest"
 	"github.com/devalexllc/polarbeam/internal/server/store"
 )
 
@@ -51,27 +53,56 @@ func BenchmarkInsertResultsTx(b *testing.B) {
 	if err := seedTx.Commit(ctx); err != nil {
 		b.Fatalf("seed commit: %v", err)
 	}
+	dbtest.LogServerFlags(b, ctx, s.Pool())
 	// 50 series is the baseline push shape; the row counts bracket it.
 	for _, rows := range []int{50, 250, 500} {
 		batch := benchRows(50, rows/50, t0)
 		b.Run(fmt.Sprintf("%drows", rows), func(b *testing.B) {
 			b.ReportAllocs()
+			wal := dbtest.StartWALMeter(b, ctx, s.Pool())
+			defer wal.Report(b, ctx)
 			for b.Loop() {
-				tx, err := s.Begin(ctx)
-				if err != nil {
-					b.Fatalf("begin: %v", err)
-				}
-				inserted, err := store.InsertResultsTx(ctx, tx, agentID, batch)
-				if err != nil {
-					b.Fatalf("InsertResultsTx: %v", err)
-				}
-				if len(inserted) != len(batch) {
-					b.Fatalf("inserted = %d, want %d fresh rows", len(inserted), len(batch))
-				}
-				if err := tx.Rollback(ctx); err != nil {
-					b.Fatalf("rollback: %v", err)
-				}
+				insertBatch(b, ctx, s, agentID, batch)
 			}
 		})
+	}
+	// Production checkpoints every few minutes, and the first write to any
+	// page after a checkpoint carries a full-page image — the only WAL
+	// wal_compression shrinks. The steady-state loop above rewrites the
+	// same hot pages and so pays almost none; this variant checkpoints
+	// (untimed) before every batch so each batch's WAL is the
+	// post-checkpoint kind. Its ns/op is not comparable to the loop above;
+	// read its walB/op and fpi/op.
+	batch := benchRows(50, 10, t0)
+	b.Run("500rows-postcheckpoint", func(b *testing.B) {
+		b.ReportAllocs()
+		wal := dbtest.StartWALMeter(b, ctx, s.Pool())
+		defer wal.Report(b, ctx)
+		for b.Loop() {
+			b.StopTimer()
+			if _, err := s.Pool().Exec(ctx, `CHECKPOINT`); err != nil {
+				b.Fatalf("checkpoint: %v", err)
+			}
+			b.StartTimer()
+			insertBatch(b, ctx, s, agentID, batch)
+		}
+	})
+}
+
+func insertBatch(b *testing.B, ctx context.Context, s *store.Store, agentID uuid.UUID, batch []store.ResultRow) {
+	b.Helper()
+	tx, err := s.Begin(ctx)
+	if err != nil {
+		b.Fatalf("begin: %v", err)
+	}
+	inserted, err := store.InsertResultsTx(ctx, tx, agentID, batch)
+	if err != nil {
+		b.Fatalf("InsertResultsTx: %v", err)
+	}
+	if len(inserted) != len(batch) {
+		b.Fatalf("inserted = %d, want %d fresh rows", len(inserted), len(batch))
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		b.Fatalf("rollback: %v", err)
 	}
 }

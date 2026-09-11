@@ -38,7 +38,7 @@ func newParityStore(t *testing.T) (context.Context, *store.Store) {
 
 // seedAgentTarget gives an agent its agent-kind target row (what
 // SiteEndpoints' triples join requires) and returns the target ID.
-func seedAgentTarget(t *testing.T, ctx context.Context, s *store.Store, agentID uuid.UUID) uuid.UUID {
+func seedAgentTarget(t testing.TB, ctx context.Context, s *store.Store, agentID uuid.UUID) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
 	if _, err := s.Pool().Exec(ctx,
