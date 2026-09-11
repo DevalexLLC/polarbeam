@@ -623,25 +623,22 @@ table.site-peers {
 
 table.site-peers th {
   padding: 0.55rem 0.9rem;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--border);
   color: var(--ink-3);
-  font-size: 0.75rem;
+  font-size: 0.78rem;
   font-weight: 600;
-  letter-spacing: 0.04em;
   text-align: left;
-  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 table.site-peers tbody th {
   color: var(--ink);
   font-size: 0.83rem;
-  letter-spacing: 0;
-  text-transform: none;
 }
 
 table.site-peers td {
   padding: 0.55rem 0.9rem;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--border);
   vertical-align: top;
 }
 
@@ -660,10 +657,13 @@ table.site-peers .site-peers-link {
   white-space: nowrap;
 }
 
+/* Status and figure stay on their own lines; the enclosing .scroll-x
+   scrolls before a narrow column may fold "Healthy" under its dot. */
 .site-direction {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
+  white-space: nowrap;
 }
 
 .site-direction-value {
@@ -702,8 +702,10 @@ table.matrix th a:focus-visible {
   flex-basis: 100%;
 }
 
-/* On the site page the fleet card stands alone, so the Overview row's
-   minimum scroll height would only leave blank space under one agent. */
+/* On the site page the fleet card stands alone: nothing above sizes it,
+   so the Overview row's grow-from-zero flex box would collapse the table
+   to nothing. It takes its natural height here. */
 #site-agents .fleet-scroll {
+  flex: none;
   min-height: 0;
 }
