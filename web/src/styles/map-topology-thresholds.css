@@ -289,16 +289,16 @@ button.map-marker {
 .map-tip {
   position: absolute;
   z-index: 3;
-  min-width: 13rem;
-  max-width: 17rem;
-  padding: 0.7rem 0.85rem 0.75rem;
+  min-width: 14rem;
+  max-width: 18rem;
+  padding: 0.95rem 1.1rem 1rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   color: var(--ink);
   background: var(--surface);
   box-shadow: 0 12px 32px rgb(0 0 0 / 0.18);
   font-size: 0.78rem;
-  line-height: 1.45;
+  line-height: 1.5;
   /* Interactive — it carries pair links; hover persistence is handled by
      the delayed-clear logic in WorldMap.tsx. */
   transform: translate(18px, -50%);
@@ -308,11 +308,24 @@ button.map-marker {
   transform: translate(calc(-100% - 18px), -50%);
 }
 
+/* Once the Overview runs its two-column layout (the 1100px breakpoint in
+   data-table-and-login-page.css) the map has the room, so the card opens up:
+   longer site and pair names stop wrapping and the score rows sit with air
+   around them. Below that width the map spans the page and the card's
+   narrower default keeps the globe visible beside it. */
+@media (min-width: 1100px) {
+  .map-tip {
+    min-width: 17rem;
+    max-width: 22rem;
+    padding: 1.1rem 1.3rem 1.15rem;
+  }
+}
+
 .map-tip-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.6rem;
+  gap: 0.75rem;
 }
 
 .map-tip-head b {
@@ -354,7 +367,7 @@ button.map-marker {
 }
 
 .map-tip-value {
-  margin-top: 0.35rem;
+  margin-top: 0.55rem;
   font-size: 1.25rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
@@ -366,11 +379,43 @@ button.map-marker {
   font-weight: 500;
 }
 
+/* Month-to-date score rows: label left, tabular value right. The tone
+   classes (stat-warning / stat-critical > strong) come from the stat tiles
+   in workspace.css, so no new color tokens are introduced here. */
+.map-tip-scores {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.3rem 0.9rem;
+  margin-top: 0.7rem;
+}
+
+.map-tip-score {
+  display: contents;
+}
+
+.map-tip-score > span {
+  color: var(--ink-2);
+  font-size: 0.75rem;
+}
+
+.map-tip-score > strong {
+  font-size: 0.85rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.map-tip-score > strong small {
+  color: var(--ink-3);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
 .map-tip-bar {
   display: flex;
   gap: 2px;
   height: 5px;
-  margin-top: 0.45rem;
+  margin-top: 0.75rem;
   border-radius: 3px;
   overflow: hidden;
 }
@@ -395,7 +440,7 @@ button.map-marker {
 }
 
 .map-tip-caption {
-  margin-top: 0.3rem;
+  margin-top: 0.4rem;
   color: var(--ink-2);
   font-size: 0.75rem;
 }
@@ -403,9 +448,11 @@ button.map-marker {
 .map-tip-links {
   display: flex;
   flex-direction: column;
-  max-height: 8.5rem;
-  margin-top: 0.45rem;
-  padding-top: 0.35rem;
+  /* Six rows before the list scrolls: enough for a small mesh to show
+     every pair, and the cut lands on a row edge rather than mid-glyph. */
+  max-height: 10.75rem;
+  margin-top: 0.75rem;
+  padding-top: 0.5rem;
   border-top: 1px solid var(--border);
   overflow-y: auto;
 }
@@ -414,8 +461,8 @@ button.map-marker {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.6rem;
-  padding: 0.18rem 0.1rem;
+  gap: 0.75rem;
+  padding: 0.26rem 0.2rem;
   border-radius: calc(var(--radius) - 4px);
   color: var(--accent);
   font-size: 0.75rem;

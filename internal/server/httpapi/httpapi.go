@@ -90,6 +90,7 @@ func newHandler(sdb DB, static fs.FS, providers OIDCProviders) http.Handler {
 	mux.HandleFunc("GET /api/v1/auth/oidc/start", a.handleOIDCStart)
 	mux.HandleFunc("GET /api/v1/auth/oidc/callback", a.handleOIDCCallback)
 	mux.Handle("GET /api/v1/sites", a.withSession(a.handleSites))
+	mux.Handle("GET /api/v1/sites/scores", a.withSession(a.handleSiteScores))
 	mux.Handle("GET /api/v1/agents", a.withSession(a.handleAgents))
 	mux.Handle("GET /api/v1/agents/health", a.withSession(a.handleAgentHealth))
 	// The literal /agents/health above wins over this wildcard for that path.

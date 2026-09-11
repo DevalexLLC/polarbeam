@@ -638,6 +638,23 @@ incident: a degraded link that goes fully down escalates to `probe_failing`.
 The server also detects agent silence separately, so a disconnected agent is
 not mistaken for every probe failing at once.
 
+The map's site card adds two month-to-date figures for the UTC calendar
+month so far, computed from the hourly aggregate over every non-traceroute
+series the site's agents run or that targets the site (a series between two
+sites counts for both). **Availability** is the share of those samples with
+status `OK`. **Performance** is the share of the successful samples that
+fell in hours graded healthy: an hour is healthy when the series' average
+latency and its loss (failed samples included — a timed-out train is loss)
+both stay below the effective *warn* thresholds, resolved with the same
+pair → network → global layering as incidents; an external target grades on
+its plane default over the global row. Warn-tier values feed this score but
+still never open incidents. The grading unit is one (agent, target, probe
+type) series per hour, the same grain the matrix and pair views use, so two
+same-type templates between the same endpoints grade as one blended series.
+There is no traffic-volume or throughput measurement in PolarBEAM, so the
+card carries no "traffic impacted" figure; that needs instrumentation the
+probes do not collect.
+
 ## Large-infrastructure patterns
 
 ### Regional WAN and SD-WAN meshes

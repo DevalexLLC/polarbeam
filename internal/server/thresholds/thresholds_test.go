@@ -68,3 +68,51 @@ func TestGradeCritDetailIsStable(t *testing.T) {
 		t.Errorf("combined detail = %q", d4)
 	}
 }
+
+func TestGradeWarn(t *testing.T) {
+	cases := []struct {
+		name    string
+		t       T
+		latency *int64
+		loss    *float64
+		want    bool
+	}{
+		{"unmeasured never breaches", global, nil, nil, false},
+		{"latency at the warn threshold breaches", global, i64(100_000), nil, true},
+		{"latency below the warn threshold passes", global, i64(99_999), nil, false},
+		{"crit-tier latency is also a warn breach", global, i64(900_000), nil, true},
+		{"loss at the warn threshold breaches", global, nil, f64(1), true},
+		{"loss below the warn threshold passes", global, nil, f64(0.5), false},
+		{"either metric breaching is enough", global, i64(50_000), f64(3), true},
+		// loss_warn_pct = 0 means "warn on any loss": measurable loss flags,
+		// a lossless link does not, even though 0 >= 0.
+		{"zero loss never breaches a zero threshold", T{LatencyWarnUS: 1 << 40, LossWarnPct: 0}, nil, f64(0), false},
+		{"any loss breaches a zero threshold", T{LatencyWarnUS: 1 << 40, LossWarnPct: 0}, nil, f64(0.01), true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := GradeWarn(c.t, c.latency, c.loss); got != c.want {
+				t.Errorf("GradeWarn(%+v, %v, %v) = %v, want %v", c.t, c.latency, c.loss, got, c.want)
+			}
+		})
+	}
+}
+
+// TestGradeTiersAgree pins that the warn and crit graders apply one rule at
+// two thresholds: a measurement that breaches crit always breaches warn
+// (crit > warn by CHECK), and the shared comparison treats both boundaries
+// the same way.
+func TestGradeTiersAgree(t *testing.T) {
+	for _, lat := range []int64{0, 99_999, 100_000, 249_999, 250_000, 1 << 30} {
+		crit, _ := GradeCrit(global, i64(lat), nil)
+		if crit && !GradeWarn(global, i64(lat), nil) {
+			t.Errorf("latency %d breaches crit but not warn", lat)
+		}
+	}
+	for _, loss := range []float64{0, 0.5, 1, 4.9, 5, 100} {
+		crit, _ := GradeCrit(global, nil, f64(loss))
+		if crit && !GradeWarn(global, nil, f64(loss)) {
+			t.Errorf("loss %v breaches crit but not warn", loss)
+		}
+	}
+}

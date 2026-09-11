@@ -122,6 +122,10 @@ type fakeDashboardState struct {
 	// asserts the pair endpoints' ?network= filter narrowed the endpoint
 	// ID sets.
 	pairSummaryAgents [][]uuid.UUID
+	// SiteScores rows plus the since / exclusion the last call carried.
+	siteScores        []store.SiteScore
+	lastScoresSince   time.Time
+	lastScoresExclude int16
 }
 
 // fakeEventState backs the eventReader fake methods.
@@ -451,6 +455,11 @@ func (f *fakeDB) MatrixLatest(_ context.Context, _ time.Duration, networks []uui
 func (f *fakeDB) ExpectedPairs(_ context.Context, networks []uuid.UUID) ([]store.NetworkPair, error) {
 	f.recordScope("ExpectedPairs", networks)
 	return f.expectedPairs, nil
+}
+func (f *fakeDB) SiteScores(_ context.Context, since time.Time, excludeProbeType int16, networks []uuid.UUID) ([]store.SiteScore, error) {
+	f.recordScope("SiteScores", networks)
+	f.lastScoresSince, f.lastScoresExclude = since, excludeProbeType
+	return f.siteScores, nil
 }
 func (f *fakeDB) SiteEndpointsBatch(_ context.Context, names []string, networks []uuid.UUID) ([]*store.SiteEndpoints, error) {
 	f.recordScope("SiteEndpoints", networks)
@@ -878,7 +887,7 @@ func loginAndCookie(t *testing.T, h http.Handler, f *fakeDB) (*http.Cookie, stri
 func TestSessionRequired(t *testing.T) {
 	h := newTestAPI(t, newFakeDB())
 	for _, path := range []string{
-		"/api/v1/auth/me", "/api/v1/sites", "/api/v1/agents", "/api/v1/matrix",
+		"/api/v1/auth/me", "/api/v1/sites", "/api/v1/sites/scores", "/api/v1/agents", "/api/v1/matrix",
 		"/api/v1/agents/health", "/api/v1/pairs/a/b", "/api/v1/pairs/a/b/series",
 		"/api/v1/agents/00000000-0000-0000-0000-000000000000/health",
 		"/api/v1/agents/00000000-0000-0000-0000-000000000000/health/bucket?t=0",

@@ -8,7 +8,10 @@
 // Effective is the single definition of that merge: httpapi calls straight
 // into it, and testdata/threshold-merge.json holds the shared case table
 // that both this package's tests and the SPA's parity check read, so the Go
-// and TypeScript resolvers cannot drift silently.
+// and TypeScript resolvers cannot drift silently. One more copy lives in
+// SQL: store.SiteScores folds the same four layers with COALESCE and grades
+// the warn tier in the query (per-hour rows are far too many to ship to
+// Go); its DB test replays the shared fixture against Effective + GradeWarn.
 package thresholds
 
 import (
@@ -67,6 +70,28 @@ func Effective(global T, layers ...Override) T {
 	return out
 }
 
+// breaches is the tier-agnostic comparison GradeCrit and GradeWarn share,
+// so the two tiers cannot drift: a metric breaches at or above its
+// threshold; nil metrics are "not measured" and never breach; zero loss is
+// never unhealthy (loss_warn_pct may legitimately be 0, "warn on any loss",
+// and 0 >= 0 must not flag a lossless link — the same guard the SPA's
+// directionSeverity applies).
+func breaches(latencyUS *int64, lossPct *float64, latencyThreshold int64, lossThreshold float64) (latency, loss bool) {
+	latency = latencyUS != nil && *latencyUS >= latencyThreshold
+	loss = lossPct != nil && *lossPct > 0 && *lossPct >= lossThreshold
+	return latency, loss
+}
+
+// GradeWarn reports whether a successful measurement reaches the warn tier
+// on either metric. Warn never opens an incident; it grades the live map and
+// the month-to-date site performance score. store.SiteScores evaluates this
+// same rule inside SQL over hourly buckets (the store's parity DB test grades
+// the same buckets both ways), so a change here needs the same change there.
+func GradeWarn(t T, latencyUS *int64, lossPct *float64) bool {
+	latency, loss := breaches(latencyUS, lossPct, t.LatencyWarnUS, t.LossWarnPct)
+	return latency || loss
+}
+
 // GradeCrit reports whether a successful measurement breaches the critical
 // tier, with a display string naming what breached. Nil metrics are "not
 // measured" and never breach. Zero loss is never unhealthy — loss_crit_pct
@@ -77,8 +102,7 @@ func Effective(global T, layers ...Override) T {
 // error text, and a per-event measurement would split every incident into a
 // group of one.
 func GradeCrit(t T, latencyUS *int64, lossPct *float64) (bool, string) {
-	latencyBreach := latencyUS != nil && *latencyUS >= t.LatencyCritUS
-	lossBreach := lossPct != nil && *lossPct > 0 && *lossPct >= t.LossCritPct
+	latencyBreach, lossBreach := breaches(latencyUS, lossPct, t.LatencyCritUS, t.LossCritPct)
 	switch {
 	case latencyBreach && lossBreach:
 		return true, fmt.Sprintf("latency and loss at or above critical thresholds (%s, %s%%)",

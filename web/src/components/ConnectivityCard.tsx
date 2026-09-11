@@ -7,7 +7,7 @@ import { buildSiteLinks } from '../mapLinks'
 import type { ThresholdResolver } from '../severity'
 import type { SiteTopology } from '../siteTopology'
 import type { TopologyMode } from '../topologyMode'
-import type { MatrixCell, MatrixResponse, Site } from '../types'
+import type { MatrixCell, MatrixResponse, Site, SiteScoresResponse } from '../types'
 
 export type ConnectivityMode = TopologyMode
 
@@ -23,6 +23,8 @@ export default function ConnectivityCard({
   cells,
   thresholds,
   topology,
+  scores,
+  scoresError,
   mode,
   onModeChange,
 }: {
@@ -31,6 +33,10 @@ export default function ConnectivityCard({
   cells: MatrixCell[]
   thresholds: ThresholdResolver
   topology: SiteTopology[]
+  // Month-to-date tallies for the map's site card only; null until the
+  // (separately polled) response for the current plane has landed.
+  scores: SiteScoresResponse | null
+  scoresError: unknown
   mode: ConnectivityMode
   onModeChange: (mode: ConnectivityMode) => void
 }) {
@@ -61,7 +67,7 @@ export default function ConnectivityCard({
       {mode === 'sites' ? (
         <TopologySites topology={topology} />
       ) : mode === 'map' ? (
-        <WorldMap topology={topology} links={links} />
+        <WorldMap topology={topology} links={links} scores={scores} scoresError={scoresError} />
       ) : (
         <MatrixTable sites={sites} cells={cells} thresholds={thresholds} />
       )}

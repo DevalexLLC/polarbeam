@@ -25,6 +25,7 @@ import {
   type ThresholdResolver,
 } from '../severity'
 import { agentIsLive, ratioStatus } from '../siteHealth'
+import { fmtPercent, scoreTone } from '../siteScores'
 import { buildSiteTopology, topologyUrgentSites } from '../siteTopology'
 import { useTimezone } from '../timezone'
 import { usePolledResource } from '../usePolledResource'
@@ -41,13 +42,6 @@ import type {
 import { WINDOWS } from '../types'
 
 const scrollTo = (id: string) => document.getElementById(id)?.scrollIntoView({ block: 'nearest' })
-
-// Percent with the trailing zeros trimmed: 100, 99.9, 97.25.
-function fmtPercent(ratio: number): string {
-  const pct = ratio * 100
-  if (pct >= 100) return '100'
-  return pct.toFixed(2).replace(/\.?0+$/, '')
-}
 
 // One direction of a peer row: the latest fold's status, latency, and loss,
 // plus per-plane chips on multi-network installs.
@@ -353,13 +347,7 @@ export default function SiteDetail({
               : `${active.length}${outages.truncated ? '+' : ''} open ${active.length === 1 ? 'event' : 'events'}`}
           </span>
         </button>
-        <button
-          type="button"
-          className={
-            'stat-card ' + (freeRatio >= 1 ? 'stat-good' : freeRatio >= 0.99 ? 'stat-warning' : 'stat-critical')
-          }
-          onClick={() => scrollTo('site-incidents')}
-        >
+        <button type="button" className={'stat-card' + scoreTone(freeRatio)} onClick={() => scrollTo('site-incidents')}>
           <span className="stat-label">Incident-free time</span>
           <strong>
             {historyCapped ? '≤ ' : ''}

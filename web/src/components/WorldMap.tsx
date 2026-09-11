@@ -20,7 +20,9 @@ import { DOT_GRID_D } from '../mapDots'
 import { bubbleRadius, declutter, type DeclutterNode } from '../mapLayout'
 import type { BeamEnd, SiteLink } from '../mapLinks'
 import { SEVERITY_LABEL, type Severity } from '../severity'
+import { fmtPercentFixed, indexSiteScores, scoreTone, siteScoreRatios } from '../siteScores'
 import type { SiteTopology } from '../siteTopology'
+import type { SiteScoresResponse } from '../types'
 
 // warn and crit are both publicly "Degraded"; crit keeps a stronger visual
 // intensity via its own class, never a different label.
@@ -50,8 +52,19 @@ interface PlacedSite {
   displaced: boolean // shifted far enough to warrant an anchor mark
 }
 
-export default function WorldMap({ topology, links }: { topology: SiteTopology[]; links: SiteLink[] }) {
+export default function WorldMap({
+  topology,
+  links,
+  scores,
+  scoresError,
+}: {
+  topology: SiteTopology[]
+  links: SiteLink[]
+  scores: SiteScoresResponse | null
+  scoresError: unknown
+}) {
   const [pinned, setPinned] = useState<string | null>(null)
+  const scoreIndex = useMemo(() => indexSiteScores(scores), [scores])
   const [hovered, setHovered] = useState<string | null>(null)
   const [viewport, setViewport] = useState<MapViewport>(FULL_MAP_VIEWPORT)
   const [dragging, setDragging] = useState(false)
@@ -514,6 +527,19 @@ export default function WorldMap({ topology, links }: { topology: SiteTopology[]
   const shownPoint = shown ? { x: shown.x, y: shown.y } : null
   const shownStats = shown ? shown.topology.stats : null
   const shownSev = shown ? shown.topology.severity : null
+  const shownScoreRow = shownSite ? scoreIndex.get(shownSite.name) : undefined
+  const shownScore = siteScoreRatios(shownScoreRow)
+  // A failed refresh after a successful load keeps the last snapshot on
+  // screen (usePolledResource's contract) — so the caption must say so,
+  // or stale percentages would read as current.
+  const scoreCaption =
+    scores == null
+      ? scoresError
+        ? 'Month-to-date scores unavailable'
+        : 'Loading month-to-date scores…'
+      : (shownScoreRow == null || shownScoreRow.samples === 0
+          ? `No samples this month · ${scores.month}`
+          : `Month to date · ${scores.month}`) + (scoresError ? ' · refresh failed, last snapshot' : '')
   const shownLeft = shownPoint ? ((shownPoint.x - viewport.x) / viewport.width) * 100 : 0
   const shownTop = shownPoint ? ((shownPoint.y - viewport.y) / viewport.height) * 100 : 0
   const shownInViewport = shownLeft >= 0 && shownLeft <= 100 && shownTop >= 0 && shownTop <= 100
@@ -666,6 +692,35 @@ export default function WorldMap({ topology, links }: { topology: SiteTopology[]
                 {shownStats.bestLatencyUs == null ? '—' : fmtLatency(shownStats.bestLatencyUs)}
                 <small> best live latency</small>
               </div>
+              {/* Month-to-date scores: availability is the successful
+                  share of every probe sample touching this site this UTC
+                  calendar month; performance is the share of those
+                  successes that fell in hours graded under the warn
+                  thresholds. Tone reuses the stat tiles' classes, and a
+                  zero denominator stays an honest dash. */}
+              <div className="map-tip-scores">
+                {(
+                  [
+                    ['Availability', shownScore.availability],
+                    ['Performance', shownScore.performance],
+                  ] as const
+                ).map(([label, ratio]) => (
+                  <div key={label} className={'map-tip-score' + scoreTone(ratio)}>
+                    <span>{label}</span>
+                    <strong>
+                      {ratio == null ? (
+                        '—'
+                      ) : (
+                        <>
+                          {fmtPercentFixed(ratio)}
+                          <small> %</small>
+                        </>
+                      )}
+                    </strong>
+                  </div>
+                ))}
+              </div>
+              <div className="map-tip-caption">{scoreCaption}</div>
               {shownStats.directions > 0 && (
                 <div
                   className="map-tip-bar"
