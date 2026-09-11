@@ -8,6 +8,7 @@ package migrate_test
 
 import (
 	"context"
+	"maps"
 	"testing"
 	"time"
 
@@ -87,6 +88,66 @@ func TestApplyOnFreshDatabase(t *testing.T) {
 	}
 	if n != 1 {
 		t.Error("timescaledb_toolkit extension missing after migrate")
+	}
+
+	// 0026: columnstore settings on the raw hypertable and on the two
+	// hourly caggs' materialization hypertables (health_30m and the daily
+	// caggs stay rowstore), each with a compression policy at the
+	// documented offset.
+	// Settings are keyed by the materialization hypertable, so resolve
+	// view names through continuous_aggregates.
+	wantSettings := map[string][2]string{
+		"probe_results":              {"agent_id,target_id,probe_id", `"time" DESC`},
+		"probe_results_hourly":       {"agent_id,target_id,probe_type,latency_source", "bucket DESC"},
+		"probe_results_stage_hourly": {"agent_id,target_id,probe_type", "bucket DESC"},
+	}
+	// The view lists every hypertable; those without columnstore settings
+	// have NULL segmentby/orderby.
+	rows, err := conn.Query(ctx, `
+		SELECT COALESCE(ca.view_name, s.hypertable::text), s.segmentby, s.orderby
+		  FROM timescaledb_information.hypertable_columnstore_settings s
+		  LEFT JOIN timescaledb_information.continuous_aggregates ca
+		    ON format('%I.%I', ca.materialization_hypertable_schema, ca.materialization_hypertable_name)::regclass = s.hypertable
+		 WHERE s.segmentby IS NOT NULL OR s.orderby IS NOT NULL`)
+	if err != nil {
+		t.Fatalf("columnstore settings: %v", err)
+	}
+	gotSettings := map[string][2]string{}
+	for rows.Next() {
+		var name, segmentby, orderby string
+		if err := rows.Scan(&name, &segmentby, &orderby); err != nil {
+			t.Fatalf("scan settings: %v", err)
+		}
+		gotSettings[name] = [2]string{segmentby, orderby}
+	}
+	rows.Close()
+	if !maps.Equal(gotSettings, wantSettings) {
+		t.Errorf("columnstore settings = %v, want %v", gotSettings, wantSettings)
+	}
+
+	wantAfter := map[string]string{
+		"probe_results":              "8 days",
+		"probe_results_hourly":       "10 days",
+		"probe_results_stage_hourly": "10 days",
+	}
+	rows, err = conn.Query(ctx, `
+		SELECT hypertable_name, config->>'compress_after'
+		  FROM timescaledb_information.jobs
+		 WHERE proc_name = 'policy_compression'`)
+	if err != nil {
+		t.Fatalf("compression jobs: %v", err)
+	}
+	gotAfter := map[string]string{}
+	for rows.Next() {
+		var name, after string
+		if err := rows.Scan(&name, &after); err != nil {
+			t.Fatalf("scan jobs: %v", err)
+		}
+		gotAfter[name] = after
+	}
+	rows.Close()
+	if !maps.Equal(gotAfter, wantAfter) {
+		t.Errorf("compression policies = %v, want %v", gotAfter, wantAfter)
 	}
 }
 
