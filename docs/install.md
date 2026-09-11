@@ -1489,7 +1489,9 @@ compose pull` and `up -d` across the release that changed the database
 image. Nothing is damaged: the server refuses to touch the directory. Put
 the previous compose file back and start the old image again, then follow
 [Upgrading across a database major version](#upgrading-across-a-database-major-version-pg16-to-pg18),
-which carries the data across with a dump and restore.
+which carries the data across with a dump and restore. If the data is not worth
+keeping, [Starting fresh instead of upgrading](#starting-fresh-instead-of-upgrading-pg16-to-pg18)
+reinstalls on an empty volume.
 
 ### Agents connect but mesh results are absent or target the proxy
 
@@ -1723,6 +1725,10 @@ started against a pg16 volume refuses with
 conversion happens. Data crosses the boundary with a logical dump and
 restore, which is the procedure below. It replaces the live-upgrade steps
 for that one release; every later upgrade is a normal live upgrade again.
+
+An installation whose history is not worth keeping can instead discard
+its state and reinstall; see
+[Starting fresh instead of upgrading](#starting-fresh-instead-of-upgrading-pg16-to-pg18).
 
 The procedure is deliberately fail-fast. Check the exit status of every
 command. If any command fails, or any check does not show the expected
@@ -2096,6 +2102,115 @@ the dump file plus a second copy of the `dbdata` volume.
       before step 5, and the procedure can be retried from step 4 after
       the cause is understood (step 5 replaces the leftover
       `<project>_dbdata_pg16` copy with a fresh one).
+
+### Starting fresh instead of upgrading (pg16 to pg18)
+
+An installation that does not need its history — a pilot, a lab, or a site
+that would rather re-enroll than dump and restore — can cross the pg18
+boundary by discarding the control plane's state and reinstalling. This is
+not a shortcut through the procedure above: it is a new installation that
+happens to reuse the host, and it keeps **nothing**. Every dashboard user,
+site, network, mesh, probe, target, threshold, and measurement is recreated
+by hand, and every agent re-enrolls.
+
+The reason is the trust boundary described under
+[Backup scope](#backup-scope). The Compose file declares three volumes:
+`dbdata` (the pg16 data directory), `server-state` (the built-in CA private
+key and the auto-issued gRPC server certificate), and `tls` (the dashboard
+certificate and key). `docker compose down -v` removes all three. Keeping
+`server-state` to spare the agents does not work: agent certificate records
+live in the database, so an empty database orphans every agent even under
+the old CA. Removing all three and re-enrolling is the only consistent
+outcome. `.env`, `server.yaml`, and the installation directory are not
+volumes and survive the reset.
+
+1. **Decide about the history first.** After the volumes are gone, the
+   only way back is a backup taken now, and restoring it later means the
+   full [dump-and-restore procedure](#upgrading-across-a-database-major-version-pg16-to-pg18),
+   which needs the pg16 image still loaded on the host. Take a backup per
+   [Backup scope](#backup-scope) if there is any chance the data is
+   wanted, and keep the pg16 image until that question is settled.
+
+2. **Stage the images** exactly as in step 2 of the procedure above,
+   including the pg18 database image, and confirm it is present:
+
+   ```sh
+   docker image inspect timescale/timescaledb-ha:pg18 >/dev/null && echo ok
+   ```
+
+3. **Update the configuration.** Replace `docker-compose.yml` with the new
+   release's copy — the database image is a literal line in that file — and
+   set `POLARBEAM_VERSION` in `.env` to the new release. The database
+   password is applied when the new `dbdata` volume initializes, so this
+   is also the one moment it can change freely; if you do change it, set
+   it in both `.env` and the `db.url` line of `server.yaml`, which must
+   agree. Nothing else in `server.yaml` needs to change.
+
+4. **Confirm what is about to be removed.** The shipped compose file sets
+   `name: polarbeam`, so the volumes are `polarbeam_dbdata`,
+   `polarbeam_server-state`, and `polarbeam_tls`; check the actual names
+   before proceeding:
+
+   ```sh
+   docker compose ps
+   docker volume ls --filter name=polarbeam
+   ```
+
+5. **Remove the stack and its volumes.** This is the point of no return
+   for everything the previous step listed:
+
+   ```sh
+   docker compose down -v
+   docker volume ls --filter name=polarbeam
+   ```
+
+   The second command must print no volumes. If one remains (for example
+   because the compose project name was changed at some point), remove it
+   with `docker volume rm` before continuing — a pg16 `dbdata` volume left
+   in place makes the pg18 image refuse to start, as described under
+   [Troubleshooting](#database-container-exits-with-database-files-are-incompatible-with-server).
+
+6. **Reinstall the control plane.** Follow
+   [section 4.3](#43-install-the-dashboard-certificate) to put the
+   dashboard certificate and key back into the recreated `tls` volume, then
+   [section 5](#5-initialize-and-deploy-the-control-plane) from the top:
+   `migrate`, `ca init`, `up -d`, and `user add --admin`. Record the new
+   CA fingerprint that `ca init` prints; every fingerprint recorded before
+   the reset is now wrong. Recreate networks, sites, meshes, probes,
+   targets, and thresholds as in [sections 7](#7-create-an-enrollment-token)
+   through [10](#10-configure-probe-workloads).
+
+7. **Re-enroll every agent into a fresh state volume.** Mint a token for
+   each agent's site **and its original network** (the token carries the
+   network; omitting `--network` on a multi-network deployment silently
+   lands the agent on `default`). Then, on each agent host, stop and remove
+   the container, remove its state volume, and enroll again exactly as in
+   [section 8](#8-deploy-a-container-agent) with the new fingerprint and
+   the same `--probe-address`:
+
+   ```sh
+   docker stop -t 60 polarbeam-agent
+   docker rm polarbeam-agent
+   docker volume rm polarbeam-agent-state
+   # continue at section 8.1 (new volume, new token, NEW fingerprint,
+   # same --probe-address), then start the container per section 8.3
+   ```
+
+   Replacing the volume, rather than `identity retire`, is deliberate:
+   the spool holds results tagged with probe and target identifiers from
+   the old database. Those identifiers do not exist in the new one, so a
+   drained spool would only add rows that nothing can display. Anything
+   the agent measured between the reset and its re-enrollment is lost
+   either way; treat the reset as day zero for measurements.
+
+8. **Clean up.** Delete the backup copies (`docker-compose.pg16.yml`,
+   `.env.pg16`, any `polarbeam-pg16.dump`) if the dump-and-restore
+   procedure was started before switching to this one, and remove the
+   pg16 database image once the decision in step 1 is final:
+
+   ```sh
+   docker image rm timescale/timescaledb-ha:pg16-all
+   ```
 
 ### Agents
 
