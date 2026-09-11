@@ -83,6 +83,13 @@ export function latencySourceName(source: string): string {
   }
 }
 
+// The same name inside a running label ("avg tcp connect" would be
+// wrong, "avg Latency" too): acronyms keep their caps, words run lowercase.
+export function latencyStatName(source: string): string {
+  const name = latencySourceName(source)
+  return /^[A-Z]{2}/.test(name) ? name : name.charAt(0).toLowerCase() + name.slice(1)
+}
+
 // Axis label for the latency metric, from the API's latency_source.
 export function latencyAxisLabel(source: string): string {
   return `${latencySourceName(source)} (ms)`

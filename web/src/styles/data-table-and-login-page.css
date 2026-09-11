@@ -28,6 +28,9 @@ table.data-table th {
   border-bottom: 1px solid var(--border-strong);
   color: var(--ink-3);
   background: var(--surface);
+  /* A column's class (.mono) styles its cells; the header is structure
+     and stays in the interface face. */
+  font-family: var(--sans);
   font-size: 0.78rem;
   font-weight: 600;
   text-align: left;

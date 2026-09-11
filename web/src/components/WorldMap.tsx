@@ -660,8 +660,10 @@ export default function WorldMap({
             )
           })}
         </div>
+        {/* The bare figure needs its noun; the aria-label above already
+            reads the zoom to assistive tech. */}
         <span className="map-zoom-readout" aria-hidden="true">
-          {zoomPercent}%
+          Zoom {zoomPercent}%
         </span>
         {shownSite &&
           shownPoint &&

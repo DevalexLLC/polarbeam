@@ -16,6 +16,19 @@
   letter-spacing: -0.035em;
 }
 
+/* Site names in the pair heading open the site pages. They keep the
+   heading's ink, like the matrix headers do; the underline arrives on
+   hover so the title reads as a title first. */
+.page-head-primary h1 a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.page-head-primary h1 a:hover,
+.page-head-primary h1 a:focus-visible {
+  text-decoration: underline;
+}
+
 .page-head-primary p {
   max-width: 44rem;
   margin: 0.45rem 0 0;
