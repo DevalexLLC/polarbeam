@@ -124,6 +124,12 @@ func (s *Store) InvalidateConfigCaches() {
 // once agent config streams, the outage sweep, and dashboard polls all
 // draw from the same pool, so automatic sizing raises the floor while
 // staying beneath a stock postgres max_connections of 100.
+// Session defaults applied by Connect (see there).
+const (
+	applicationName = "polarbeam-server"
+	idleInTxTimeout = "2min"
+)
+
 func Connect(ctx context.Context, url string, timeout time.Duration, maxConns int) (*Store, error) {
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
@@ -135,6 +141,27 @@ func Connect(ctx context.Context, url string, timeout time.Duration, maxConns in
 	case !urlSetsPoolMaxConns(url):
 		cfg.MaxConns = int32(max(16, min(4*runtime.NumCPU(), 64)))
 	}
+	// Session defaults every pooled connection carries. These are server
+	// safety settings, not operator decisions, so they are not config keys;
+	// a URL parameter still wins for application_name (pgx maps it into
+	// RuntimeParams before this runs).
+	if cfg.ConnConfig.RuntimeParams == nil {
+		cfg.ConnConfig.RuntimeParams = map[string]string{}
+	}
+	if _, set := cfg.ConnConfig.RuntimeParams["application_name"]; !set {
+		cfg.ConnConfig.RuntimeParams["application_name"] = applicationName
+	}
+	// A connection checked out and left idle inside a transaction would
+	// hold chunk locks against the retention and columnstore jobs for as
+	// long as the goroutine is stuck; every store transaction is a handful
+	// of sub-second round trips, so two minutes is far outside normal.
+	// (pgxpool already destroys a connection released mid-transaction; this
+	// covers the checked-out case.) No statement_timeout/lock_timeout here:
+	// ingest must wait behind a chunk drop, not fail.
+	cfg.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"] = idleInTxTimeout
+	// Connections opened together at startup would otherwise all reach the
+	// default one-hour MaxConnLifetime together and reconnect in a burst.
+	cfg.MaxConnLifetimeJitter = 10 * time.Minute
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("db connect: %w", err)
