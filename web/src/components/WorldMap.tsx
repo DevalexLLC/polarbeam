@@ -20,7 +20,7 @@ import { DOT_GRID_D } from '../mapDots'
 import { bubbleRadius, declutter, type DeclutterNode } from '../mapLayout'
 import type { BeamEnd, SiteLink } from '../mapLinks'
 import { SEVERITY_LABEL, type Severity } from '../severity'
-import { fmtPercent, indexSiteScores, scoreTone, siteScoreRatios } from '../siteScores'
+import { fmtPercentFixed, indexSiteScores, scoreTone, siteScoreRatios } from '../siteScores'
 import type { SiteTopology } from '../siteTopology'
 import type { SiteScoresResponse } from '../types'
 
@@ -712,7 +712,7 @@ export default function WorldMap({
                         '—'
                       ) : (
                         <>
-                          {fmtPercent(ratio)}
+                          {fmtPercentFixed(ratio)}
                           <small> %</small>
                         </>
                       )}

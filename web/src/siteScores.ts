@@ -31,6 +31,13 @@ export function fmtPercent(ratio: number): string {
   return pct.toFixed(2).replace(/\.?0+$/, '')
 }
 
+// The card's two rows sit one above the other, so they always carry two
+// decimals: 99.90 % over 97.43 % reads as a matched pair, where the trimmed
+// 99.9 % looks like a different size beside a four-digit neighbor.
+export function fmtPercentFixed(ratio: number): string {
+  return (Math.min(ratio, 1) * 100).toFixed(2)
+}
+
 export interface SiteScore {
   // null when the denominator is zero: no samples this month, or no
   // successful ones to grade.

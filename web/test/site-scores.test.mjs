@@ -9,6 +9,7 @@ import { startPolledResource } from '../src/polledResource.ts'
 import {
   SITE_SCORES_POLL_MS,
   fmtPercent,
+  fmtPercentFixed,
   indexSiteScores,
   scoreTone,
   siteScoreRatios,
@@ -59,6 +60,14 @@ test('fmtPercent trims trailing zeros and caps at 100', () => {
   assert.equal(fmtPercent(0.999), '99.9')
   assert.equal(fmtPercent(0.9725), '97.25')
   assert.equal(fmtPercent(0), '0')
+})
+
+test('the card keeps two decimals so its two rows read as a matched pair', () => {
+  assert.equal(fmtPercentFixed(0.999), '99.90')
+  assert.equal(fmtPercentFixed(0.9743), '97.43')
+  assert.equal(fmtPercentFixed(1), '100.00')
+  assert.equal(fmtPercentFixed(1.5), '100.00')
+  assert.equal(fmtPercentFixed(0), '0.00')
 })
 
 test('indexing tolerates a missing response', () => {
@@ -141,7 +150,8 @@ test('the map card renders both scores with the shared tone and an honest dash',
   assert.match(map, /\['Performance', shownScore\.performance\]/)
   assert.match(map, /className=\{'map-tip-score' \+ scoreTone\(ratio\)\}/)
   assert.match(map, /ratio == null \? \(\s*'—'/)
-  assert.match(map, /fmtPercent\(ratio\)/)
+  assert.match(map, /fmtPercentFixed\(ratio\)/)
+  assert.doesNotMatch(map, /[^d]fmtPercent\(/)
   assert.match(map, /'Loading month-to-date scores…'/)
   assert.match(map, /'Month-to-date scores unavailable'/)
   assert.match(map, /`No samples this month · \$\{scores\.month\}`/)
