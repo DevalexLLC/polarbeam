@@ -186,7 +186,13 @@ Full design + milestone plan: `docs/architecture.md`.
   troubleshooting, lifecycle, upgrades, and backup scope. It uses the actual
   dashboard-user CLI (`user add --admin`) and makes clear that probe workloads
   are configured centrally rather than in agent YAML. `README.md` links it as
-  the production installation entry point.
+  the production installation entry point. Its Upgrades section covers only
+  the hop from the previous release; procedures for crossing an older
+  boundary (pg16→pg18 at v0.11.0, the pre-v0.5.0 ECDSA CA cutover) live
+  verbatim in `docs/upgrade-archive.md`, which the bundle ships next to the
+  guide. Only the latest release is supported (`SECURITY.md`); when a
+  release ships, notes specific to older hops are pruned there, never
+  accumulated (CONTRIBUTING.md "Releases").
 - `docs/probes.md` is the authoritative operator reference for supported probe
   transports, ports, parameters, assignment models (both network-scoped:
   meshes pair only same-network agents, direct probes run only on the

@@ -12,7 +12,9 @@ Deployment files live in `deploy/` (including the annotated
 
 `docs/quickstart.md` is the minimal connected two-site walkthrough; keep its
 commands aligned with deployment defaults and leave deeper guidance in
-`docs/install.md`.
+`docs/install.md`. That guide's Upgrades section covers only the hop from
+the previous release; procedures for crossing older release boundaries
+live in `docs/upgrade-archive.md` (see CONTRIBUTING.md "Releases").
 
 ## Build, Test, and Development Commands
 
