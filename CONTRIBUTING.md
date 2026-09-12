@@ -97,6 +97,47 @@ one daily database cache, with normal freshness checks enabled. Scanner
 and database downloads are CI-only; they must not enter Make targets or
 air-gap bundles. The `offline-build` job still proves disconnected builds.
 
+## Releases
+
+Only the most recent release is supported (see
+[SECURITY.md](SECURITY.md#supported-versions)); there are no backports.
+
+A release is an annotated `vX.Y.Z` tag on the merged `main` commit. Nothing
+in the tree carries a version to bump: `git describe` stamps the binaries,
+images, and bundle names, and `.github/workflows/release.yml` builds the
+multi-arch images, the air-gap bundles, and the GitHub release when the
+tag is pushed. The tag message follows the earlier tags (`PolarBEAM
+vX.Y.Z`, a one-paragraph theme, then prose paragraphs by area). CI does
+not run on tag pushes, so tag only a `main` commit whose checks are green.
+
+After the workflow publishes the release:
+
+- Prepend hand-written upgrade notes to the new release body when the hop
+  needs them (a changed compose file, a migration with a first-run cost, a
+  new required config key). Pin any doc links to the release tag.
+- Prepend the superseded notice to the previous release's body:
+
+  ```markdown
+  > **Superseded.** This release is no longer supported and is not
+  > recommended for new installations: PolarBEAM supports only the latest
+  > release ([supported versions](https://github.com/DevalexLLC/polarbeam/blob/main/SECURITY.md#supported-versions)).
+  > Install the [latest release](https://github.com/DevalexLLC/polarbeam/releases/latest).
+  > To upgrade an installation on this version, follow
+  > [Upgrades](https://github.com/DevalexLLC/polarbeam/blob/main/docs/install.md#upgrades)
+  > in the install guide; the procedures for crossing the pg16 to pg18
+  > database change (v0.10.0 to v0.11.0) and the CA algorithm change are in
+  > [docs/upgrade-archive.md](https://github.com/DevalexLLC/polarbeam/blob/main/docs/upgrade-archive.md).
+  ```
+
+- Prune the docs. The Upgrades section of `docs/install.md` documents only
+  the hop from the previous release. Notes specific to an older hop are
+  deleted; a procedure for a boundary an operator may still have to cross
+  (a database major version, a CA algorithm change) moves verbatim to
+  `docs/upgrade-archive.md`, which ships in the bundle next to the guide.
+
+Tags, releases, bundle assets, and published images are never deleted or
+re-pushed: migrations are frozen by tag, and operators may hold old bundles.
+
 ## Ground rules
 
 - **Builds must work offline.** Never add a build step that reaches the

@@ -27,7 +27,10 @@ A report is much easier to act on when it includes:
 ## Supported versions
 
 PolarBEAM is pre-1.0. Only the latest release receives security fixes;
-there are no backports to earlier tags.
+there are no backports to earlier tags. Superseded releases are marked as
+such in their GitHub release notes, and `docs/upgrade-archive.md` holds
+the procedures for crossing the release boundaries an older installation
+may still have to cross.
 
 | Version | Supported |
 | ------- | --------- |

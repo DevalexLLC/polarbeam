@@ -79,13 +79,15 @@ docker save -o "${OUT}/images/polarbeam-images-${VERSION}-${ARCH}.tar" $IMAGES
 cp "${ROOT}/deploy/compose/docker-compose.yml" "${OUT}/"
 cp "${ROOT}/deploy/compose/server.example.yaml" "${OUT}/"
 cp "${ROOT}/deploy/compose/env.example" "${OUT}/"
-cp "${ROOT}/docs/install.md" "${OUT}/"
+cp "${ROOT}/docs/install.md" "${ROOT}/docs/upgrade-archive.md" "${OUT}/"
 # install.md refers operators to docs/sizing.md and docs/probes.md; ship them
 # under docs/ so those repo-root-relative references resolve in the bundle.
-# install.md is duplicated there so probes.md's sibling link to it works too.
+# install.md is duplicated there so probes.md's sibling link to it works too,
+# and upgrade-archive.md sits beside both copies so install.md's relative
+# links into it resolve from either.
 mkdir -p "${OUT}/docs"
 cp "${ROOT}/docs/sizing.md" "${ROOT}/docs/probes.md" \
-   "${ROOT}/docs/install.md" "${OUT}/docs/"
+   "${ROOT}/docs/install.md" "${ROOT}/docs/upgrade-archive.md" "${OUT}/docs/"
 # The license and attribution notices travel with every redistribution
 # (AGPL-3.0 conveyance terms + third-party license obligations).
 cp "${ROOT}/LICENSE" "${ROOT}/NOTICE" "${ROOT}/THIRD-PARTY-NOTICES" "${OUT}/"

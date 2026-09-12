@@ -104,6 +104,10 @@ air-gapped release bundles are both covered.
 
 Early development. See `docs/architecture.md` for the full design.
 
+Only the most recent release is supported and recommended; earlier
+releases receive no fixes, and their release notes on GitHub carry a
+superseded notice (see [supported versions](SECURITY.md#supported-versions)).
+
 ## License
 
 Copyright 2026 Devalex LLC. Licensed under the [GNU Affero General Public
