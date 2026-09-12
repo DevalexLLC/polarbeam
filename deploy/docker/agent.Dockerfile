@@ -1,3 +1,10 @@
+# check=error=true
+# ^ BuildKit's built-in Dockerfile linter fails the build on any warning
+# (unpinned base image, shell-form CMD/ENTRYPOINT, legacy ENV syntax, ...).
+# The directive is honored by the frontend inside BuildKit, so it applies
+# to `make images`, CI and offline bundle builds alike, fetching nothing;
+# builders too old to know it treat the line as a comment.
+
 # polarbeam-agent images. Build context is the repo root.
 # The release build is fully offline once base images are present
 # (vendored deps only, no package installs).
