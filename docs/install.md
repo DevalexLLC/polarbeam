@@ -111,6 +111,7 @@ The directory must contain:
 docker-compose.yml
 env.example
 server.example.yaml
+backup.sh
 ```
 
 These files are in every release bundle. They are also available under
@@ -135,6 +136,7 @@ mkdir polarbeam-install
 cp polarbeam-source/deploy/compose/docker-compose.yml polarbeam-install/
 cp polarbeam-source/deploy/compose/env.example polarbeam-install/
 cp polarbeam-source/deploy/compose/server.example.yaml polarbeam-install/
+cp polarbeam-source/deploy/compose/backup.sh polarbeam-install/
 cd polarbeam-install
 ```
 
@@ -1632,7 +1634,7 @@ v0.11.0-or-later target from a pg16 installation.
 
 Work from the compose directory on the control-plane host:
 
-1. **Back up the database** (see [Backup scope](#backup-scope)). The
+1. **Back up the database** (see [Taking a backup](#taking-a-backup)). The
    upgrade steps themselves modify no stored measurements or users, but a
    migration can install *retention policies* that later delete history
    past the documented horizons (see the retention table in section 1:
@@ -1879,7 +1881,18 @@ own 10-second default when the key is absent. Never run
 `docker compose down -v` on an agent host: that deletes the identity volume
 and forces a re-enrollment with a fresh token.
 
-## Backup scope
+## Backup and restore
+
+The control plane's state is three Compose volumes plus the configuration
+files in the installation directory. This section lists what a recoverable
+backup must contain, takes one without stopping the control plane, restores
+it onto the same host or a replacement, and rehearses a restore against a
+throwaway database so a backup is known to work before it is needed. Agent
+hosts need none of this: an agent's state volume holds only its own
+identity and result spool, and a lost agent is re-enrolled (section 8),
+never restored.
+
+### Backup scope
 
 A recoverable control-plane backup must include all three persistent Compose
 volumes **and** the installation directory's configuration:
@@ -1893,9 +1906,13 @@ volumes **and** the installation directory's configuration:
   original `.env`/`server.yaml` the server cannot reconnect after a restore
   short of manual database recovery
 
-A volume copy restores only onto the same PostgreSQL major version it was
-taken from. Moving data to a newer major version (for example the pg16 to
-pg18 change) needs a logical dump instead; see
+The procedure below captures the database as a logical dump (`pg_dump`),
+which restores onto any database image that can install the same
+TimescaleDB extension versions, including a newer PostgreSQL major
+version. A file copy of the stopped `dbdata` volume is the alternative; it
+restores only onto the same PostgreSQL major version it was taken from,
+which is why crossing a major version (for example pg16 to pg18) needs
+the dump instead; see
 [Crossing the database major version](upgrade-archive.md#crossing-the-database-major-version-pg16-to-pg18-v0100-to-v0110).
 
 Protect the database, CA, and configuration secrets as one security
@@ -1909,3 +1926,475 @@ before a
 classical CA, silently un-doing the migration and orphaning every agent
 enrolled against the ML-DSA root. After a cutover, retire pre-cutover
 `server-state` backups (or clearly mark them) and take a fresh one.
+
+### Taking a backup
+
+The backup runs online. `pg_dump` reads one consistent snapshot of the
+database while agents keep reporting and the dashboard keeps serving; the
+database's background jobs keep running too, and whatever they or the
+server change after the snapshot began is simply not in this backup. The
+dump is taken with the database container's own `pg_dump`, so client and
+server versions always match. The whole set is written to one directory
+whose name carries the UTC time.
+
+The backup is `backup.sh`, shipped next to the compose file (section 2)
+and run from the compose directory as root (`sudo -i`; after section 4.2
+`server.yaml` is readable only by the server's own uid). It is a script
+rather than a command list because a backup that can fail halfway and
+still look finished is worse than none: it stops at the first failed
+command or empty file, reports the line it stopped on, and prints
+`backup-ok` as its last line only when every step succeeded.
+
+```sh
+./backup.sh
+```
+
+Read the script before the first run; it is short. What it does, in
+order:
+
+1. Takes a lock so two backups never overlap, then finds the running
+   database container and takes its image (by ID, so it is the image the
+   dump comes from even if the rolling tag has been pulled ahead for an
+   upgrade) and the compose project name from it, so an offline host
+   never needs an image it does not have and the volume names
+   (`<project>_server-state`, `<project>_tls`) follow the compose file's
+   `name:` line without an edit.
+2. Creates `polarbeam-backup-<UTC time>` (in the compose directory, or
+   under `POLARBEAM_BACKUP_DIR` when set) and copies `.env`,
+   `server.yaml`, and `docker-compose.yml` into it.
+3. Records the database image (`db-image.txt`) and the TimescaleDB
+   extension versions (`extensions.txt`).
+4. Opens one transaction that exports a snapshot, counts the inventory
+   under it (`inventory.txt`), and hands the same snapshot to the
+   container's own `pg_dump` (`polarbeam.dump`, custom format), so the
+   record describes exactly what the dump holds, whatever agents and
+   administrators were doing at the time. A failed `pg_dump` fails the
+   session.
+5. Proves the dump is a readable archive (`pg_restore --list`).
+6. Archives the `server-state` and `tls` volumes through the database
+   image, which carries `tar` (the PolarBEAM images are distroless), and
+   proves the archive holds both the CA key and the dashboard key — a
+   volume name that does not exist would be mounted as a new empty one
+   without complaint, which is what this check catches.
+7. Writes `SHA256SUMS`, prints the versions and the inventory, and ends
+   with `backup-ok <directory>`.
+
+Any ending other than a `backup-ok` line is a failed backup, and the set
+it left behind is incomplete — delete it. `pg_dump` prints one expected
+warning, `there are circular foreign-key constraints on this table:
+continuous_agg`, about TimescaleDB's own catalog; it is harmless for a
+full dump, and the restore completes without it mattering.
+`extensions.txt` and `inventory.txt` are what the restore is checked
+against; `db-image.txt` names the database image the dump came from
+(its image ID, its tag, and, when it was pulled rather than loaded, its
+registry digest), and the copied `.env` records the release.
+
+What the set contains, and how to treat it:
+
+- **Secrets.** The dump holds every password hash, the OIDC client secret
+  (`oidc_settings`), and the enrollment audit record; `volumes.tar.gz`
+  holds the CA private key and the dashboard TLS key; `.env` and
+  `server.yaml` hold the database password. Keep the set readable by the
+  operator only (the script's `umask 077` does that for the files it
+  creates) and encrypt it before it leaves the host. A leaked set means rotating the
+  OIDC secret at the provider and treating the CA as compromised.
+- **Off-host copy.** A backup on the control-plane host's own disk does not
+  survive the host. Copy each set elsewhere and verify it there with
+  `sha256sum -c SHA256SUMS`.
+- **Frequency.** Daily is a sensible default: raw results are kept for 14
+  days and the aggregates for 100 and 400 (section 1), so a daily set
+  bounds the loss to one day of measurements, and every set restores
+  independently. Take an extra set before every upgrade (the
+  [upgrade procedure](#control-plane-live-upgrade) starts with one) and
+  after every CA change.
+- **Size and duration.** The dump is compressed and is a fraction of the
+  `dbdata` volume's size (`docker system df -v` shows the volume); the
+  time scales with the raw results table, which the 14-day retention
+  bounds. Schedule it off the busiest hours; ingest is not blocked, but
+  the dump does compete for disk reads.
+- **Scheduling.** Run the same script from root's crontab and keep its
+  output, for example
+  `0 2 * * * /opt/polarbeam/backup.sh >>/var/log/polarbeam-backup.log 2>&1`
+  with `/opt/polarbeam` standing for your compose directory (the script
+  changes into its own directory, so cron needs no `cd`; cron's `PATH`
+  must find `docker` — set it in the crontab if it does not). Make a missing `backup-ok` line, or a non-zero exit, something
+  that reaches a person — a backup job that fails silently is not a
+  backup. Prune old sets on your own schedule, never automatically below
+  two known-good ones.
+
+### Restoring a backup
+
+A restore replaces the control plane's state with a backup set. It applies
+to the same host (a damaged or lost database) and to a replacement host (a
+lost or rebuilt control plane); the difference is a single step below.
+The database is restored into a **freshly initialized** cluster — a dump
+restored into a database that already holds the schema fails at its first
+`CREATE TABLE`, which is intended.
+
+Expect downtime for the duration of the restore. Agents keep probing
+throughout and spool results locally, but a spool holds at most
+`spool.max_bytes` (256 MiB by default) and `spool.max_age` (7 days) of
+results before the oldest are dropped, so the earliest measurements of a
+very long outage on a busy fleet are lost.
+
+The procedure is deliberately fail-fast. Check the exit status of every
+command. If any command fails, or a check does not show the expected
+result, stop: nothing before step 3 is destructive, and step 3 preserves
+the previous database until you delete the copy yourself. The helpers
+below run inside `timescale/timescaledb-ha:pg18`, the database image the
+compose file names; an installation running a different tag uses that
+one.
+
+1. **Preconditions.** Verify the set and read which release and extension
+   versions it came from:
+
+   ```sh
+   (cd <backup-dir> && sha256sum -c SHA256SUMS)
+   grep POLARBEAM_VERSION <backup-dir>/.env
+   cat <backup-dir>/extensions.txt
+   ```
+
+   The release you restore into must be the **same as or newer than** the
+   one in the set. Restoring into an older release is not supported and
+   is not caught by the server's schema check: that check only looks for
+   migrations the server knows about that are missing from the ledger,
+   so a database carrying migrations from a newer release would pass it
+   and then be served by a binary that does not understand the schema.
+   Newer is fine — step 8 applies the missing migrations, exactly like an
+   upgrade.
+
+   The database image must be able to install the extension versions in
+   `extensions.txt`. The image the backup was taken with (recorded in the
+   set's `db-image.txt`) always can, and each `pg18` image carries many
+   earlier versions; step 6 proves it either way before any data is
+   touched.
+
+2. **Prepare the host.**
+
+   - *Same host:* stop the control plane. Volumes survive `down`:
+
+     ```sh
+     docker compose down
+     ```
+
+   - *Replacement host:* complete sections 1 to 4 with the `.env`,
+     `server.yaml`, and `docker-compose.yml` from the backup set (the
+     database password must be the one the dump's role was created with,
+     and `server.yaml` needs the ownership and mode from section 4.2
+     again), with the release's images loaded or pulled. Then create the
+     containers and their empty volumes without starting anything:
+
+     ```sh
+     docker compose create
+     ```
+
+3. **Preserve the current database, if there is one** (same host only).
+   Even a database you believe is damaged may hold results newer than the
+   backup, so keep a byte-for-byte copy of its volume until the restored
+   system is verified. The copy runs inside the database image as root
+   (a new volume is root-owned, and root's `cp -a` preserves the ownership
+   the database files need) and must land in an empty volume:
+
+   ```sh
+   docker volume inspect <project>_dbdata_prev >/dev/null 2>&1 && echo prev-exists-stop
+   docker volume inspect <project>_dbdata >/dev/null && echo source-volume-ok
+   docker volume create <project>_dbdata_prev
+   docker run --rm --user 0 --entrypoint cp \
+     -v <project>_dbdata:/from:ro -v <project>_dbdata_prev:/to \
+     timescale/timescaledb-ha:pg18 -a /from/. /to/
+   docker run --rm --user 0 --entrypoint diff \
+     -v <project>_dbdata:/from:ro -v <project>_dbdata_prev:/to:ro \
+     timescale/timescaledb-ha:pg18 -r /from /to && echo copy-ok
+   docker volume rm <project>_dbdata
+   ```
+
+   If the first line prints `prev-exists-stop`, a copy from an earlier
+   attempt is already there, and what it holds depends on how far that
+   attempt got. If it printed `copy-ok`, the copy is the verified
+   original and `dbdata` holds whatever a later step left behind: do not
+   run this step again (it would overwrite the copy), remove only
+   `<project>_dbdata`, and continue with step 4. If it did not reach
+   `copy-ok` — it failed before or during the copy, for example on disk
+   space — the copy is incomplete and `dbdata` is still the original:
+   remove `<project>_dbdata_prev` and run this step from the top.
+   Otherwise continue past the second line only if it printed
+   `source-volume-ok`, and remove the live volume only after `copy-ok`. If the live volume is already gone (the second
+   `inspect` fails and nothing is printed), skip the rest of this step.
+   Free disk must cover the copy; restoring without it is a deliberate
+   decision to give up whatever the current database still holds.
+
+4. **Restore the `server-state` and `tls` volumes** when they are lost,
+   damaged, or empty — always on a replacement host, and on the same host
+   only when the CA or the dashboard certificate is part of what was
+   lost. Intact volumes need nothing; restoring an older `server-state`
+   over a live CA is safe only if it is the *same* CA (see
+   [Backup scope](#backup-scope) on cutovers). The archive carries the
+   file ownership (uid 10001) the server needs, and root restores it:
+
+   ```sh
+   docker run --rm -i --user 0 --entrypoint tar \
+     -v <project>_server-state:/server-state -v <project>_tls:/tls \
+     timescale/timescaledb-ha:pg18 -C / -xzf - server-state tls < <backup-dir>/volumes.tar.gz
+   docker run --rm --user 0 --entrypoint ls \
+     -v <project>_server-state:/server-state:ro -v <project>_tls:/tls:ro \
+     timescale/timescaledb-ha:pg18 -la /server-state/ca /tls
+   ```
+
+   The trailing names select what is extracted: keep both on a
+   replacement host, and on the same host name only the volume being
+   restored (an intact `tls` volume may hold a dashboard certificate
+   renewed after the backup, which the archive's older copy would
+   overwrite). The listing must show `ca.key` and `ca.crt` owned by uid
+   `10001` under `/server-state/ca`, and `server.crt` and `server.key`
+   under `/tls`.
+
+5. **Start an empty database.** Its first start creates the `polarbeam`
+   role and database from `.env`:
+
+   ```sh
+   docker compose up -d --wait timescaledb
+   # Repeat until it prints 2:
+   docker compose exec timescaledb psql -X -h 127.0.0.1 -U polarbeam -d polarbeam -Atc \
+     "SELECT count(*) FROM pg_extension WHERE extname IN ('timescaledb', 'timescaledb_toolkit')"
+   ```
+
+   `--wait` returns on the `pg_isready` health check, which the temporary
+   initialization server can also satisfy over the socket; the TCP query
+   succeeds only against the final server, once initialization has
+   created both extensions.
+
+6. **Match the extension versions.** A logical restore requires the same
+   TimescaleDB extension version on both sides, and the Toolkit is matched
+   the same way. Compare the fresh database with the record:
+
+   ```sh
+   docker compose exec -T timescaledb psql -X -U polarbeam -d polarbeam -Atc \
+     "SELECT extname, extversion FROM pg_extension
+      WHERE extname IN ('timescaledb', 'timescaledb_toolkit') ORDER BY extname" \
+     | diff <backup-dir>/extensions.txt - && echo versions-ok
+   ```
+
+   On `versions-ok`, go to step 7. Otherwise replace the extensions with
+   the recorded versions, each `CREATE` in its own session so the loader
+   picks the requested library, and re-run the comparison — it must print
+   `versions-ok` before anything is restored:
+
+   ```sh
+   docker compose exec timescaledb psql -X -U polarbeam -d polarbeam -c \
+     "DROP EXTENSION timescaledb_toolkit; DROP EXTENSION timescaledb CASCADE"
+   docker compose exec timescaledb psql -X -U polarbeam -d polarbeam -c \
+     "CREATE EXTENSION timescaledb VERSION '<timescaledb version from extensions.txt>'"
+   docker compose exec timescaledb psql -X -U polarbeam -d polarbeam -c \
+     "CREATE EXTENSION timescaledb_toolkit VERSION '<toolkit version from extensions.txt>'"
+   ```
+
+   A `CREATE EXTENSION` that fails because the image lacks that version
+   is a hard stop: load the database image the backup was taken with
+   (the set's `db-image.txt` names it), put it in the compose file, then
+   `docker compose down` (the running database
+   container holds the volume, so Docker refuses to remove it while the
+   container exists; volumes themselves survive `down`), remove the
+   `<project>_dbdata` volume Compose just created, and restart from
+   step 5.
+
+7. **Restore and accept.** `pg_restore` must run without `-j` (parallel
+   restore does not restore the TimescaleDB catalog correctly) and stops
+   at the first error. Between the restore and `timescaledb_post_restore`
+   the database's background jobs are stopped; the retention jobs are
+   kept stopped a little longer so the acceptance check compares against
+   the record without retention dropping anything first:
+
+   ```sh
+   docker compose exec timescaledb psql -X -U polarbeam -d polarbeam -c "SELECT timescaledb_pre_restore()"
+   docker compose exec -T timescaledb pg_restore -U polarbeam -d polarbeam \
+     --exit-on-error --no-owner --no-privileges -Fc < <backup-dir>/polarbeam.dump && echo restore-ok
+   docker compose exec -T timescaledb psql -X -U polarbeam -d polarbeam -Atc \
+     "SELECT job_id, scheduled::text FROM timescaledb_information.jobs
+      WHERE proc_name = 'policy_retention' ORDER BY job_id" > jobs-restored.txt \
+     && [ -s jobs-restored.txt ] && cat jobs-restored.txt
+   docker compose exec timescaledb psql -X -U polarbeam -d polarbeam -c \
+     "SELECT alter_job(job_id, scheduled => false) FROM timescaledb_information.jobs
+      WHERE proc_name = 'policy_retention'"
+   docker compose exec timescaledb psql -X -U polarbeam -d polarbeam -c "SELECT timescaledb_post_restore()"
+   docker compose exec timescaledb psql -X -U polarbeam -d polarbeam -c "ALTER EXTENSION timescaledb UPDATE"
+   docker compose exec timescaledb psql -X -U polarbeam -d polarbeam -c "ALTER EXTENSION timescaledb_toolkit UPDATE"
+   docker compose exec timescaledb psql -X -U polarbeam -d polarbeam -c "ANALYZE"
+   docker compose exec -T timescaledb psql -X -U polarbeam -d polarbeam -Atc \
+     "SELECT 'sites', count(*) FROM sites
+      UNION ALL SELECT 'agents', count(*) FROM agents
+      UNION ALL SELECT 'users', count(*) FROM users
+      UNION ALL SELECT 'schema_migrations', count(*) FROM schema_migrations
+      UNION ALL SELECT 'hypertables', count(*) FROM timescaledb_information.hypertables
+      UNION ALL SELECT 'caggs', count(*) FROM timescaledb_information.continuous_aggregates
+      UNION ALL SELECT 'probe_results', count(*) FROM probe_results" > inventory-restored.txt
+   diff <backup-dir>/inventory.txt inventory-restored.txt && echo inventory-ok
+   ```
+
+   The restore must print `restore-ok`; a clean restore prints nothing
+   else (the pre-created extensions do not conflict: the dump creates them
+   with `IF NOT EXISTS`). A restore that stopped on an error leaves a
+   partial database: once the cause is understood, `docker compose down`
+   (the container holds the volume), remove the `<project>_dbdata`
+   volume, and start again from step 5. Each `ALTER EXTENSION UPDATE`
+   runs as the first statement of its own session (TimescaleDB refuses to
+   update once its old library is loaded) and prints a `NOTICE` that the
+   version is already installed when step 6 needed no change.
+
+   The comparison is against your own record, not fixed numbers, and
+   the record was counted under the dump's own snapshot, so it must
+   print `inventory-ok` exactly. Any difference means the wrong set or an
+   incomplete restore — stop here.
+
+   On acceptance, put each retention job back to the schedule state the
+   record shows (a policy that was deliberately disabled before the
+   backup stays disabled) and confirm:
+
+   ```sh
+   while IFS='|' read -r id sched; do
+     docker compose exec -T timescaledb psql -X -U polarbeam -d polarbeam -c \
+       "SELECT alter_job($id, scheduled => '$sched'::boolean)" < /dev/null
+   done < jobs-restored.txt
+   docker compose exec -T timescaledb psql -X -U polarbeam -d polarbeam -Atc \
+     "SELECT job_id, scheduled::text FROM timescaledb_information.jobs
+      WHERE proc_name = 'policy_retention' ORDER BY job_id" | diff jobs-restored.txt - && echo jobs-ok
+   ```
+
+   The `< /dev/null` matters: `docker compose exec` forwards its standard
+   input by default and would otherwise swallow the remaining lines of the
+   loop. From this point retention applies to the restored data exactly as
+   it did before: whatever is past a horizon at restore time is dropped on
+   the jobs' next runs, so restoring an old set does not extend history.
+
+8. **Migrate, then re-apply revocations before anything can connect.**
+   `migrate` applies every migration file the restored ledger does not
+   list — none when the release is the one the backup came from, the
+   newer release's own otherwise — and prints each one it applies:
+
+   ```sh
+   docker compose run --rm --no-deps server migrate \
+     --config /etc/polarbeam/server.yaml
+   ```
+
+   Then, while the server is still down, undo the one security-relevant
+   effect of the restore: the database is the sole revocation authority,
+   so every agent certificate revoked *after* the backup is valid again
+   in the restored database. Revoke each such serial now, exactly as in
+   [Certificate lifecycle](#certificate-lifecycle) — from your own record
+   of revocations, which is why that record is worth keeping. Doing it
+   before the server starts matters: a revoked-then-restored certificate
+   that reaches a running server can renew itself, and the renewed
+   certificate has a new serial that revoking the old one does not cover.
+
+   Then expire every unused enrollment token. A token consumed or deleted
+   after the backup is unused again in the restored database, still
+   valid until its TTL, and indistinguishable from one that was
+   genuinely unissued; whoever holds it could enroll an agent the moment
+   the server starts. Tokens that were legitimately waiting to be used
+   are expired too — issue new ones afterwards:
+
+   ```sh
+   docker compose exec timescaledb psql -X -U polarbeam -d polarbeam -c \
+     "UPDATE join_tokens SET expires_at = now() WHERE used_at IS NULL"
+   ```
+
+9. **Start and verify.**
+
+   ```sh
+   docker compose up -d
+   docker compose ps
+   ```
+
+   `https://<dashboard-name>/healthz` answers, sign-in works with a user
+   from the backup, and the dashboard **Agents** page shows agents
+   reconnecting on their own within about a minute — they retry
+   continuously and replay whatever they spooled while the server was
+   unreachable. `docker compose logs --tail=50 server` must be free of
+   errors. An agent that stays offline with `certificate revoked or
+   unknown` in its own log is one of the two cases in the list below and
+   needs re-enrolling. Remove the `<project>_dbdata_prev` copy from step
+   3 (`docker volume rm`) only once all of this checks out.
+
+What a restore gives you is the control plane exactly as it was at the
+dump's snapshot. Everything that changed between the backup and the
+outage is gone and needs attention:
+
+- **Measurements** between the backup and the start of the outage are
+  lost for good: agents deleted them from their spools when the old server
+  acknowledged them. Measurements taken *during* the outage arrive from
+  the spools (within the 256 MiB and 7-day bounds).
+- **Agents enrolled after the backup** hold valid certificates from the CA
+  but have no agent record in the restored database, so the server rejects
+  them as unknown. Re-enroll each one with a fresh token, retiring the
+  old identity first (`polarbeam-agent identity retire`, see
+  [Troubleshooting](#agents-connect-but-mesh-results-are-absent-or-target-the-proxy)).
+- **Agents whose certificate renewed after the backup** are rejected the
+  same way: the server accepts only serials recorded in the database, and
+  the renewed serial is not in the restored one. Agents renew at
+  two-thirds of a 30-day lifetime, so with daily backups expect a few
+  percent of the fleet to need the same re-enrollment; the server logs
+  `certificate revoked or unknown` for each attempt.
+- **Revocations made after the backup** were re-applied in step 8; if
+  any was missed, apply it now.
+- **Enrollment tokens** were all expired in step 8. Issue new ones for
+  the re-enrollments above and for any that were still waiting to be
+  used.
+- **Users, passwords, probe configuration, thresholds, networks, and SSO
+  settings** are as they were at the backup. Agents receive the restored
+  configuration as a new snapshot and adopt it; nothing on the agent side
+  needs resetting.
+
+### Testing a backup
+
+A backup that has never been restored is a hope, not a plan. Rehearse the
+restore against a throwaway database container that touches nothing in
+the running stack — no compose project, no published port, no network at
+all — and do it on a schedule, and again after the database image changes.
+The container runs the same image with the same server flags as the
+compose file (telemetry off is not optional, even here) and lives only
+for the drill:
+
+```sh
+docker run -d --name polarbeam-restore-test --network none \
+  -e POSTGRES_DB=polarbeam -e POSTGRES_USER=polarbeam -e POSTGRES_PASSWORD=restore-test \
+  -e TIMESCALEDB_TELEMETRY=off \
+  timescale/timescaledb-ha:pg18 postgres \
+  -c timescaledb.telemetry_level=off -c wal_compression=lz4 \
+  -c shared_preload_libraries=timescaledb,pg_stat_statements -c track_io_timing=on
+# Repeat until it prints 2:
+docker exec -i polarbeam-restore-test psql -X -h 127.0.0.1 -U polarbeam -d polarbeam -Atc \
+  "SELECT count(*) FROM pg_extension WHERE extname IN ('timescaledb', 'timescaledb_toolkit')"
+```
+
+Then run steps 6 and 7 of [Restoring a backup](#restoring-a-backup)
+against it, with `docker exec -i polarbeam-restore-test` in place of both
+`docker compose exec -T timescaledb` and `docker compose exec timescaledb`.
+The drill passes when it prints `versions-ok`, `restore-ok`,
+`inventory-ok`, and `jobs-ok`. Ignore those steps' retry instructions
+during a drill: they are about the live database, and nothing in a drill
+may touch the stack. If anything fails, the only recovery is the cleanup
+command at the end of this section, after which the drill starts over
+with a fresh container.
+To also prove that the release's server accepts the restored schema, run
+`migrate` against the throwaway database with a copy of `server.yaml`
+whose `db.url` points at it; it must exit `0` and, for the release the
+backup came from, print nothing:
+
+```sh
+sed 's#^  url: .*#  url: postgres://polarbeam:restore-test@127.0.0.1:5432/polarbeam#' \
+  server.yaml > restore-test.yaml
+chown 10001 restore-test.yaml
+docker run --rm --network container:polarbeam-restore-test \
+  -v "$PWD/restore-test.yaml:/etc/polarbeam/server.yaml:ro" \
+  ghcr.io/devalexllc/polarbeam-server:<version> migrate --config /etc/polarbeam/server.yaml
+```
+
+The copy carries only the throwaway password (the `sed` replaced the
+real one), and the one-off container joins the throwaway's network
+namespace, which has no network — the migration check is as offline as
+the drill itself. Finish by removing the container with its anonymous
+data volume, and the config copy:
+
+```sh
+docker rm -f --volumes polarbeam-restore-test
+rm restore-test.yaml
+```
