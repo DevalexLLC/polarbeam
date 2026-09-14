@@ -1,7 +1,7 @@
 #!/bin/sh
 # Assemble the air-gapped control-plane install bundle: one docker-load
 # image tarball (server, proxy, agent) + the production compose file +
-# config examples + docs + SHA256SUMS.
+# config examples + the backup script + docs + SHA256SUMS.
 #
 # The TimescaleDB image is deliberately NOT bundled: releases redistribute
 # only PolarBEAM's own artifacts, never third-party images (which also
@@ -79,6 +79,9 @@ docker save -o "${OUT}/images/polarbeam-images-${VERSION}-${ARCH}.tar" $IMAGES
 cp "${ROOT}/deploy/compose/docker-compose.yml" "${OUT}/"
 cp "${ROOT}/deploy/compose/server.example.yaml" "${OUT}/"
 cp "${ROOT}/deploy/compose/env.example" "${OUT}/"
+# The backup script runs from the compose directory (docs/install.md,
+# "Taking a backup"); cp keeps its executable bit.
+cp "${ROOT}/deploy/compose/backup.sh" "${OUT}/"
 cp "${ROOT}/docs/install.md" "${ROOT}/docs/upgrade-archive.md" "${OUT}/"
 # install.md refers operators to docs/sizing.md and docs/probes.md; ship them
 # under docs/ so those repo-root-relative references resolve in the bundle.
