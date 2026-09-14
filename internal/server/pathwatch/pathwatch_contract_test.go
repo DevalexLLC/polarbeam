@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // scriptedDB satisfies DB, records every statement, and answers the lock
@@ -88,6 +89,7 @@ func (r *valueRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
 func (r *valueRows) Values() ([]any, error)                       { return nil, nil }
 func (r *valueRows) RawValues() [][]byte                          { return nil }
 func (r *valueRows) Conn() *pgx.Conn                              { return nil }
+func (r *valueRows) TypeMap() *pgtype.Map                         { return nil }
 
 func contractRuns(n int, hash byte) []Run {
 	runs := make([]Run, n)
