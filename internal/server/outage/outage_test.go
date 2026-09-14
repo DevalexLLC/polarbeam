@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func result(secs int64, ok bool) Result {
@@ -306,6 +307,7 @@ func (emptyRows) Scan(dest ...any) error                       { return nil }
 func (emptyRows) Values() ([]any, error)                       { return nil, nil }
 func (emptyRows) RawValues() [][]byte                          { return nil }
 func (emptyRows) Conn() *pgx.Conn                              { return nil }
+func (emptyRows) TypeMap() *pgtype.Map                         { return nil }
 
 func TestApplyIssuesOneBulkStateUpsert(t *testing.T) {
 	// The round-trip contract on the ingest hot path: however many series
