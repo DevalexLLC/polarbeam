@@ -32,6 +32,17 @@ const (
 	EventServerStart = "server.start"
 	EventServerStop  = "server.stop"
 
+	// Audit forwarding itself (the syslog forwarder's own transitions —
+	// AU-5: the audit subsystem's failures are audited).
+	EventForwardStart        = "audit.forward.start"
+	EventForwardStop         = "audit.forward.stop"
+	EventForwardDisconnected = "audit.forward.disconnected"
+	EventForwardRecovered    = "audit.forward.recovered"
+	EventForwardTest         = "audit.forward.test"
+
+	// Settings writes that own a richer record than api.write.
+	EventSyslogSettingsUpdate = "settings.syslog.update"
+
 	// Operator CLI (polarbeam-server subcommands).
 	EventCLIUserAdd       = "cli.user.add"
 	EventCLITokenCreate   = "cli.token.create"
@@ -89,6 +100,14 @@ var Catalog = map[string]Def{
 
 	EventServerStart: {"Control plane finished preflight and is listening, or failed preflight.", []string{"version", "grpc_addr", "http_addr", "proxy_protocol", "reason"}},
 	EventServerStop:  {"Control plane is shutting down.", []string{"reason"}},
+
+	EventForwardStart:        {"Syslog forwarding (re)started for a destination.", []string{"transport", "host", "port", "content", "on_failure"}},
+	EventForwardStop:         {"Syslog forwarding stopped (the last record a process sends).", nil},
+	EventForwardDisconnected: {"The collector became unreachable; records are being buffered.", []string{"host", "reason"}},
+	EventForwardRecovered:    {"The collector is reachable again; sent after the buffered backlog.", []string{"outage", "dropped"}},
+	EventForwardTest:         {"A test record sent by the settings page's Test button or the startup check.", nil},
+
+	EventSyslogSettingsUpdate: {"The syslog forwarding settings were changed.", []string{"enabled", "transport", "host", "port", "content", "on_failure", "previous_enabled", "previous_host", "previous_port"}},
 
 	EventCLIUserAdd:       {"Dashboard user created from the CLI.", []string{"user_target", "user_id", "role", "networks"}},
 	EventCLITokenCreate:   {"Agent join token issued from the CLI.", []string{"site", "network", "ttl"}},

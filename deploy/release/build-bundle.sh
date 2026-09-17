@@ -89,7 +89,7 @@ cp "${ROOT}/docs/install.md" "${ROOT}/docs/upgrade-archive.md" "${OUT}/"
 # and upgrade-archive.md sits beside both copies so install.md's relative
 # links into it resolve from either.
 mkdir -p "${OUT}/docs"
-cp "${ROOT}/docs/sizing.md" "${ROOT}/docs/probes.md" \
+cp "${ROOT}/docs/sizing.md" "${ROOT}/docs/probes.md" "${ROOT}/docs/audit-logging.md" \
    "${ROOT}/docs/install.md" "${ROOT}/docs/upgrade-archive.md" "${OUT}/docs/"
 # The license and attribution notices travel with every redistribution
 # (AGPL-3.0 conveyance terms + third-party license obligations).

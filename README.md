@@ -44,6 +44,11 @@ and a self-signed dashboard certificate, with no DNS setup required.
   an offline install bundle (image tarballs + compose file + docs) per
   architecture; the agent is a single static Go binary shipped as a container
   image. See `docs/install.md` and `docs/airgap-build.md`.
+- **Auditable.** Every sign-in, session end, account and configuration change,
+  agent credential decision, and privileged CLI action is an audit record with
+  actor, source address, and outcome, forwarded to a syslog collector over TLS
+  when enabled (RFC 5424; NIST SP 800-53 AU / DISA ASD STIG mapping in
+  [docs/audit-logging.md](docs/audit-logging.md)).
 - **Fail loud.** Unknown config keys are fatal. Missing hard dependencies fail
   preflight at startup with the problem named. No silent no-ops.
 

@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"net/http"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -58,6 +59,11 @@ type api struct {
 	// audit is where every security event goes (see audit.go here and
 	// internal/audit); tests inject a capturing logger.
 	audit *audit.Logger
+	// forwarder is the running syslog forwarder the settings handlers
+	// read status from, test through, and reconfigure; syslogMu serializes
+	// the read-validate-store-apply sequence of a settings write.
+	forwarder SyslogController
+	syslogMu  sync.Mutex
 }
 
 // db wraps DB so internal helpers hang off a private type.
@@ -65,13 +71,13 @@ type db struct{ DB }
 
 // New returns the dashboard handler: /healthz (open), /api/v1 (sessions),
 // and the SPA from static for everything else.
-func New(sdb DB, static fs.FS) http.Handler {
-	return newHandler(sdb, static, oidcauth.NewManager(sdb), audit.New(nil))
+func New(sdb DB, static fs.FS, forwarder SyslogController) http.Handler {
+	return newHandler(sdb, static, oidcauth.NewManager(sdb), audit.New(nil), forwarder)
 }
 
-// newHandler is New with the OIDC manager and audit logger injectable;
-// tests pass fakes.
-func newHandler(sdb DB, static fs.FS, providers OIDCProviders, auditLog *audit.Logger) http.Handler {
+// newHandler is New with the OIDC manager, audit logger, and forwarder
+// injectable; tests pass fakes.
+func newHandler(sdb DB, static fs.FS, providers OIDCProviders, auditLog *audit.Logger, forwarder SyslogController) http.Handler {
 	a := &api{
 		db:         db{sdb},
 		limiter:    newLoginLimiter(loginLimit, loginWindow),
@@ -79,6 +85,7 @@ func newHandler(sdb DB, static fs.FS, providers OIDCProviders, auditLog *audit.L
 		pwLimiter:  newLoginLimiter(loginLimit, loginWindow),
 		providers:  providers,
 		audit:      auditLog,
+		forwarder:  forwarder,
 	}
 
 	mux := http.NewServeMux()
@@ -142,6 +149,12 @@ func newHandler(sdb DB, static fs.FS, providers OIDCProviders, auditLog *audit.L
 	mux.Handle("GET /api/v1/settings/oidc", adminWrite(a.handleOIDCSettingsGet))
 	mux.Handle("PUT /api/v1/settings/oidc", adminWrite(a.handleOIDCSettingsPut))
 	mux.Handle("POST /api/v1/settings/oidc/test", adminWrite(a.handleOIDCSettingsTest))
+	// Syslog forwarding: admin-only both ways (the audit pipeline's own
+	// configuration — AU-9(4) restricts audit management to privileged
+	// users; the read carries the collector's address and trust anchors).
+	mux.Handle("GET /api/v1/settings/syslog", adminWrite(a.handleSyslogSettingsGet))
+	mux.Handle("PUT /api/v1/settings/syslog", adminWrite(a.handleSyslogSettingsPut))
+	mux.Handle("POST /api/v1/settings/syslog/test", adminWrite(a.handleSyslogSettingsTest))
 	// UI banner: the open read reveals only what every visitor sees rendered
 	// anyway (and no text at all while disabled); edits are admin-only, and
 	// so is the admin read — it carries updated_by usernames.

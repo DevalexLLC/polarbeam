@@ -29,6 +29,7 @@ import (
 	"github.com/devalexllc/polarbeam/internal/server/migrate"
 	"github.com/devalexllc/polarbeam/internal/server/outage"
 	"github.com/devalexllc/polarbeam/internal/server/store"
+	"github.com/devalexllc/polarbeam/internal/server/syslogfwd"
 	"github.com/devalexllc/polarbeam/internal/version"
 	"github.com/devalexllc/polarbeam/web"
 )
@@ -46,6 +47,25 @@ var auditLog = audit.New(nil)
 // Run performs preflight and serves until ctx is cancelled. Every preflight
 // failure is fatal, names the problem, and wraps ErrPreflight.
 func Run(ctx context.Context, cfg config.Config) error {
+	// The forwarder exists from the first line so that every preflight
+	// failure after the destination is applied is recorded and drained
+	// before the process exits; until Apply it forwards nothing.
+	fwd := NewForwarder(cfg.Log.Level)
+	SetupForwarding(cfg.Log.Level, fwd)
+	started := false
+	defer func() {
+		if started {
+			return
+		}
+		auditLog.Emit(context.Background(), audit.Event{
+			ID: audit.EventServerStart, Msg: "polarbeam-server failed preflight", Outcome: audit.Failure,
+			Attrs: []slog.Attr{slog.String("version", version.String()), slog.String("reason", "preflight")},
+		})
+		drainCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		fwd.Close(drainCtx)
+	}()
+
 	authority, err := ca.Load(cfg.CA.Dir, ca.Lifetimes{Agent: cfg.CA.AgentCertLifetime, Server: cfg.CA.ServerCertLifetime})
 	if err != nil {
 		return preflightErr(err)
@@ -85,6 +105,27 @@ func Run(ctx context.Context, cfg config.Config) error {
 	dashboardCert, err := tls.LoadX509KeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
 	if err != nil {
 		return preflightErr(fmt.Errorf("dashboard certificate (tls.cert_file/tls.key_file): %w", err))
+	}
+
+	// Audit forwarding: the stored destination is installed before the
+	// listeners so no request goes unforwarded, and probed once — under
+	// on_failure: halt an unreachable collector is a preflight failure
+	// (ASD STIG V-222486: no audit, no service); under warn the server
+	// starts and the writer keeps retrying with the queue as its buffer.
+	syslogRow, err := st.GetSyslogSettings(ctx)
+	if err != nil {
+		return preflightErr(err)
+	}
+	if syslogCfg := syslogfwd.FromSettings(syslogRow); syslogCfg.Enabled {
+		if _, err := fwd.Probe(ctx, syslogCfg); err != nil {
+			if syslogCfg.OnFailure == syslogfwd.OnFailureHalt {
+				return preflightErr(fmt.Errorf("syslog collector %s:%d unreachable and on_failure is halt: %w", syslogCfg.Host, syslogCfg.Port, err))
+			}
+			slog.Error("syslog collector unreachable at startup; forwarding will keep retrying", "host", syslogCfg.Host, "port", syslogCfg.Port, "err", err)
+		}
+		if err := fwd.Apply(syslogCfg, syslogRow.UpdatedAt); err != nil {
+			return preflightErr(fmt.Errorf("syslog settings: %w", err))
+		}
 	}
 
 	grpcCert, err := ensureGRPCCert(authority, cfg.CA.Dir, cfg.Listen.GRPCHostname, cfg.CA.ServerCertLifetime)
@@ -135,7 +176,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		return preflightErr(fmt.Errorf("listen http %s: %w", cfg.Listen.HTTP, err))
 	}
 	httpLis = maybeProxyProto(httpLis, cfg.Listen.ProxyProtocol)
-	httpServer := newDashboardServer(httpapi.New(st, web.Dist()), dashboardCert)
+	httpServer := newDashboardServer(httpapi.New(st, web.Dist(), fwd), dashboardCert)
 
 	errCh := make(chan error, 2)
 	go func() {
@@ -151,6 +192,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}()
 	// Both listeners are bound and serving: the control plane is up
 	// (V-222468 — audit begins at startup).
+	started = true
 	auditLog.Emit(ctx, audit.Event{
 		ID: audit.EventServerStart, Msg: "polarbeam-server started", Outcome: audit.Success,
 		Attrs: []slog.Attr{
@@ -162,19 +204,26 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 	select {
 	case <-ctx.Done():
-		return shutdownServer(auditLog, httpServer, grpcServer, "signal", nil)
+		return shutdownServer(auditLog, httpServer, grpcServer, fwd, "signal", nil)
 	case err := <-errCh:
-		return shutdownServer(auditLog, httpServer, grpcServer, "listener_error", err)
+		return shutdownServer(auditLog, httpServer, grpcServer, fwd, "listener_error", err)
+	case err := <-fwd.Failed():
+		return shutdownServer(auditLog, httpServer, grpcServer, fwd, "audit_failure", err)
 	}
+}
+
+// closer is the forwarder as shutdownServer needs it (tests pass a fake).
+type closer interface {
+	Close(ctx context.Context) int
 }
 
 // shutdownServer is the one exit path for a started server: it records
 // server.stop with the reason, stops both listeners with bounded waits,
-// and returns cause unchanged so a failure exit stays non-zero. Every way
-// Run can end — the stop signal, a listener error, and (later) an audit
-// forwarding failure under the halt policy — goes through here, so none
-// of them can skip the stop record or the cleanup.
-func shutdownServer(auditLog *audit.Logger, httpServer *http.Server, grpcServer *grpc.Server, reason string, cause error) error {
+// drains the audit forwarder, and returns cause unchanged so a failure
+// exit stays non-zero. Every way Run can end — the stop signal, a listener
+// error, an audit forwarding failure under the halt policy — goes through
+// here, so none of them can skip the stop record or the cleanup.
+func shutdownServer(auditLog *audit.Logger, httpServer *http.Server, grpcServer *grpc.Server, fwd closer, reason string, cause error) error {
 	outcome := audit.Success
 	if cause != nil {
 		outcome = audit.Failure
@@ -199,6 +248,13 @@ func shutdownServer(auditLog *audit.Logger, httpServer *http.Server, grpcServer 
 	case <-time.After(10 * time.Second):
 		slog.Info("graceful stop timed out; closing active streams")
 		grpcServer.Stop()
+	}
+	if fwd != nil {
+		drainCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if undelivered := fwd.Close(drainCtx); undelivered > 0 {
+			slog.Warn("syslog forwarder closed with records undelivered", "undelivered", undelivered)
+		}
 	}
 	return cause
 }

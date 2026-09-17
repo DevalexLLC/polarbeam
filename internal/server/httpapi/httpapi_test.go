@@ -66,6 +66,7 @@ type fakeDB struct {
 	fakeEventState
 	fakeBannerState
 	fakeOIDCState
+	fakeSyslogState
 }
 
 // Each concern's fake methods satisfy the matching db.go interface; the
@@ -79,6 +80,7 @@ var (
 	_ eventReader        = (*fakeDB)(nil)
 	_ bannerStore        = (*fakeDB)(nil)
 	_ oidcStore          = (*fakeDB)(nil)
+	_ syslogStore        = (*fakeDB)(nil)
 )
 
 // fakeAuthState backs the sessionStore fake methods.
@@ -809,7 +811,7 @@ func newTestAPIWithAudit(t *testing.T, f *fakeDB) (http.Handler, *auditCapture) 
 	// The default provider manager matches the default settings row: OIDC
 	// off. Tests exercising the flow use newTestAPIWithProviders.
 	c := &auditCapture{}
-	return newHandler(f, testDist, &fakeProviders{providerErr: oidcauth.ErrDisabled}, audit.New(slog.New(c))), c
+	return newHandler(f, testDist, &fakeProviders{providerErr: oidcauth.ErrDisabled}, audit.New(slog.New(c)), &fakeForwarder{}), c
 }
 
 func newTestAPIWithProviders(t *testing.T, f *fakeDB, p *fakeProviders) http.Handler {
@@ -821,7 +823,7 @@ func newTestAPIWithProviders(t *testing.T, f *fakeDB, p *fakeProviders) http.Han
 func newTestAPIWithProvidersAudit(t *testing.T, f *fakeDB, p *fakeProviders) (http.Handler, *auditCapture) {
 	t.Helper()
 	c := &auditCapture{}
-	return newHandler(f, testDist, p, audit.New(slog.New(c))), c
+	return newHandler(f, testDist, p, audit.New(slog.New(c)), &fakeForwarder{}), c
 }
 
 func doLogin(t *testing.T, h http.Handler, username, password string) *httptest.ResponseRecorder {
@@ -1440,7 +1442,7 @@ func TestMeAndLogoutCSRF(t *testing.T) {
 
 func TestRequireRole(t *testing.T) {
 	f := newFakeDB()
-	h := New(f, testDist)
+	h := New(f, testDist, &fakeForwarder{})
 	cookie, _ := loginAndCookie(t, h, f) // alice is a viewer
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
