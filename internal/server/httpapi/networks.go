@@ -5,10 +5,12 @@ package httpapi
 // reveal nothing viewers can't already see; writes are admin-only.
 
 import (
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/devalexllc/polarbeam/internal/audit"
 	"github.com/devalexllc/polarbeam/internal/server/configadmin"
 	"github.com/devalexllc/polarbeam/internal/server/store"
 )
@@ -70,6 +72,7 @@ func (a *api) handleNetworkPost(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, "create network", err)
 		return
 	}
+	audit.Add(r.Context(), slog.String("network", in.Name))
 	writeJSON(w, http.StatusOK, map[string]string{"id": id.String()})
 }
 

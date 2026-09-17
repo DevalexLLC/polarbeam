@@ -72,6 +72,16 @@ Full design + milestone plan: `docs/architecture.md`.
   locally. All wire timings are int64 microseconds, -1 = not measured.
 - Proto compatibility: fields are only added, never renumbered/repurposed
   (old agents in other languages must keep working).
+- Audit records are slog records whose first attribute is the reserved key
+  `event=` (`internal/audit`; catalog in `catalog.go`, operator copy in
+  `docs/audit-logging.md`, both fenced by tests). Every new
+  security-relevant surface — a login path, a credential decision, a
+  mutating route, a CLI subcommand that changes state — emits one through
+  `audit.Emit` with a catalogued ID; the dashboard middleware already
+  covers any route mounted behind `withSession`, and handlers only add
+  the object identity (`audit.Add`) or the scope-denial reason
+  (`audit.Deny`). Never log under the key `"event"` elsewhere, and never
+  log a secret: the deny-list in `audit.go` panics under `go test`.
 
 ## Workflows
 

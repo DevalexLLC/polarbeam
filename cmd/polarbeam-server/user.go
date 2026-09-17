@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"unicode/utf8"
@@ -13,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/term"
 
+	"github.com/devalexllc/polarbeam/internal/audit"
 	"github.com/devalexllc/polarbeam/internal/server/auth"
 	"github.com/devalexllc/polarbeam/internal/server/store"
 )
@@ -91,6 +93,9 @@ func cmdUser(args []string) error {
 		if err != nil {
 			return err
 		}
+		auditCLI(audit.EventCLIUserAdd, "user created", audit.Success,
+			slog.String("user_target", *username), slog.String("user_id", id.String()),
+			slog.String("role", r), slog.String("networks", strings.Join(networks, ",")))
 		if len(networks) > 0 {
 			fmt.Printf("user %q created (role %s, networks %s, %s)\n", *username, r, strings.Join(networks, ","), id)
 		} else {

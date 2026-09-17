@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/devalexllc/polarbeam/internal/audit"
 	pb "github.com/devalexllc/polarbeam/internal/pb/polarbeamv1"
 	"github.com/devalexllc/polarbeam/internal/server/ca"
 	"github.com/devalexllc/polarbeam/internal/server/meshexpand"
@@ -35,6 +36,10 @@ type Server struct {
 	ca          *ca.CA
 	assignments assignmentCache
 	certs       certCache
+	// audit records every credential decision and agent session; a nil
+	// logger writes through slog.Default (tests leave it nil or inject a
+	// capture).
+	audit *audit.Logger
 
 	// fetchCertValid is the test seam behind certValidCached; nil means
 	// s.store.CertValid. The stream sweep bypasses it (and the cache) on
@@ -51,7 +56,27 @@ type Server struct {
 }
 
 func New(st *store.Store, authority *ca.CA) *Server {
-	return &Server{store: st, ca: authority}
+	return &Server{store: st, ca: authority, audit: audit.New(nil)}
+}
+
+// peerHost is the connecting agent's address without the port — the
+// audit record's "remote". Behind the SNI proxy it is the real client only
+// with listen.proxy_protocol on (the same caveat as the dashboard's).
+func peerHost(ctx context.Context) string {
+	p, ok := peer.FromContext(ctx)
+	if !ok || p.Addr == nil {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(p.Addr.String()); err == nil {
+		return host
+	}
+	return p.Addr.String()
+}
+
+// agentActor is the audit identity of an authenticated agent: the UUID
+// from its certificate's URI SAN.
+func agentActor(id uuid.UUID) audit.Actor {
+	return audit.Actor{User: id.String(), Source: audit.SourceAgent}
 }
 
 // Register attaches both services to a grpc.Server.
@@ -63,13 +88,25 @@ func (s *Server) Register(g *grpc.Server) {
 // Enroll consumes a one-time join token and issues the agent's first
 // certificate. This is the only RPC that works without a client cert.
 func (s *Server) Enroll(ctx context.Context, req *pb.EnrollRequest) (*pb.EnrollResponse, error) {
+	remote := peerHost(ctx)
+	// refused records a rejected enrollment. There is no agent identity
+	// yet, so the hostname the caller claimed is the only handle.
+	refused := func(outcome audit.Outcome, reason string) {
+		s.audit.Emit(ctx, audit.Event{
+			ID: audit.EventAgentEnroll, Msg: "enrollment refused", Outcome: outcome,
+			Remote: remote,
+			Attrs:  []slog.Attr{slog.String("hostname", req.GetHostname()), slog.String("reason", reason)},
+		})
+	}
 	if req.GetJoinToken() == "" || len(req.GetCsrDer()) == 0 {
+		refused(audit.Failure, "missing_token_or_csr")
 		return nil, status.Error(codes.InvalidArgument, "join_token and csr_der are required")
 	}
 
 	// Validate the CSR before touching the single-use token so a malformed
 	// CSR is rejected without consuming anything.
 	if err := ca.ValidateCSR(req.GetCsrDer()); err != nil {
+		refused(audit.Failure, "csr_rejected")
 		return nil, status.Errorf(codes.InvalidArgument, "CSR rejected: %v", err)
 	}
 
@@ -108,15 +145,25 @@ func (s *Server) Enroll(ctx context.Context, req *pb.EnrollRequest) (*pb.EnrollR
 			}, nil
 		})
 	if err == store.ErrTokenInvalid {
+		// The one refusal an attacker can provoke: a guessed, expired, or
+		// already-used token (V-222462's failed-logon analogue for agents).
+		refused(audit.Denied, "invalid_or_used_token")
 		return nil, status.Error(codes.PermissionDenied, err.Error())
 	}
 	if err != nil {
 		slog.Error("enrollment failed", "err", err)
+		refused(audit.Failure, "internal")
 		return nil, status.Error(codes.Internal, "enrollment failed")
 	}
 
-	slog.Info("agent enrolled", "agent", agentID, "site", siteID,
-		"hostname", req.GetHostname(), "probe_address", probeAddress)
+	s.audit.Emit(ctx, audit.Event{
+		ID: audit.EventAgentEnroll, Msg: "agent enrolled", Outcome: audit.Success,
+		Actor: agentActor(agentID), Remote: remote,
+		Attrs: []slog.Attr{
+			slog.String("agent", agentID.String()), slog.String("site", siteID.String()),
+			slog.String("hostname", req.GetHostname()), slog.String("probe_address", probeAddress),
+		},
+	})
 	return &pb.EnrollResponse{
 		AgentId:     agentID.String(),
 		CertDer:     certDER,
@@ -156,8 +203,35 @@ func (s *Server) StreamConfig(hello *pb.AgentHello, stream grpc.ServerStreamingS
 	if err != nil {
 		return err
 	}
-	slog.Info("agent connected", "agent", id.AgentID, "version", hello.GetAgentVersion())
+	remote := peerHost(ctx)
+	s.audit.Emit(ctx, audit.Event{
+		ID: audit.EventAgentSessionStart, Msg: "agent connected", Outcome: audit.Success,
+		Actor: agentActor(id.AgentID), Remote: remote,
+		Attrs: []slog.Attr{slog.String("agent", id.AgentID.String()), slog.String("version", hello.GetAgentVersion())},
+	})
+	// Every exit of the stream is a session end — the agent going away, a
+	// config failure, or a revocation cutting it — and each is recorded with
+	// its reason (V-222441/443/464: session start and end).
+	reason, err := s.streamConfig(ctx, hello, stream, id)
+	outcome := audit.Success
+	switch reason {
+	case "closed":
+	case "revoked":
+		outcome = audit.Denied
+	default:
+		outcome = audit.Failure
+	}
+	s.audit.Emit(ctx, audit.Event{
+		ID: audit.EventAgentSessionEnd, Msg: "agent disconnected", Outcome: outcome,
+		Actor: agentActor(id.AgentID), Remote: remote,
+		Attrs: []slog.Attr{slog.String("agent", id.AgentID.String()), slog.String("reason", reason)},
+	})
+	return err
+}
 
+// streamConfig is StreamConfig's body once the agent is authenticated; it
+// returns why the stream ended alongside the RPC error.
+func (s *Server) streamConfig(ctx context.Context, hello *pb.AgentHello, stream grpc.ServerStreamingServer[pb.ConfigSnapshot], id *agentIdentity) (string, error) {
 	buildSnapshot := func() (*pb.ConfigSnapshot, error) {
 		in, err := s.store.LoadAgentConfigInputs(ctx, id.AgentID)
 		if err != nil {
@@ -174,16 +248,16 @@ func (s *Server) StreamConfig(hello *pb.AgentHello, stream grpc.ServerStreamingS
 	lastVer, err := s.store.ConfigDBVersion(ctx)
 	if err != nil {
 		slog.Error("config version read failed", "agent", id.AgentID, "err", err)
-		return status.Error(codes.Unavailable, "config unavailable")
+		return "config_unavailable", status.Error(codes.Unavailable, "config unavailable")
 	}
 	snapshot, err := buildSnapshot()
 	if err != nil {
 		slog.Error("config snapshot build failed", "agent", id.AgentID, "err", err)
-		return status.Error(codes.Unavailable, "config unavailable")
+		return "config_unavailable", status.Error(codes.Unavailable, "config unavailable")
 	}
 	if hello.GetConfigHash() != snapshot.GetConfigHash() {
 		if err := stream.Send(snapshot); err != nil {
-			return err
+			return "send_failed", err
 		}
 		slog.Info("config snapshot sent", "agent", id.AgentID,
 			"hash", snapshot.GetConfigHash(), "probes", len(snapshot.GetProbes()))
@@ -200,8 +274,7 @@ func (s *Server) StreamConfig(hello *pb.AgentHello, stream grpc.ServerStreamingS
 	for {
 		select {
 		case <-ctx.Done():
-			slog.Info("agent disconnected", "agent", id.AgentID)
-			return nil
+			return "closed", nil
 		case <-tick:
 			// Fail closed: the DB is the sole revocation authority, so a
 			// stream whose certificate cannot be confirmed valid does not
@@ -210,11 +283,10 @@ func (s *Server) StreamConfig(hello *pb.AgentHello, stream grpc.ServerStreamingS
 			valid, err := s.store.CertValid(ctx, id.Cert.SerialNumber, id.AgentID)
 			if err != nil {
 				slog.Error("dropping stream: certificate validity unconfirmable", "agent", id.AgentID, "err", err)
-				return status.Error(codes.Unavailable, "certificate validity check failed")
+				return "unconfirmable", status.Error(codes.Unavailable, "certificate validity check failed")
 			}
 			if !valid {
-				slog.Info("dropping stream for revoked certificate", "agent", id.AgentID)
-				return status.Error(codes.PermissionDenied, "certificate revoked")
+				return "revoked", status.Error(codes.PermissionDenied, "certificate revoked")
 			}
 			// Rebuild only when a config write happened since the last
 			// build: config_version covers every store write path that can
@@ -238,7 +310,7 @@ func (s *Server) StreamConfig(hello *pb.AgentHello, stream grpc.ServerStreamingS
 				} else {
 					if fresh.GetConfigHash() != snapshot.GetConfigHash() {
 						if err := stream.Send(fresh); err != nil {
-							return err
+							return "send_failed", err
 						}
 						snapshot = fresh
 						slog.Info("config snapshot sent", "agent", id.AgentID,
@@ -368,11 +440,11 @@ func (s *Server) PushResults(ctx context.Context, req *pb.PushResultsRequest) (*
 		}
 	}
 	for _, ch := range changes {
-		slog.Warn("traceroute path changed", "agent", id.AgentID, "probe", ch.ProbeID, "event", ch.EventID)
+		slog.Warn("traceroute path changed", "agent", id.AgentID, "probe", ch.ProbeID, "path_event_id", ch.EventID)
 	}
 	for _, ch := range mtuChanges {
 		slog.Warn("path MTU changed", "agent", id.AgentID, "probe", ch.ProbeID,
-			"old_bytes", ch.OldMTU, "new_bytes", ch.NewMTU, "black_hole", ch.NewBlack, "event", ch.EventID)
+			"old_bytes", ch.OldMTU, "new_bytes", ch.NewMTU, "black_hole", ch.NewBlack, "path_event_id", ch.EventID)
 	}
 	if rejected > 0 {
 		slog.Warn("push contained rejected results", "agent", id.AgentID,
@@ -393,24 +465,40 @@ func (s *Server) RenewCert(ctx context.Context, req *pb.RenewCertRequest) (*pb.R
 	// auth is not good enough here: a just-revoked serial could otherwise
 	// convert its cache window into a brand-new credential and escape
 	// revocation entirely. Re-check uncached immediately before issuance.
+	remote := peerHost(ctx)
+	refused := func(outcome audit.Outcome, reason string) {
+		s.audit.Emit(ctx, audit.Event{
+			ID: audit.EventAgentCertRenew, Msg: "certificate renewal refused", Outcome: outcome,
+			Actor: agentActor(id.AgentID), Remote: remote,
+			Attrs: []slog.Attr{slog.String("agent", id.AgentID.String()), slog.String("reason", reason)},
+		})
+	}
 	valid, err := s.store.CertValid(ctx, id.Cert.SerialNumber, id.AgentID)
 	if err != nil {
 		slog.Error("renewal revocation re-check failed", "err", err)
+		refused(audit.Failure, "internal")
 		return nil, status.Error(codes.Internal, "certificate check failed")
 	}
 	if !valid {
+		refused(audit.Denied, "revoked_or_unknown")
 		return nil, status.Error(codes.PermissionDenied, "certificate revoked or unknown")
 	}
 	certDER, serial, notAfter, err := s.ca.SignAgentCSR(req.GetCsrDer(), id.AgentID, id.Cert.Subject.CommonName)
 	if err != nil {
+		refused(audit.Failure, "csr_rejected")
 		return nil, status.Errorf(codes.InvalidArgument, "CSR rejected: %v", err)
 	}
 	if err := s.store.InsertCertificate(ctx, serial, id.AgentID,
 		time.Now().Add(-5*time.Minute), notAfter); err != nil {
 		slog.Error("record renewed certificate failed", "err", err)
+		refused(audit.Failure, "internal")
 		return nil, status.Error(codes.Internal, "renewal failed")
 	}
-	slog.Info("certificate renewed", "agent", id.AgentID, "not_after", notAfter)
+	s.audit.Emit(ctx, audit.Event{
+		ID: audit.EventAgentCertRenew, Msg: "certificate renewed", Outcome: audit.Success,
+		Actor: agentActor(id.AgentID), Remote: remote,
+		Attrs: []slog.Attr{slog.String("agent", id.AgentID.String()), slog.Time("not_after", notAfter)},
+	})
 	return &pb.RenewCertResponse{
 		CertDer:     certDER,
 		CaBundleDer: s.ca.BundleDER(),

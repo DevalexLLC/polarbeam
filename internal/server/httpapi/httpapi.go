@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/devalexllc/polarbeam/internal/audit"
 	"github.com/devalexllc/polarbeam/internal/server/oidcauth"
 	"github.com/devalexllc/polarbeam/internal/server/store"
 )
@@ -54,6 +55,9 @@ type api struct {
 	// and exhausting it must never burn anyone's login attempts.
 	pwLimiter *loginLimiter
 	providers OIDCProviders
+	// audit is where every security event goes (see audit.go here and
+	// internal/audit); tests inject a capturing logger.
+	audit *audit.Logger
 }
 
 // db wraps DB so internal helpers hang off a private type.
@@ -62,17 +66,19 @@ type db struct{ DB }
 // New returns the dashboard handler: /healthz (open), /api/v1 (sessions),
 // and the SPA from static for everything else.
 func New(sdb DB, static fs.FS) http.Handler {
-	return newHandler(sdb, static, oidcauth.NewManager(sdb))
+	return newHandler(sdb, static, oidcauth.NewManager(sdb), audit.New(nil))
 }
 
-// newHandler is New with the OIDC manager injectable; tests pass a fake.
-func newHandler(sdb DB, static fs.FS, providers OIDCProviders) http.Handler {
+// newHandler is New with the OIDC manager and audit logger injectable;
+// tests pass fakes.
+func newHandler(sdb DB, static fs.FS, providers OIDCProviders, auditLog *audit.Logger) http.Handler {
 	a := &api{
 		db:         db{sdb},
 		limiter:    newLoginLimiter(loginLimit, loginWindow),
 		ssoLimiter: newLoginLimiter(loginLimit, loginWindow),
 		pwLimiter:  newLoginLimiter(loginLimit, loginWindow),
 		providers:  providers,
+		audit:      auditLog,
 	}
 
 	mux := http.NewServeMux()
@@ -307,6 +313,8 @@ func scopeNames(ctx context.Context) []string {
 func (a *api) requireNetworkScopeName(w http.ResponseWriter, r *http.Request, name string) (uuid.UUID, bool) {
 	notFound := func() { writeError(w, http.StatusNotFound, fmt.Sprintf("network %q does not exist", name)) }
 	if names := scopeNames(r.Context()); names != nil && !slices.Contains(names, name) {
+		// The response hides it; the audit record does not.
+		audit.Deny(r.Context(), "out_of_scope")
 		notFound()
 		return uuid.Nil, false
 	}

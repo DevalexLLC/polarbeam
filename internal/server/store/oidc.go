@@ -116,11 +116,12 @@ func roleRulesEqual(a, b []OIDCRoleRule) bool {
 // CreateOIDCSession and UpsertOIDCUser: a login racing the change either
 // commits first — and its session is deleted here — or blocks until this
 // commits, re-reads the new updated_at, and fails. Either way no
-// stale-policy session survives. Returns the number of sessions revoked.
-func (s *Store) UpdateOIDCSettings(ctx context.Context, o OIDCSettings, keepSecret, keepRoleRules, keepUnmatchedRole bool) (*OIDCSettings, int64, error) {
+// stale-policy session survives. Returns the sessions revoked, each named
+// so the audit log can record every federated user's session ending.
+func (s *Store) UpdateOIDCSettings(ctx context.Context, o OIDCSettings, keepSecret, keepRoleRules, keepUnmatchedRole bool) (*OIDCSettings, []SessionRef, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return nil, 0, fmt.Errorf("update oidc settings: %w", err)
+		return nil, nil, fmt.Errorf("update oidc settings: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
@@ -135,7 +136,7 @@ func (s *Store) UpdateOIDCSettings(ctx context.Context, o OIDCSettings, keepSecr
 		`SELECT issuer, client_id, client_secret, role_claim, admin_values, role_rules, unmatched_role
 		   FROM oidc_settings WHERE id FOR UPDATE`).
 		Scan(&curIssuer, &curClientID, &curSecret, &curRoleClaim, &curAdmins, &curRules, &curUnmatched); err != nil {
-		return nil, 0, fmt.Errorf("update oidc settings: %w", err)
+		return nil, nil, fmt.Errorf("update oidc settings: %w", err)
 	}
 	providerChanged := curIssuer != o.Issuer || curClientID != o.ClientID
 	effRules := o.RoleRules
@@ -152,17 +153,23 @@ func (s *Store) UpdateOIDCSettings(ctx context.Context, o OIDCSettings, keepSecr
 	if providerChanged && keepSecret && curSecret != "" {
 		// The validation-layer rule (a provider switch demands a fresh
 		// secret), re-checked against the authoritative row.
-		return nil, 0, ErrConcurrentProviderChange
+		return nil, nil, ErrConcurrentProviderChange
 	}
-	var revoked int64
+	var revoked []SessionRef
 	if providerChanged || policyChanged {
-		tag, err := tx.Exec(ctx, `
-			DELETE FROM sessions USING users
-			 WHERE sessions.user_id = users.id AND users.auth_source = 'oidc'`)
+		rows, err := tx.Query(ctx, `
+			WITH d AS (
+				DELETE FROM sessions USING users
+				 WHERE sessions.user_id = users.id AND users.auth_source = 'oidc'
+				RETURNING sessions.id, sessions.user_id, users.username, sessions.expires_at
+			)
+			SELECT id, user_id, username, expires_at FROM d`)
 		if err != nil {
-			return nil, 0, fmt.Errorf("update oidc settings: revoke sso sessions: %w", err)
+			return nil, nil, fmt.Errorf("update oidc settings: revoke sso sessions: %w", err)
 		}
-		revoked = tag.RowsAffected()
+		if revoked, err = scanSessionRefs(rows); err != nil {
+			return nil, nil, fmt.Errorf("update oidc settings: revoke sso sessions: %w", err)
+		}
 	}
 	out, err := scanOIDCSettings(tx.QueryRow(ctx, `
 		UPDATE oidc_settings
@@ -181,10 +188,10 @@ func (s *Store) UpdateOIDCSettings(ctx context.Context, o OIDCSettings, keepSecr
 		o.Scopes, o.UsernameClaim, o.RoleClaim, o.AdminValues, o.RoleRules,
 		o.UnmatchedRole, o.CAPEM, o.UpdatedBy, keepSecret, keepRoleRules, keepUnmatchedRole))
 	if err != nil {
-		return nil, 0, fmt.Errorf("update oidc settings: %w", err)
+		return nil, nil, fmt.Errorf("update oidc settings: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return nil, 0, fmt.Errorf("update oidc settings: %w", err)
+		return nil, nil, fmt.Errorf("update oidc settings: %w", err)
 	}
 	return out, revoked, nil
 }
@@ -209,11 +216,12 @@ var ErrOIDCPolicyChanged = errors.New("oidc settings changed during login")
 // can switch providers or rewrite the role mapping — revoking every SSO
 // session — inside that window; an unchecked insert would then resurrect
 // old-provider or old-policy access for a full session TTL. The share lock
-// pairs with UpdateOIDCSettings's exclusive lock — see there.
-func (s *Store) CreateOIDCSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time, issuer, clientID string, policyUpdatedAt time.Time) error {
+// pairs with UpdateOIDCSettings's exclusive lock — see there. The new
+// session's row id is returned for the audit record.
+func (s *Store) CreateOIDCSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time, issuer, clientID string, policyUpdatedAt time.Time) (uuid.UUID, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("create oidc session: %w", err)
+		return uuid.Nil, fmt.Errorf("create oidc session: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
@@ -223,20 +231,46 @@ func (s *Store) CreateOIDCSession(ctx context.Context, userID uuid.UUID, tokenHa
 	if err := tx.QueryRow(ctx,
 		`SELECT enabled, issuer, client_id, updated_at FROM oidc_settings WHERE id FOR SHARE`).
 		Scan(&enabled, &curIssuer, &curClientID, &curUpdatedAt); err != nil {
-		return fmt.Errorf("create oidc session: %w", err)
+		return uuid.Nil, fmt.Errorf("create oidc session: %w", err)
 	}
 	if !enabled || curIssuer != issuer || curClientID != clientID {
-		return ErrProviderChanged
+		return uuid.Nil, ErrProviderChanged
 	}
 	if !curUpdatedAt.Equal(policyUpdatedAt) {
-		return ErrOIDCPolicyChanged
+		return uuid.Nil, ErrOIDCPolicyChanged
 	}
-	if _, err := tx.Exec(ctx,
-		`INSERT INTO sessions (token_hash, user_id, csrf_token, expires_at) VALUES ($1, $2, $3, $4)`,
-		tokenHash, userID, csrfToken, expiresAt); err != nil {
-		return fmt.Errorf("create oidc session: %w", err)
+	var id uuid.UUID
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO sessions (token_hash, user_id, csrf_token, expires_at) VALUES ($1, $2, $3, $4) RETURNING id`,
+		tokenHash, userID, csrfToken, expiresAt).Scan(&id); err != nil {
+		return uuid.Nil, fmt.Errorf("create oidc session: %w", err)
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, fmt.Errorf("create oidc session: %w", err)
+	}
+	return id, nil
+}
+
+// OIDCUpsertResult is what UpsertOIDCUser did: the account as it now
+// stands, whether it was created by this call, and — for an existing
+// account — the username, role, and network scope it had before, so the
+// audit log can record a rename or a privilege change as such.
+type OIDCUpsertResult struct {
+	User         *UserInfo
+	Created      bool
+	PrevUsername string
+	PrevRole     string
+	PrevNetworks []string
+}
+
+// Changed reports whether an existing account's username, role, or scope
+// differs from before (always false for a created account).
+func (r *OIDCUpsertResult) Changed() bool {
+	if r.Created {
+		return false
+	}
+	return r.PrevUsername != r.User.Username || r.PrevRole != r.User.Role ||
+		!slices.Equal(r.PrevNetworks, r.User.Networks)
 }
 
 // UpsertOIDCUser JIT-provisions (or refreshes) a federated user keyed on the
@@ -257,7 +291,7 @@ func (s *Store) CreateOIDCSession(ctx context.Context, userID uuid.UUID, tokenHa
 // transaction as the user write, so a callback that mapped claims under a
 // superseded policy can never overwrite the role or scope a newer login
 // (or the policy change's revocation) just established.
-func (s *Store) UpsertOIDCUser(ctx context.Context, issuer, subject, username, role string, networks []uuid.UUID, policyUpdatedAt time.Time) (*UserInfo, error) {
+func (s *Store) UpsertOIDCUser(ctx context.Context, issuer, subject, username, role string, networks []uuid.UUID, policyUpdatedAt time.Time) (*OIDCUpsertResult, error) {
 	if issuer == "" || subject == "" {
 		return nil, errors.New("upsert oidc user: empty issuer or subject")
 	}
@@ -265,11 +299,11 @@ func (s *Store) UpsertOIDCUser(ctx context.Context, issuer, subject, username, r
 		// The callback validated the mapping; reaching here is a server bug.
 		return nil, fmt.Errorf("upsert oidc user: role %s with %d networks", role, len(networks))
 	}
-	u, err := s.upsertOIDCUser(ctx, issuer, subject, username, role, networks, policyUpdatedAt)
+	res, err := s.upsertOIDCUser(ctx, issuer, subject, username, role, networks, policyUpdatedAt)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "users_username_key" {
 		sum := sha256.Sum256([]byte(issuer + "\x00" + subject))
-		u, err = s.upsertOIDCUser(ctx, issuer, subject, username+"-"+hex.EncodeToString(sum[:4]), role, networks, policyUpdatedAt)
+		res, err = s.upsertOIDCUser(ctx, issuer, subject, username+"-"+hex.EncodeToString(sum[:4]), role, networks, policyUpdatedAt)
 	}
 	if errors.Is(err, ErrOIDCPolicyChanged) {
 		return nil, err
@@ -277,10 +311,10 @@ func (s *Store) UpsertOIDCUser(ctx context.Context, issuer, subject, username, r
 	if err != nil {
 		return nil, fmt.Errorf("upsert oidc user: %w", err)
 	}
-	return u, nil
+	return res, nil
 }
 
-func (s *Store) upsertOIDCUser(ctx context.Context, issuer, subject, username, role string, networks []uuid.UUID, policyUpdatedAt time.Time) (*UserInfo, error) {
+func (s *Store) upsertOIDCUser(ctx context.Context, issuer, subject, username, role string, networks []uuid.UUID, policyUpdatedAt time.Time) (*OIDCUpsertResult, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -294,6 +328,30 @@ func (s *Store) upsertOIDCUser(ctx context.Context, issuer, subject, username, r
 	}
 	if !curUpdatedAt.Equal(policyUpdatedAt) {
 		return nil, ErrOIDCPolicyChanged
+	}
+
+	// Serialize provisioning per identity: FOR UPDATE cannot lock a row
+	// that does not exist yet, so without this two concurrent first logins
+	// would both read "no account", both report Created, and the second
+	// would lose the previous values its ON CONFLICT update replaced.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, issuer+"\x1f"+subject); err != nil {
+		return nil, err
+	}
+	// Snapshot the existing account (locked, so the previous values are
+	// exactly what the upsert below replaces) for the audit record.
+	res := &OIDCUpsertResult{Created: true}
+	var prevNetworks []string
+	err = tx.QueryRow(ctx, `
+		SELECT username, role, `+userNetworkNames+`
+		  FROM users WHERE oidc_issuer = $1 AND oidc_subject = $2 FOR UPDATE`,
+		issuer, subject).Scan(&res.PrevUsername, &res.PrevRole, &prevNetworks)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+	case err != nil:
+		return nil, err
+	default:
+		res.Created = false
+		res.PrevNetworks = scopeNames(res.PrevRole, prevNetworks)
 	}
 
 	var u UserInfo
@@ -319,5 +377,13 @@ func (s *Store) upsertOIDCUser(ctx context.Context, issuer, subject, username, r
 			return nil, err
 		}
 	}
-	return &u, tx.Commit(ctx)
+	// Read the scope back as names, the same shape the session carries,
+	// so the result compares like-for-like with PrevNetworks.
+	var names []string
+	if err := tx.QueryRow(ctx, `SELECT `+userNetworkNames+` FROM users WHERE id = $1`, u.ID).Scan(&names); err != nil {
+		return nil, err
+	}
+	u.Networks = scopeNames(u.Role, names)
+	res.User = &u
+	return res, tx.Commit(ctx)
 }

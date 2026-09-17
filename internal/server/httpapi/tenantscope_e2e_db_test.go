@@ -72,7 +72,7 @@ func e2eSession(t *testing.T, ctx context.Context, s *store.Store, role string, 
 		t.Fatalf("NewToken: %v", err)
 	}
 	csrf := "csrf-" + uuid.NewString()
-	if err := s.CreateLocalSession(ctx, id, tokenHash, csrf, time.Now().Add(time.Hour), e2eHash); err != nil {
+	if _, err := s.CreateLocalSession(ctx, id, tokenHash, csrf, time.Now().Add(time.Hour), e2eHash); err != nil {
 		t.Fatalf("CreateLocalSession: %v", err)
 	}
 	return &http.Cookie{Name: sessionCookie, Value: token}, csrf
@@ -114,7 +114,7 @@ func e2eSetup(t *testing.T) *e2eEnv {
 	t.Cleanup(s.Close)
 
 	env := &e2eEnv{ctx: ctx, s: s,
-		h: newHandler(s, testDist, &fakeProviders{providerErr: oidcauth.ErrDisabled})}
+		h: newHandler(s, testDist, &fakeProviders{providerErr: oidcauth.ErrDisabled}, nil)}
 
 	must := func(what string, err error) {
 		t.Helper()

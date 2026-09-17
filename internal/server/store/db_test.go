@@ -154,45 +154,45 @@ func TestLastAdminGuard(t *testing.T) {
 	}
 
 	// Sole enabled admin: disable and delete are both refused.
-	if err := s.SetUserDisabled(ctx, alice, true); !errors.Is(err, store.ErrConflict) {
+	if _, _, err := s.SetUserDisabled(ctx, alice, true); !errors.Is(err, store.ErrConflict) {
 		t.Errorf("disable sole admin: err = %v, want ErrConflict", err)
 	}
-	if err := s.DeleteUser(ctx, alice); !errors.Is(err, store.ErrConflict) {
+	if _, err := s.DeleteUser(ctx, alice); !errors.Is(err, store.ErrConflict) {
 		t.Errorf("delete sole admin: err = %v, want ErrConflict", err)
 	}
 
 	// A viewer is not an admin for the guard's purposes.
 	vic := createUser(t, ctx, s, "vic", "viewer")
-	if err := s.SetUserDisabled(ctx, alice, true); !errors.Is(err, store.ErrConflict) {
+	if _, _, err := s.SetUserDisabled(ctx, alice, true); !errors.Is(err, store.ErrConflict) {
 		t.Errorf("disable sole admin with viewer present: err = %v, want ErrConflict", err)
 	}
-	if err := s.SetUserDisabled(ctx, vic, true); err != nil {
+	if _, _, err := s.SetUserDisabled(ctx, vic, true); err != nil {
 		t.Errorf("disable viewer: %v", err)
 	}
 
 	// With a second enabled admin the first becomes disableable — and the
 	// second then inherits last-admin protection.
 	bob := createUser(t, ctx, s, "bob", "admin")
-	if err := s.SetUserDisabled(ctx, alice, true); err != nil {
+	if _, _, err := s.SetUserDisabled(ctx, alice, true); err != nil {
 		t.Fatalf("disable admin with backup present: %v", err)
 	}
-	if err := s.SetUserDisabled(ctx, bob, true); !errors.Is(err, store.ErrConflict) {
+	if _, _, err := s.SetUserDisabled(ctx, bob, true); !errors.Is(err, store.ErrConflict) {
 		t.Errorf("disable new last admin: err = %v, want ErrConflict", err)
 	}
-	if err := s.DeleteUser(ctx, bob); !errors.Is(err, store.ErrConflict) {
+	if _, err := s.DeleteUser(ctx, bob); !errors.Is(err, store.ErrConflict) {
 		t.Errorf("delete new last admin: err = %v, want ErrConflict", err)
 	}
 
 	// A disabled admin does not count as backup, but re-enabling is always
 	// allowed and restores it as one.
-	if err := s.SetUserDisabled(ctx, alice, false); err != nil {
+	if _, _, err := s.SetUserDisabled(ctx, alice, false); err != nil {
 		t.Fatalf("re-enable admin: %v", err)
 	}
-	if err := s.DeleteUser(ctx, bob); err != nil {
+	if _, err := s.DeleteUser(ctx, bob); err != nil {
 		t.Errorf("delete admin with enabled backup: %v", err)
 	}
 
-	if err := s.SetUserDisabled(ctx, uuid.New(), true); !errors.Is(err, store.ErrNotFound) {
+	if _, _, err := s.SetUserDisabled(ctx, uuid.New(), true); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("disable unknown user: err = %v, want ErrNotFound", err)
 	}
 }
@@ -236,31 +236,31 @@ func TestLastAdminGuardIgnoresScopedRoles(t *testing.T) {
 	tenantViewer := scoped("tenant-viewer", store.RoleNetworkViewer)
 
 	// Neither scoped role is a backup for the sole global admin.
-	if err := s.SetUserDisabled(ctx, root, true); !errors.Is(err, store.ErrConflict) {
+	if _, _, err := s.SetUserDisabled(ctx, root, true); !errors.Is(err, store.ErrConflict) {
 		t.Errorf("disable sole admin alongside scoped roles: err = %v, want ErrConflict", err)
 	}
-	if err := s.DeleteUser(ctx, root); !errors.Is(err, store.ErrConflict) {
+	if _, err := s.DeleteUser(ctx, root); !errors.Is(err, store.ErrConflict) {
 		t.Errorf("delete sole admin alongside scoped roles: err = %v, want ErrConflict", err)
 	}
 
 	// And neither carries protection of its own, even as the only account
 	// holding that role: a tenant is always removable.
-	if err := s.SetUserDisabled(ctx, tenantAdmin, true); err != nil {
+	if _, _, err := s.SetUserDisabled(ctx, tenantAdmin, true); err != nil {
 		t.Errorf("disable sole network_admin: %v", err)
 	}
-	if err := s.SetUserDisabled(ctx, tenantAdmin, false); err != nil {
+	if _, _, err := s.SetUserDisabled(ctx, tenantAdmin, false); err != nil {
 		t.Fatalf("re-enable network_admin: %v", err)
 	}
-	if err := s.DeleteUser(ctx, tenantAdmin); err != nil {
+	if _, err := s.DeleteUser(ctx, tenantAdmin); err != nil {
 		t.Errorf("delete sole network_admin: %v", err)
 	}
-	if err := s.DeleteUser(ctx, tenantViewer); err != nil {
+	if _, err := s.DeleteUser(ctx, tenantViewer); err != nil {
 		t.Errorf("delete sole network_viewer: %v", err)
 	}
 
 	// Removing them leaves the global admin exactly as protected as before:
 	// the scoped accounts never participated in the count either way.
-	if err := s.DeleteUser(ctx, root); !errors.Is(err, store.ErrConflict) {
+	if _, err := s.DeleteUser(ctx, root); !errors.Is(err, store.ErrConflict) {
 		t.Errorf("delete last admin after removing scoped accounts: err = %v, want ErrConflict", err)
 	}
 }
@@ -288,7 +288,7 @@ func TestLastAdminGuardRace(t *testing.T) {
 
 	for round := range 25 {
 		for _, id := range []uuid.UUID{alice, bob} {
-			if err := s.SetUserDisabled(ctx, id, false); err != nil {
+			if _, _, err := s.SetUserDisabled(ctx, id, false); err != nil {
 				t.Fatalf("round %d: re-enable: %v", round, err)
 			}
 		}
@@ -299,7 +299,7 @@ func TestLastAdminGuardRace(t *testing.T) {
 		for i, id := range []uuid.UUID{alice, bob} {
 			wg.Go(func() {
 				<-start
-				errs[i] = s.SetUserDisabled(ctx, id, true)
+				_, _, errs[i] = s.SetUserDisabled(ctx, id, true)
 			})
 		}
 		close(start)

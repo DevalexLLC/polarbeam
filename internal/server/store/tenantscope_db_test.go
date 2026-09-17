@@ -476,7 +476,7 @@ func TestScopedUserLifecycle(t *testing.T) {
 		if err := s.Pool().QueryRow(ctx, `SELECT id FROM users WHERE username = 'global-admin'`).Scan(&adminID); err != nil {
 			t.Fatalf("resolve admin: %v", err)
 		}
-		if err := s.SetUserDisabled(ctx, adminID, true); !errors.Is(err, store.ErrConflict) {
+		if _, _, err := s.SetUserDisabled(ctx, adminID, true); !errors.Is(err, store.ErrConflict) {
 			t.Errorf("disabling the last global admin: err = %v, want ErrConflict", err)
 		}
 	})
@@ -535,7 +535,7 @@ func TestUpsertOIDCUserScopeTracksIdP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertOIDCUser: %v", err)
 	}
-	if got := countScope(u); !slices.Equal(got, []string{"tenant-a", "tenant-b"}) {
+	if got := countScope(u.User); !slices.Equal(got, []string{"tenant-a", "tenant-b"}) {
 		t.Fatalf("initial scope = %v", got)
 	}
 
@@ -543,7 +543,7 @@ func TestUpsertOIDCUserScopeTracksIdP(t *testing.T) {
 	if _, err := s.UpsertOIDCUser(ctx, issuer, "sub-1", "tenant-user", store.RoleNetworkAdmin, []uuid.UUID{tenantB}, policy); err != nil {
 		t.Fatalf("UpsertOIDCUser shrink: %v", err)
 	}
-	if got := countScope(u); !slices.Equal(got, []string{"tenant-b"}) {
+	if got := countScope(u.User); !slices.Equal(got, []string{"tenant-b"}) {
 		t.Fatalf("shrunk scope = %v, want [tenant-b]", got)
 	}
 
@@ -551,7 +551,7 @@ func TestUpsertOIDCUserScopeTracksIdP(t *testing.T) {
 	if _, err := s.UpsertOIDCUser(ctx, issuer, "sub-1", "tenant-user", store.RoleAdmin, nil, policy); err != nil {
 		t.Fatalf("UpsertOIDCUser promote: %v", err)
 	}
-	if got := countScope(u); got != nil {
+	if got := countScope(u.User); got != nil {
 		t.Fatalf("post-promotion scope = %v, want nil", got)
 	}
 
@@ -582,7 +582,7 @@ func TestOIDCPolicyChangeRevokesSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertOIDCUser: %v", err)
 	}
-	si := sessionFor(t, ctx, s, u.ID)
+	si := sessionFor(t, ctx, s, u.User.ID)
 
 	next := *cur
 	next.UnmatchedRole = "deny"
@@ -591,10 +591,10 @@ func TestOIDCPolicyChangeRevokesSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateOIDCSettings: %v", err)
 	}
-	if revoked != 1 {
-		t.Errorf("revoked = %d, want 1 (the federated session)", revoked)
+	if len(revoked) != 1 {
+		t.Errorf("revoked = %d, want 1 (the federated session)", len(revoked))
 	}
-	tokenHash := sha256.Sum256([]byte(u.ID.String()))
+	tokenHash := sha256.Sum256([]byte(u.User.ID.String()))
 	gone, err := s.GetSessionByTokenHash(ctx, tokenHash[:])
 	if err != nil {
 		t.Fatalf("GetSessionByTokenHash: %v", err)
@@ -604,15 +604,15 @@ func TestOIDCPolicyChangeRevokesSessions(t *testing.T) {
 	}
 
 	// An identical re-save changes nothing and revokes nothing.
-	if _, revoked, err = s.UpdateOIDCSettings(ctx, next, true, false, false); err != nil || revoked != 0 {
-		t.Errorf("no-op save: revoked = %d err = %v, want 0 revocations", revoked, err)
+	if _, revoked, err = s.UpdateOIDCSettings(ctx, next, true, false, false); err != nil || len(revoked) != 0 {
+		t.Errorf("no-op save: revoked = %d err = %v, want 0 revocations", len(revoked), err)
 	}
 
 	// role_claim is a claim→role mapping input too: changing it must revoke.
-	sessionFor(t, ctx, s, u.ID)
+	sessionFor(t, ctx, s, u.User.ID)
 	next.RoleClaim = "entitlements"
-	if _, revoked, err = s.UpdateOIDCSettings(ctx, next, true, false, false); err != nil || revoked != 1 {
-		t.Errorf("role_claim change: revoked = %d err = %v, want 1", revoked, err)
+	if _, revoked, err = s.UpdateOIDCSettings(ctx, next, true, false, false); err != nil || len(revoked) != 1 {
+		t.Errorf("role_claim change: revoked = %d err = %v, want 1", len(revoked), err)
 	}
 
 	// The keep flags resolve against the LOCKED row: a keep-all save right
@@ -622,8 +622,8 @@ func TestOIDCPolicyChangeRevokesSessions(t *testing.T) {
 	stale.RoleRules = []store.OIDCRoleRule{{Value: "ghost", Role: store.RoleNetworkAdmin, Networks: []string{"x"}}}
 	stale.UnmatchedRole = "viewer"
 	out, revoked, err := s.UpdateOIDCSettings(ctx, stale, true, true, true)
-	if err != nil || revoked != 0 {
-		t.Fatalf("keep-all save: revoked = %d err = %v, want 0", revoked, err)
+	if err != nil || len(revoked) != 0 {
+		t.Fatalf("keep-all save: revoked = %d err = %v, want 0", len(revoked), err)
 	}
 	if out.UnmatchedRole != "deny" || len(out.RoleRules) != 0 {
 		t.Errorf("keep-all save stored = %+v, want locked row's policy kept (deny, no rules)", out)

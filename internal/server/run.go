@@ -21,6 +21,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 
+	"github.com/devalexllc/polarbeam/internal/audit"
 	"github.com/devalexllc/polarbeam/internal/server/ca"
 	"github.com/devalexllc/polarbeam/internal/server/config"
 	"github.com/devalexllc/polarbeam/internal/server/grpcapi"
@@ -28,15 +29,26 @@ import (
 	"github.com/devalexllc/polarbeam/internal/server/migrate"
 	"github.com/devalexllc/polarbeam/internal/server/outage"
 	"github.com/devalexllc/polarbeam/internal/server/store"
+	"github.com/devalexllc/polarbeam/internal/version"
 	"github.com/devalexllc/polarbeam/web"
 )
 
+// ErrPreflight wraps every preflight failure so the caller can tell a
+// server that never started from one that stopped.
+var ErrPreflight = errors.New("preflight")
+
+func preflightErr(err error) error { return fmt.Errorf("%w: %w", ErrPreflight, err) }
+
+// auditLog is the lifecycle audit sink (server.start / server.stop);
+// tests inject their own into shutdownServer.
+var auditLog = audit.New(nil)
+
 // Run performs preflight and serves until ctx is cancelled. Every preflight
-// failure is fatal and names the problem.
+// failure is fatal, names the problem, and wraps ErrPreflight.
 func Run(ctx context.Context, cfg config.Config) error {
 	authority, err := ca.Load(cfg.CA.Dir, ca.Lifetimes{Agent: cfg.CA.AgentCertLifetime, Server: cfg.CA.ServerCertLifetime})
 	if err != nil {
-		return fmt.Errorf("preflight: %w", err)
+		return preflightErr(err)
 	}
 	if cfg.CA.AgentCertLifetime < 24*time.Hour {
 		slog.Warn("TEST MODE: ca.agent_cert_lifetime is shorter than 24h — agent certificates will churn rapidly; never run production this way",
@@ -45,18 +57,18 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 	st, err := store.Connect(ctx, cfg.DB.URL, cfg.DB.ConnectTimeout, cfg.DB.MaxConns)
 	if err != nil {
-		return fmt.Errorf("preflight: %w", err)
+		return preflightErr(err)
 	}
 	defer st.Close()
 
 	// A reachable but unmigrated database must never present as healthy.
 	pending, err := migrate.Pending(ctx, st.Pool())
 	if err != nil {
-		return fmt.Errorf("preflight: %w", err)
+		return preflightErr(err)
 	}
 	if len(pending) > 0 {
-		return fmt.Errorf("preflight: database schema is behind: %d pending migration(s) %v — run `polarbeam-server migrate` first",
-			len(pending), pending)
+		return preflightErr(fmt.Errorf("database schema is behind: %d pending migration(s) %v — run `polarbeam-server migrate` first",
+			len(pending), pending))
 	}
 
 	// Percentiles are computed by TimescaleDB Toolkit (percentile_agg);
@@ -64,20 +76,20 @@ func Run(ctx context.Context, cfg config.Config) error {
 	// dropped extension must fail here, not on the first dashboard query.
 	toolkit, err := st.ToolkitInstalled(ctx)
 	if err != nil {
-		return fmt.Errorf("preflight: %w", err)
+		return preflightErr(err)
 	}
 	if !toolkit {
-		return fmt.Errorf("preflight: timescaledb_toolkit extension is not installed — percentiles require it; use the timescale/timescaledb-ha image (bundles it) or install the toolkit package, then run `polarbeam-server migrate`")
+		return preflightErr(errors.New("timescaledb_toolkit extension is not installed — percentiles require it; use the timescale/timescaledb-ha image (bundles it) or install the toolkit package, then run `polarbeam-server migrate`"))
 	}
 
 	dashboardCert, err := tls.LoadX509KeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
 	if err != nil {
-		return fmt.Errorf("preflight: dashboard certificate (tls.cert_file/tls.key_file): %w", err)
+		return preflightErr(fmt.Errorf("dashboard certificate (tls.cert_file/tls.key_file): %w", err))
 	}
 
 	grpcCert, err := ensureGRPCCert(authority, cfg.CA.Dir, cfg.Listen.GRPCHostname, cfg.CA.ServerCertLifetime)
 	if err != nil {
-		return fmt.Errorf("preflight: %w", err)
+		return preflightErr(err)
 	}
 	certProvider := &grpcCertProvider{cert: grpcCert}
 	// Reissue on a timer too: startup-only rotation would let a server whose
@@ -97,7 +109,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	grpcTLS := newGRPCTLSConfig(certProvider.get, authority.Pool())
 	grpcLis, err := net.Listen("tcp", cfg.Listen.GRPC)
 	if err != nil {
-		return fmt.Errorf("listen grpc %s: %w", cfg.Listen.GRPC, err)
+		return preflightErr(fmt.Errorf("listen grpc %s: %w", cfg.Listen.GRPC, err))
 	}
 	grpcLis = maybeProxyProto(grpcLis, cfg.Listen.ProxyProtocol)
 	grpcServer := grpc.NewServer(
@@ -119,7 +131,8 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 	httpLis, err := net.Listen("tcp", cfg.Listen.HTTP)
 	if err != nil {
-		return fmt.Errorf("listen http %s: %w", cfg.Listen.HTTP, err)
+		grpcLis.Close()
+		return preflightErr(fmt.Errorf("listen http %s: %w", cfg.Listen.HTTP, err))
 	}
 	httpLis = maybeProxyProto(httpLis, cfg.Listen.ProxyProtocol)
 	httpServer := newDashboardServer(httpapi.New(st, web.Dist()), dashboardCert)
@@ -136,30 +149,58 @@ func Run(ctx context.Context, cfg config.Config) error {
 			errCh <- err
 		}
 	}()
+	// Both listeners are bound and serving: the control plane is up
+	// (V-222468 — audit begins at startup).
+	auditLog.Emit(ctx, audit.Event{
+		ID: audit.EventServerStart, Msg: "polarbeam-server started", Outcome: audit.Success,
+		Attrs: []slog.Attr{
+			slog.String("version", version.String()),
+			slog.String("grpc_addr", cfg.Listen.GRPC), slog.String("http_addr", cfg.Listen.HTTP),
+			slog.Bool("proxy_protocol", cfg.Listen.ProxyProtocol),
+		},
+	})
 
 	select {
 	case <-ctx.Done():
-		slog.Info("shutting down")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		httpServer.Shutdown(shutdownCtx)
-		// Agent config streams are intentionally long-lived, so GracefulStop
-		// alone would wait on them forever; bound it and force-stop.
-		stopped := make(chan struct{})
-		go func() {
-			grpcServer.GracefulStop()
-			close(stopped)
-		}()
-		select {
-		case <-stopped:
-		case <-time.After(10 * time.Second):
-			slog.Info("graceful stop timed out; closing active streams")
-			grpcServer.Stop()
-		}
-		return nil
+		return shutdownServer(auditLog, httpServer, grpcServer, "signal", nil)
 	case err := <-errCh:
-		return err
+		return shutdownServer(auditLog, httpServer, grpcServer, "listener_error", err)
 	}
+}
+
+// shutdownServer is the one exit path for a started server: it records
+// server.stop with the reason, stops both listeners with bounded waits,
+// and returns cause unchanged so a failure exit stays non-zero. Every way
+// Run can end — the stop signal, a listener error, and (later) an audit
+// forwarding failure under the halt policy — goes through here, so none
+// of them can skip the stop record or the cleanup.
+func shutdownServer(auditLog *audit.Logger, httpServer *http.Server, grpcServer *grpc.Server, reason string, cause error) error {
+	outcome := audit.Success
+	if cause != nil {
+		outcome = audit.Failure
+	}
+	auditLog.Emit(context.Background(), audit.Event{
+		ID: audit.EventServerStop, Msg: "polarbeam-server stopping", Outcome: outcome,
+		Attrs: []slog.Attr{slog.String("reason", reason)},
+	})
+	slog.Info("shutting down", "reason", reason)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	httpServer.Shutdown(shutdownCtx)
+	// Agent config streams are intentionally long-lived, so GracefulStop
+	// alone would wait on them forever; bound it and force-stop.
+	stopped := make(chan struct{})
+	go func() {
+		grpcServer.GracefulStop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(10 * time.Second):
+		slog.Info("graceful stop timed out; closing active streams")
+		grpcServer.Stop()
+	}
+	return cause
 }
 
 // needsReissue decides whether the auto-issued gRPC server certificate must

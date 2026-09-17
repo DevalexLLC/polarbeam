@@ -137,7 +137,7 @@ func TestPasswordChangeFederated(t *testing.T) {
 	fed := f.addOIDCUser("https://idp.example", "sub-1", "fed", "viewer", false)
 	// Hand-mint a federated session: the OIDC callback flow is exercised in
 	// oidc_test.go; here only the session's auth_source matters.
-	if err := f.CreateSession(t.Context(), fed.ID, auth.HashToken("fed-token"), "fed-csrf", time.Now().Add(time.Hour)); err != nil {
+	if _, err := f.CreateSession(t.Context(), fed.ID, auth.HashToken("fed-token"), "fed-csrf", time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	cookie := &http.Cookie{Name: sessionCookie, Value: "fed-token"}

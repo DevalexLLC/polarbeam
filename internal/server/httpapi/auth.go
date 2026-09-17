@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/devalexllc/polarbeam/internal/audit"
 	"github.com/devalexllc/polarbeam/internal/server/auth"
 	"github.com/devalexllc/polarbeam/internal/server/store"
 	"github.com/devalexllc/polarbeam/internal/version"
@@ -56,7 +57,20 @@ type loginResponse struct {
 // Unknown-user and wrong-password responses are byte-identical, and unknown
 // users still burn an argon2 verification so timing is uniform too.
 func (a *api) handleLogin(w http.ResponseWriter, r *http.Request) {
-	if !a.limiter.allow(clientIP(r)) {
+	remote := clientIP(r)
+	// refused records a failed or refused attempt. The username is the one
+	// the caller typed — for a refusal the identity is the claim, and the
+	// STIG wants failed attempts attributable to it (V-222462).
+	refused := func(outcome audit.Outcome, username, reason string) {
+		a.audit.Emit(r.Context(), audit.Event{
+			ID: audit.EventLogin, Msg: "login refused", Outcome: outcome,
+			Actor:  audit.Actor{User: username, Source: audit.SourceLocal},
+			Remote: remote,
+			Attrs:  []slog.Attr{slog.String("reason", reason)},
+		})
+	}
+	if !a.limiter.allow(remote) {
+		refused(audit.Denied, "", "rate_limited")
 		writeError(w, http.StatusTooManyRequests, "too many login attempts; try again in a minute")
 		return
 	}
@@ -90,6 +104,7 @@ func (a *api) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	user, err := a.db.GetUserByUsername(r.Context(), req.Username)
 	if err != nil {
+		refused(audit.Failure, req.Username, "internal")
 		internalError(w, "login lookup", err)
 		return
 	}
@@ -102,10 +117,18 @@ func (a *api) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	ok, err := auth.VerifyPassword(req.Password, hash)
 	if err != nil {
+		refused(audit.Failure, req.Username, "internal")
 		internalError(w, "verify password", err)
 		return
 	}
 	if !ok || user == nil || user.Disabled || user.PasswordHash == "" {
+		// The response is byte-identical for every one of these; the audit
+		// record says which — it is the operator's, not the caller's.
+		reason := "invalid_credentials"
+		if user != nil && user.Disabled {
+			reason = "disabled"
+		}
+		refused(audit.Failure, req.Username, reason)
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
@@ -114,19 +137,28 @@ func (a *api) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// password reset or change landing after VerifyPassword revokes every
 	// session of the old credential, and minting unchecked would hand the
 	// old (presumed leaked) password a session that outlives the rotation.
-	create := func(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time) error {
+	create := func(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time) (uuid.UUID, error) {
 		return a.db.CreateLocalSession(ctx, userID, tokenHash, csrfToken, expiresAt, hash)
 	}
-	csrf, err := a.issueSession(w, r, user, create)
+	csrf, sessionID, err := a.issueSession(w, r, user, create)
 	if err != nil {
 		if errors.Is(err, store.ErrPasswordChanged) {
+			refused(audit.Failure, req.Username, "password_changed")
 			// Byte-identical to the other credential failures.
 			writeError(w, http.StatusUnauthorized, "invalid credentials")
 			return
 		}
+		// Outside withSession there is no middleware record to fall back
+		// on: an attempt that died on the database is still an attempt.
+		refused(audit.Failure, req.Username, "internal")
 		internalError(w, "issue session", err)
 		return
 	}
+	a.audit.Emit(r.Context(), audit.Event{
+		ID: audit.EventLogin, Msg: "login", Outcome: audit.Success,
+		Actor:  audit.Actor{User: user.Username, Source: user.AuthSource, Session: sessionID.String()},
+		Remote: remote,
+	})
 	writeJSON(w, http.StatusOK, loginResponse{
 		User:      userJSON{Username: user.Username, Role: user.Role, AuthSource: user.AuthSource, Networks: user.Networks},
 		CSRFToken: csrf,
@@ -140,34 +172,38 @@ func (a *api) handleLogin(w http.ResponseWriter, r *http.Request) {
 // hash (CreateLocalSession — a password rotation revokes old sessions),
 // the OIDC callback over the provider identity (CreateOIDCSession — the
 // code exchange can straddle a provider switch).
-type sessionCreator func(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time) error
+type sessionCreator func(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time) (uuid.UUID, error)
 
 // issueSession mints a session for an already-authenticated user and sets
 // the session cookie; local login and the OIDC callback share it (the
 // callback redirects instead of writing JSON, so the response body is the
-// caller's). The Strict cookie is fine even on the callback's cross-site
-// redirect: browsers accept Set-Cookie there, and nothing before the SPA's
-// same-site /api fetches needs the cookie sent.
-func (a *api) issueSession(w http.ResponseWriter, r *http.Request, user *store.UserInfo, create sessionCreator) (csrf string, err error) {
+// caller's). It returns the CSRF token and the new session's row id, the
+// handle the login record and every later record of the session share.
+// The Strict cookie is fine even on the callback's cross-site redirect:
+// browsers accept Set-Cookie there, and nothing before the SPA's same-site
+// /api fetches needs the cookie sent.
+func (a *api) issueSession(w http.ResponseWriter, r *http.Request, user *store.UserInfo, create sessionCreator) (csrf string, sessionID uuid.UUID, err error) {
 	// Opportunistic cleanup keeps the sessions table bounded without a
 	// background job; expired rows are invisible to lookups either way.
-	if n, err := a.db.DeleteExpiredSessions(r.Context()); err != nil {
+	// Each expiry is audited at its own time, not this login's.
+	if expired, err := a.db.DeleteExpiredSessions(r.Context()); err != nil {
 		slog.Warn("httpapi: delete expired sessions", "err", err)
-	} else if n > 0 {
-		slog.Debug("httpapi: cleaned expired sessions", "count", n)
+	} else if len(expired) > 0 {
+		a.sessionsExpired(r.Context(), expired, time.Now())
 	}
 
 	token, tokenHash, err := auth.NewToken()
 	if err != nil {
-		return "", fmt.Errorf("mint session token: %w", err)
+		return "", uuid.Nil, fmt.Errorf("mint session token: %w", err)
 	}
 	csrf, _, err = auth.NewToken()
 	if err != nil {
-		return "", fmt.Errorf("mint csrf token: %w", err)
+		return "", uuid.Nil, fmt.Errorf("mint csrf token: %w", err)
 	}
 	expires := time.Now().Add(sessionTTL)
-	if err := create(r.Context(), user.ID, tokenHash, csrf, expires); err != nil {
-		return "", fmt.Errorf("create session: %w", err)
+	sessionID, err = create(r.Context(), user.ID, tokenHash, csrf, expires)
+	if err != nil {
+		return "", uuid.Nil, fmt.Errorf("create session: %w", err)
 	}
 	// Audit metrics must never lock an authenticated user out; the session
 	// is already committed (same posture as the cleanup warn above).
@@ -184,17 +220,27 @@ func (a *api) issueSession(w http.ResponseWriter, r *http.Request, user *store.U
 		Secure:   true,
 		SameSite: http.SameSiteStrictMode,
 	})
-	return csrf, nil
+	return csrf, sessionID, nil
 }
 
-// handleLogout deletes the session and clears the cookie. Idempotent.
+// handleLogout deletes the session and clears the cookie. Idempotent. It
+// owns its audit record (auth.session.ended, reason logout) because the
+// generic write record could not name a session that no longer exists by
+// the time the middleware runs.
 func (a *api) handleLogout(w http.ResponseWriter, r *http.Request) {
+	s := sessionFrom(r.Context())
 	if c, err := r.Cookie(sessionCookie); err == nil {
 		if err := a.db.DeleteSessionByTokenHash(r.Context(), auth.HashToken(c.Value)); err != nil {
 			internalError(w, "delete session", err)
 			return
 		}
 	}
+	audit.Suppress(r.Context())
+	a.audit.Emit(r.Context(), audit.Event{
+		ID: audit.EventSessionEnded, Msg: "session ended", Outcome: audit.Success,
+		Actor: actorFrom(s), Remote: clientIP(r),
+		Attrs: []slog.Attr{slog.String("reason", "logout")},
+	})
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
 		Value:    "",
@@ -284,7 +330,9 @@ func (a *api) handlePasswordChange(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok {
 		// 403, not 401: the SPA treats 401 as session death and would log
-		// the user out over a typo.
+		// the user out over a typo. A failure, not a denial: the caller is
+		// who they say, they just did not prove it this time.
+		audit.Fail(r.Context(), "wrong_current_password")
 		writeError(w, http.StatusForbidden, "current password is incorrect")
 		return
 	}
@@ -297,20 +345,36 @@ func (a *api) handlePasswordChange(w http.ResponseWriter, r *http.Request) {
 	// The verified hash rides along so the store can refuse a stale update:
 	// if the password changed between verification and the transaction (an
 	// admin reset landing mid-request), this must fail, not overwrite it.
-	if err := a.db.UpdateOwnPassword(r.Context(), s.UserID, user.PasswordHash, hash, s.ID); err != nil {
+	revoked, err := a.db.UpdateOwnPassword(r.Context(), s.UserID, user.PasswordHash, hash, s.ID)
+	if err != nil {
 		writeStoreError(w, "update password", err)
 		return
 	}
+	audit.Add(r.Context(), slog.Int("sessions_revoked", len(revoked)))
+	a.sessionsEnded(r.Context(), revoked, "password_changed", clientIP(r))
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // withSession authenticates the request's session cookie, enforces CSRF on
-// non-GET methods, and stores the session in the request context.
+// non-GET methods, and stores the session in the request context. It is
+// also the audit choke point for everything mounted behind it: a rejected
+// session is recorded here, and once the handler returns the request's
+// one record is emitted from the captured status (see auditRequest) — so
+// a route mounted behind adminWrite/networkWrite/withSession next year is
+// audited with no code of its own, the same way requireRole denies it.
 func (a *api) withSession(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reject := func(status int, msg, reason string, s *store.SessionInfo) {
+			a.audit.Emit(r.Context(), audit.Event{
+				ID: audit.EventSessionRejected, Msg: "session rejected", Outcome: audit.Denied,
+				Actor: actorFrom(s), Remote: clientIP(r),
+				Attrs: append(routeAttrs(r), slog.String("reason", reason)),
+			})
+			writeError(w, status, msg)
+		}
 		c, err := r.Cookie(sessionCookie)
 		if err != nil {
-			writeError(w, http.StatusUnauthorized, "not authenticated")
+			reject(http.StatusUnauthorized, "not authenticated", "no_session_cookie", nil)
 			return
 		}
 		s, err := a.db.GetSessionByTokenHash(r.Context(), auth.HashToken(c.Value))
@@ -319,13 +383,13 @@ func (a *api) withSession(next http.HandlerFunc) http.Handler {
 			return
 		}
 		if s == nil {
-			writeError(w, http.StatusUnauthorized, "not authenticated")
+			reject(http.StatusUnauthorized, "not authenticated", "unknown_or_expired_session", nil)
 			return
 		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			got := r.Header.Get("X-CSRF-Token")
 			if subtle.ConstantTimeCompare([]byte(got), []byte(s.CSRFToken)) != 1 {
-				writeError(w, http.StatusForbidden, "missing or invalid CSRF token")
+				reject(http.StatusForbidden, "missing or invalid CSRF token", "csrf", s)
 				return
 			}
 		}
@@ -334,7 +398,10 @@ func (a *api) withSession(next http.HandlerFunc) http.Handler {
 				slog.Warn("httpapi: touch session", "err", err)
 			}
 		}
-		next.ServeHTTP(w, r.WithContext(withSessionCtx(r.Context(), s)))
+		ctx, extras := audit.WithExtras(withSessionCtx(r.Context(), s))
+		sw := &statusWriter{ResponseWriter: w}
+		next.ServeHTTP(sw, r.WithContext(ctx))
+		a.auditRequest(r, s, sw.statusCode(), extras)
 	})
 }
 

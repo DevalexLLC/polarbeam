@@ -9,12 +9,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/devalexllc/polarbeam/internal/audit"
 	"github.com/devalexllc/polarbeam/internal/server/config"
 	"github.com/devalexllc/polarbeam/internal/server/configadmin"
 	"github.com/devalexllc/polarbeam/internal/server/probeadmin"
@@ -150,6 +152,7 @@ func cmdSite(args []string) error {
 		if err := st.UpdateSite(ctx, *name, up); err != nil {
 			return err
 		}
+		auditCLI(audit.EventCLISiteSet, "site updated", audit.Success, slog.String("site", *name))
 		fmt.Printf("site %q updated\n", *name)
 		return nil
 	}
@@ -200,6 +203,8 @@ func cmdTarget(args []string) error {
 		if err != nil {
 			return err
 		}
+		auditCLI(audit.EventCLITargetAdd, "target ready", audit.Success,
+			slog.String("target", *name), slog.String("network", *network))
 		fmt.Printf("target %q ready (%s)\n", *name, id)
 		return nil
 
@@ -261,6 +266,7 @@ func cmdTarget(args []string) error {
 		if err := st.DeleteTarget(ctx, *name, nil); err != nil {
 			return err
 		}
+		auditCLI(audit.EventCLITargetRemove, "target removed", audit.Success, slog.String("target", *name))
 		fmt.Printf("target %q removed\n", *name)
 		return nil
 	}
@@ -345,6 +351,10 @@ func cmdProbe(args []string) error {
 		if err != nil {
 			return err
 		}
+		auditCLI(audit.EventCLIProbeAdd, "probe added", audit.Success,
+			slog.String("probe", id.String()), slog.String("probe_type", *typeName),
+			slog.String("mesh", *mesh), slog.String("site", *site), slog.String("target", *target),
+			slog.String("network", *network))
 		fmt.Printf("probe %s added\n", id)
 		// Advisory, on stderr so it stays out of piped output while
 		// remaining impossible to miss on a terminal. A probe created
@@ -407,6 +417,7 @@ func cmdProbe(args []string) error {
 		if err := st.DeleteProbeConfig(ctx, id); err != nil {
 			return err
 		}
+		auditCLI(audit.EventCLIProbeRemove, "probe removed", audit.Success, slog.String("probe", id.String()))
 		fmt.Printf("probe %s removed\n", id)
 		return nil
 	}
@@ -439,6 +450,8 @@ func cmdMesh(args []string) error {
 		if err != nil {
 			return err
 		}
+		auditCLI(audit.EventCLIMeshDelete, "mesh deleted", audit.Success,
+			slog.String("mesh", *name), slog.Int64("probes_deleted", deleted))
 		fmt.Printf("mesh %q deleted (%d probe config(s) removed with it)\n", *name, deleted)
 		return nil
 
@@ -474,6 +487,8 @@ func cmdMesh(args []string) error {
 		if err != nil {
 			return err
 		}
+		auditCLI(audit.EventCLIMeshCreate, "mesh ready", audit.Success,
+			slog.String("mesh", *name), slog.String("network", *network))
 		fmt.Printf("mesh %q ready (%s)\n", *name, id)
 		return nil
 
@@ -498,11 +513,15 @@ func cmdMesh(args []string) error {
 			if err := st.AddMeshMember(ctx, *name, *site, nil); err != nil {
 				return err
 			}
+			auditCLI(audit.EventCLIMeshAdd, "site added to mesh", audit.Success,
+				slog.String("mesh", *name), slog.String("site", *site))
 			fmt.Printf("site %q added to mesh %q\n", *site, *name)
 		} else {
 			if err := st.RemoveMeshMember(ctx, *name, *site, nil); err != nil {
 				return err
 			}
+			auditCLI(audit.EventCLIMeshRemove, "site removed from mesh", audit.Success,
+				slog.String("mesh", *name), slog.String("site", *site))
 			fmt.Printf("site %q removed from mesh %q\n", *site, *name)
 		}
 		return nil

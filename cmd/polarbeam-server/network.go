@@ -4,8 +4,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"strings"
 
+	"github.com/devalexllc/polarbeam/internal/audit"
 	"github.com/devalexllc/polarbeam/internal/server/configadmin"
 )
 
@@ -62,6 +64,7 @@ func cmdNetwork(args []string) error {
 		if err != nil {
 			return err
 		}
+		auditCLI(audit.EventCLINetworkCreate, "network created", audit.Success, slog.String("network", *name))
 		fmt.Printf("network %q created (%s)\n", *name, id)
 		return nil
 
@@ -94,6 +97,7 @@ func cmdNetwork(args []string) error {
 		if err := st.UpdateNetwork(ctx, *name, *displayName); err != nil {
 			return err
 		}
+		auditCLI(audit.EventCLINetworkSet, "network updated", audit.Success, slog.String("network", *name))
 		fmt.Printf("network %q updated\n", *name)
 		return nil
 
@@ -117,6 +121,8 @@ func cmdNetwork(args []string) error {
 		if err != nil {
 			return err
 		}
+		auditCLI(audit.EventCLINetworkDelete, "network deleted", audit.Success,
+			slog.String("network", *name), slog.Int64("tokens_deleted", deleted))
 		fmt.Printf("network %q deleted (%d unused join token(s) removed with it)\n", *name, deleted)
 		return nil
 	}

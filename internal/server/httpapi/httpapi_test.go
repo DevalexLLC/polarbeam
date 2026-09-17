@@ -6,17 +6,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/devalexllc/polarbeam/internal/audit"
 	pb "github.com/devalexllc/polarbeam/internal/pb/polarbeamv1"
 	"github.com/devalexllc/polarbeam/internal/server/auth"
 	"github.com/devalexllc/polarbeam/internal/server/oidcauth"
@@ -81,6 +84,9 @@ var (
 // fakeAuthState backs the sessionStore fake methods.
 type fakeAuthState struct {
 	logins []recordedLogin // appended by RecordLogin
+	// expired is what the next DeleteExpiredSessions returns (then clears):
+	// the seam for the delayed-cleanup audit test.
+	expired []store.SessionRef
 	// beforeCreateLocalSession, when set, runs at the top of
 	// CreateLocalSession — the seam for simulating a password rotation
 	// landing between login's verification and the session insert.
@@ -190,7 +196,7 @@ func (f *fakeDB) GetUserByUsername(_ context.Context, username string) (*store.U
 	return f.users[username], nil
 }
 
-func (f *fakeDB) CreateSession(_ context.Context, userID uuid.UUID, tokenHash []byte, csrf string, expiresAt time.Time) error {
+func (f *fakeDB) CreateSession(_ context.Context, userID uuid.UUID, tokenHash []byte, csrf string, expiresAt time.Time) (uuid.UUID, error) {
 	var username, role, authSource string
 	for _, u := range f.users {
 		if u.ID == userID {
@@ -206,22 +212,39 @@ func (f *fakeDB) CreateSession(_ context.Context, userID uuid.UUID, tokenHash []
 			networks = []store.NetworkRef{}
 		}
 	}
+	id := uuid.New()
 	f.sessions[string(tokenHash)] = &store.SessionInfo{
-		ID: uuid.New(), UserID: userID, Username: username, Role: role, AuthSource: authSource,
+		ID: id, UserID: userID, Username: username, Role: role, AuthSource: authSource,
 		CSRFToken: csrf, ExpiresAt: expiresAt, LastUsedAt: time.Now(), Networks: networks,
 	}
-	return nil
+	return id, nil
 }
 
-func (f *fakeDB) CreateLocalSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrf string, expiresAt time.Time, verifiedHash string) error {
+func (f *fakeDB) CreateLocalSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrf string, expiresAt time.Time, verifiedHash string) (uuid.UUID, error) {
 	if f.beforeCreateLocalSession != nil {
 		f.beforeCreateLocalSession()
 	}
 	u := f.userByID(userID)
 	if u == nil || u.AuthSource != "local" || u.PasswordHash != verifiedHash || u.Disabled {
-		return store.ErrPasswordChanged
+		return uuid.Nil, store.ErrPasswordChanged
 	}
 	return f.CreateSession(ctx, userID, tokenHash, csrf, expiresAt)
+}
+
+// sessionRefs mirrors the store's RETURNING rows for a user's sessions,
+// deleting them when remove is set; keep (non-nil) survives.
+func (f *fakeDB) sessionRefs(userID uuid.UUID, keep *uuid.UUID, remove bool) []store.SessionRef {
+	var refs []store.SessionRef
+	for k, s := range f.sessions {
+		if s.UserID != userID || (keep != nil && s.ID == *keep) {
+			continue
+		}
+		refs = append(refs, store.SessionRef{ID: s.ID, UserID: s.UserID, Username: s.Username, ExpiresAt: s.ExpiresAt})
+		if remove {
+			delete(f.sessions, k)
+		}
+	}
+	return refs
 }
 
 func (f *fakeDB) GetSessionByTokenHash(_ context.Context, tokenHash []byte) (*store.SessionInfo, error) {
@@ -239,7 +262,11 @@ func (f *fakeDB) DeleteSessionByTokenHash(_ context.Context, tokenHash []byte) e
 	return nil
 }
 
-func (f *fakeDB) DeleteExpiredSessions(_ context.Context) (int64, error) { return 0, nil }
+func (f *fakeDB) DeleteExpiredSessions(_ context.Context) ([]store.SessionRef, error) {
+	out := f.expired
+	f.expired = nil
+	return out, nil
+}
 
 type recordedLogin struct {
 	UserID     uuid.UUID
@@ -306,71 +333,65 @@ func (f *fakeDB) lastActiveAdminGuard(target *store.UserInfo, verb string) error
 	return fmt.Errorf("cannot %s the last enabled admin%w", verb, store.ErrConflict)
 }
 
-func (f *fakeDB) SetUserDisabled(_ context.Context, id uuid.UUID, disabled bool) error {
+func (f *fakeDB) SetUserDisabled(_ context.Context, id uuid.UUID, disabled bool) (bool, []store.SessionRef, error) {
 	u := f.userByID(id)
 	if u == nil {
-		return fmt.Errorf("user %s does not exist%w", id, store.ErrNotFound)
+		return false, nil, fmt.Errorf("user %s does not exist%w", id, store.ErrNotFound)
+	}
+	if u.Disabled == disabled {
+		return false, nil, nil
 	}
 	if disabled {
 		if err := f.lastActiveAdminGuard(u, "disable"); err != nil {
-			return err
+			return false, nil, err
 		}
 	}
 	u.Disabled = disabled
-	return nil
+	return true, f.sessionRefs(id, nil, false), nil
 }
 
-func (f *fakeDB) DeleteUser(_ context.Context, id uuid.UUID) error {
+func (f *fakeDB) DeleteUser(_ context.Context, id uuid.UUID) ([]store.SessionRef, error) {
 	u := f.userByID(id)
 	if u == nil {
-		return fmt.Errorf("user %s does not exist%w", id, store.ErrNotFound)
+		return nil, fmt.Errorf("user %s does not exist%w", id, store.ErrNotFound)
 	}
 	if err := f.lastActiveAdminGuard(u, "delete"); err != nil {
-		return err
+		return nil, err
 	}
+	revoked := f.sessionRefs(id, nil, true)
 	delete(f.users, u.Username)
-	return nil
+	return revoked, nil
 }
 
 func (f *fakeDB) GetUserByID(_ context.Context, id uuid.UUID) (*store.UserInfo, error) {
 	return f.userByID(id), nil
 }
 
-func (f *fakeDB) ResetLocalUserPassword(_ context.Context, id uuid.UUID, passwordHash string) (string, string, error) {
+func (f *fakeDB) ResetLocalUserPassword(_ context.Context, id uuid.UUID, passwordHash string) (string, string, []store.SessionRef, error) {
 	u := f.userByID(id)
 	if u == nil {
-		return "", "", fmt.Errorf("user %s does not exist%w", id, store.ErrNotFound)
+		return "", "", nil, fmt.Errorf("user %s does not exist%w", id, store.ErrNotFound)
 	}
 	if u.AuthSource != "local" {
-		return "", "", fmt.Errorf("federated accounts authenticate at the identity provider%w", store.ErrConflict)
+		return "", "", nil, fmt.Errorf("federated accounts authenticate at the identity provider%w", store.ErrConflict)
 	}
 	u.PasswordHash = passwordHash
-	for k, s := range f.sessions {
-		if s.UserID == id {
-			delete(f.sessions, k)
-		}
-	}
-	return u.Username, u.Role, nil
+	return u.Username, u.Role, f.sessionRefs(id, nil, true), nil
 }
 
-func (f *fakeDB) UpdateOwnPassword(_ context.Context, userID uuid.UUID, verifiedHash, passwordHash string, keepSessionID uuid.UUID) error {
+func (f *fakeDB) UpdateOwnPassword(_ context.Context, userID uuid.UUID, verifiedHash, passwordHash string, keepSessionID uuid.UUID) ([]store.SessionRef, error) {
 	if f.beforeUpdateOwnPassword != nil {
 		f.beforeUpdateOwnPassword()
 	}
 	u := f.userByID(userID)
 	if u == nil || u.AuthSource != "local" {
-		return fmt.Errorf("user %s does not exist%w", userID, store.ErrNotFound)
+		return nil, fmt.Errorf("user %s does not exist%w", userID, store.ErrNotFound)
 	}
 	if u.PasswordHash != verifiedHash {
-		return fmt.Errorf("password was changed by another request; sign in with the current password and try again%w", store.ErrConflict)
+		return nil, fmt.Errorf("password was changed by another request; sign in with the current password and try again%w", store.ErrConflict)
 	}
 	u.PasswordHash = passwordHash
-	for k, s := range f.sessions {
-		if s.UserID == userID && s.ID != keepSessionID {
-			delete(f.sessions, k)
-		}
-	}
-	return nil
+	return f.sessionRefs(userID, &keepSessionID, true), nil
 }
 
 // ListUserAccounts mirrors the store's filter semantics (substring match,
@@ -612,7 +633,7 @@ func (f *fakeDB) GetOIDCSettings(_ context.Context) (*store.OIDCSettings, error)
 	return f.oidcSettings, nil
 }
 
-func (f *fakeDB) UpdateOIDCSettings(ctx context.Context, o store.OIDCSettings, keepSecret, keepRoleRules, keepUnmatchedRole bool) (*store.OIDCSettings, int64, error) {
+func (f *fakeDB) UpdateOIDCSettings(ctx context.Context, o store.OIDCSettings, keepSecret, keepRoleRules, keepUnmatchedRole bool) (*store.OIDCSettings, []store.SessionRef, error) {
 	if f.beforeUpdateOIDCSettings != nil {
 		f.beforeUpdateOIDCSettings()
 	}
@@ -643,18 +664,12 @@ func (f *fakeDB) UpdateOIDCSettings(ctx context.Context, o store.OIDCSettings, k
 		!slices.Equal(cur.AdminValues, o.AdminValues) ||
 		!rulesEqual || cur.UnmatchedRole != o.UnmatchedRole
 	if providerChanged && keepSecret && cur.ClientSecret != "" {
-		return nil, 0, store.ErrConcurrentProviderChange
+		return nil, nil, store.ErrConcurrentProviderChange
 	}
-	var revoked int64
+	var revoked []store.SessionRef
 	if providerChanged || policyChanged {
-		for k, s := range f.sessions {
-			for _, u := range f.oidcUsers {
-				if u.ID == s.UserID {
-					delete(f.sessions, k)
-					revoked++
-					break
-				}
-			}
+		for _, u := range f.oidcUsers {
+			revoked = append(revoked, f.sessionRefs(u.ID, nil, true)...)
 		}
 	}
 	if keepSecret {
@@ -679,7 +694,7 @@ func (f *fakeDB) addOIDCUser(issuer, subject, username, role string, disabled bo
 	return u
 }
 
-func (f *fakeDB) UpsertOIDCUser(ctx context.Context, issuer, subject, username, role string, networks []uuid.UUID, policyUpdatedAt time.Time) (*store.UserInfo, error) {
+func (f *fakeDB) UpsertOIDCUser(ctx context.Context, issuer, subject, username, role string, networks []uuid.UUID, policyUpdatedAt time.Time) (*store.OIDCUpsertResult, error) {
 	// Mirrors the store: the write is bound to the settings revision the
 	// claims were mapped under.
 	cur, _ := f.GetOIDCSettings(ctx)
@@ -687,22 +702,46 @@ func (f *fakeDB) UpsertOIDCUser(ctx context.Context, issuer, subject, username, 
 		return nil, store.ErrOIDCPolicyChanged
 	}
 	f.lastUserNetworks = networks
+	// Names for the result's scope, resolved the way the store reads them
+	// back (sorted); PrevNetworks comes from the row's previous scope.
+	var names []string
+	for _, id := range networks {
+		for _, n := range f.networks {
+			if n.ID == id {
+				names = append(names, n.Name)
+			}
+		}
+	}
+	slices.Sort(names)
 	if u := f.oidcUsers[oidcKey(issuer, subject)]; u != nil {
+		res := &store.OIDCUpsertResult{User: u, PrevUsername: u.Username, PrevRole: u.Role, PrevNetworks: u.Networks}
 		// Username/role track the IdP; disabled survives (revocation lever).
+		delete(f.users, u.Username)
 		u.Username, u.Role = username, role
-		return u, nil
+		u.Networks = nil
+		if store.RoleIsNetworkScoped(role) {
+			u.Networks = names
+			if u.Networks == nil {
+				u.Networks = []string{}
+			}
+		}
+		f.users[username] = u
+		return res, nil
 	}
 	u := f.addOIDCUser(issuer, subject, username, role, false)
-	return u, nil
+	if store.RoleIsNetworkScoped(role) {
+		u.Networks = names
+	}
+	return &store.OIDCUpsertResult{User: u, Created: true}, nil
 }
 
-func (f *fakeDB) CreateOIDCSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrf string, expiresAt time.Time, issuer, clientID string, policyUpdatedAt time.Time) error {
+func (f *fakeDB) CreateOIDCSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrf string, expiresAt time.Time, issuer, clientID string, policyUpdatedAt time.Time) (uuid.UUID, error) {
 	cur, _ := f.GetOIDCSettings(ctx)
 	if !cur.Enabled || cur.Issuer != issuer || cur.ClientID != clientID {
-		return store.ErrProviderChanged
+		return uuid.Nil, store.ErrProviderChanged
 	}
 	if !cur.UpdatedAt.Equal(policyUpdatedAt) {
-		return store.ErrOIDCPolicyChanged
+		return uuid.Nil, store.ErrOIDCPolicyChanged
 	}
 	return f.CreateSession(ctx, userID, tokenHash, csrf, expiresAt)
 }
@@ -713,16 +752,76 @@ var testDist = fstest.MapFS{
 	"assets/style.css": {Data: []byte("body{}")},
 }
 
+// auditCapture collects the audit records a handler emitted, so tests
+// assert on the record — event id, outcome, actor, extras — rather than
+// on log text. Safe for the parallel tests: each API gets its own.
+type auditCapture struct {
+	mu   sync.Mutex
+	recs []slog.Record
+}
+
+func (c *auditCapture) Enabled(context.Context, slog.Level) bool { return true }
+func (c *auditCapture) Handle(_ context.Context, r slog.Record) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.recs = append(c.recs, r.Clone())
+	return nil
+}
+func (c *auditCapture) WithAttrs([]slog.Attr) slog.Handler { return c }
+func (c *auditCapture) WithGroup(string) slog.Handler      { return c }
+
+// records returns the captured records with the given event id (all of
+// them when id is "").
+func (c *auditCapture) records(id string) []slog.Record {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []slog.Record
+	for _, r := range c.recs {
+		if id == "" || audit.EventID(r) == id {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// attr returns the string form of a record's attribute, "" when absent.
+func attr(r slog.Record, key string) string {
+	v := ""
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == key {
+			v = a.Value.String()
+			return false
+		}
+		return true
+	})
+	return v
+}
+
 func newTestAPI(t *testing.T, f *fakeDB) http.Handler {
+	t.Helper()
+	h, _ := newTestAPIWithAudit(t, f)
+	return h
+}
+
+// newTestAPIWithAudit is newTestAPI with the audit capture returned.
+func newTestAPIWithAudit(t *testing.T, f *fakeDB) (http.Handler, *auditCapture) {
 	t.Helper()
 	// The default provider manager matches the default settings row: OIDC
 	// off. Tests exercising the flow use newTestAPIWithProviders.
-	return newHandler(f, testDist, &fakeProviders{providerErr: oidcauth.ErrDisabled})
+	c := &auditCapture{}
+	return newHandler(f, testDist, &fakeProviders{providerErr: oidcauth.ErrDisabled}, audit.New(slog.New(c))), c
 }
 
 func newTestAPIWithProviders(t *testing.T, f *fakeDB, p *fakeProviders) http.Handler {
 	t.Helper()
-	return newHandler(f, testDist, p)
+	h, _ := newTestAPIWithProvidersAudit(t, f, p)
+	return h
+}
+
+func newTestAPIWithProvidersAudit(t *testing.T, f *fakeDB, p *fakeProviders) (http.Handler, *auditCapture) {
+	t.Helper()
+	c := &auditCapture{}
+	return newHandler(f, testDist, p, audit.New(slog.New(c))), c
 }
 
 func doLogin(t *testing.T, h http.Handler, username, password string) *httptest.ResponseRecorder {

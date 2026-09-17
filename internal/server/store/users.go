@@ -49,6 +49,51 @@ type SessionInfo struct {
 	Networks   []NetworkRef
 }
 
+// SessionRef identifies a session row for the audit log: the row UUID
+// (never the token or its hash), its owner, and when it expires. Every
+// store method that destroys sessions returns the rows it removed so the
+// caller can record each ending with the right reason.
+type SessionRef struct {
+	ID        uuid.UUID
+	UserID    uuid.UUID
+	Username  string
+	ExpiresAt time.Time
+}
+
+// scanSessionRefs drains a (id, user_id, username, expires_at) result set.
+func scanSessionRefs(rows pgx.Rows) ([]SessionRef, error) {
+	defer rows.Close()
+	var out []SessionRef
+	for rows.Next() {
+		var r SessionRef
+		if err := rows.Scan(&r.ID, &r.UserID, &r.Username, &r.ExpiresAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// deleteUserSessions removes sessions of one user inside tx — all of
+// them, or all but keep when keep is non-nil — and returns the rows removed.
+func deleteUserSessions(ctx context.Context, tx pgx.Tx, userID uuid.UUID, keep *uuid.UUID) ([]SessionRef, error) {
+	keepID := uuid.Nil
+	if keep != nil {
+		keepID = *keep
+	}
+	rows, err := tx.Query(ctx, `
+		WITH d AS (
+			DELETE FROM sessions WHERE user_id = $1 AND id <> $2
+			RETURNING id, user_id, expires_at
+		)
+		SELECT d.id, d.user_id, COALESCE(u.username, ''), d.expires_at
+		  FROM d LEFT JOIN users u ON u.id = d.user_id`, userID, keepID)
+	if err != nil {
+		return nil, err
+	}
+	return scanSessionRefs(rows)
+}
+
 // NetworkScope returns (nil, false) for global roles — no filtering — and
 // (allowed planes, true) for the scoped roles. Every read-path enforcement
 // point resolves the session's visibility through this one helper.
@@ -210,50 +255,82 @@ func lockUserAndActiveAdmins(ctx context.Context, tx pgx.Tx, id uuid.UUID) (role
 // admin is refused — recovery would need container CLI access. Disabled
 // users lose their sessions on their next request (session lookups check
 // the flag); enabling is always allowed.
-func (s *Store) SetUserDisabled(ctx context.Context, id uuid.UUID, disabled bool) error {
+//
+// It reports whether the flag actually changed and, when it did, the
+// user's live sessions as of the transaction — the ones a disable hides
+// and an enable reveals — so the audit log records exactly the access
+// transitions that happened and nothing for a repeated no-op request.
+// Both are read under the user row lock, so a session minted concurrently
+// after an enable cannot be misreported as restored.
+func (s *Store) SetUserDisabled(ctx context.Context, id uuid.UUID, disabled bool) (changed bool, sessions []SessionRef, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("set user disabled %s: %w", id, err)
+		return false, nil, fmt.Errorf("set user disabled %s: %w", id, err)
 	}
 	defer tx.Rollback(ctx)
 
 	role, cur, otherAdmins, err := lockUserAndActiveAdmins(ctx, tx, id)
 	if err != nil {
-		return err
+		return false, nil, err
 	}
-	if disabled && !cur && role == "admin" && otherAdmins == 0 {
-		return conflictf("cannot disable the last enabled admin")
+	if cur == disabled {
+		return false, nil, nil
+	}
+	if disabled && role == "admin" && otherAdmins == 0 {
+		return false, nil, conflictf("cannot disable the last enabled admin")
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT s.id, s.user_id, u.username, s.expires_at
+		  FROM sessions s JOIN users u ON u.id = s.user_id
+		 WHERE s.user_id = $1 AND s.expires_at > now()
+		 ORDER BY s.expires_at`, id)
+	if err != nil {
+		return false, nil, fmt.Errorf("set user disabled %s: %w", id, err)
+	}
+	if sessions, err = scanSessionRefs(rows); err != nil {
+		return false, nil, fmt.Errorf("set user disabled %s: %w", id, err)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE users SET disabled = $2 WHERE id = $1`, id, disabled); err != nil {
-		return fmt.Errorf("set user disabled %s: %w", id, err)
+		return false, nil, fmt.Errorf("set user disabled %s: %w", id, err)
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return false, nil, fmt.Errorf("set user disabled %s: %w", id, err)
+	}
+	return true, sessions, nil
 }
 
-// DeleteUser removes a user; their sessions cascade away immediately and
-// their sign-in history remains as a deleted identity (login_events has no
-// FK by design). Deleting the last enabled admin is refused, same as
-// disabling it. Deleting an SSO user does NOT revoke IdP access — a still-
-// authorized user is JIT-provisioned a fresh account on next login;
-// disabling is the revocation lever.
-func (s *Store) DeleteUser(ctx context.Context, id uuid.UUID) error {
+// DeleteUser removes a user and returns the sessions that went with it
+// (deleted explicitly, ahead of the FK cascade, so each ending can be
+// audited by session id); their sign-in history remains as a deleted
+// identity (login_events has no FK by design). Deleting the last enabled
+// admin is refused, same as disabling it. Deleting an SSO user does NOT
+// revoke IdP access — a still-authorized user is JIT-provisioned a fresh
+// account on next login; disabling is the revocation lever.
+func (s *Store) DeleteUser(ctx context.Context, id uuid.UUID) ([]SessionRef, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("delete user %s: %w", id, err)
+		return nil, fmt.Errorf("delete user %s: %w", id, err)
 	}
 	defer tx.Rollback(ctx)
 
 	role, disabled, otherAdmins, err := lockUserAndActiveAdmins(ctx, tx, id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if role == "admin" && !disabled && otherAdmins == 0 {
-		return conflictf("cannot delete the last enabled admin")
+		return nil, conflictf("cannot delete the last enabled admin")
+	}
+	revoked, err := deleteUserSessions(ctx, tx, id, nil)
+	if err != nil {
+		return nil, fmt.Errorf("delete user %s: %w", id, err)
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM users WHERE id = $1`, id); err != nil {
-		return fmt.Errorf("delete user %s: %w", id, err)
+		return nil, fmt.Errorf("delete user %s: %w", id, err)
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("delete user %s: %w", id, err)
+	}
+	return revoked, nil
 }
 
 // userNetworkNames is the subquery loading a user's scope as sorted network
@@ -318,15 +395,16 @@ func (s *Store) GetUserByID(ctx context.Context, id uuid.UUID) (*UserInfo, error
 
 // ResetLocalUserPassword replaces a local user's password hash and deletes
 // ALL of their sessions (the old credential is presumed lost or leaked) in
-// one transaction, returning the username and role for the reveal response.
-// Federated accounts are refused explicitly — an unguarded UPDATE would trip
-// the users_auth_shape constraint and surface as an opaque 500. A deleted
-// identity (login_events row with no users row) lands on the not-found path.
-// The disabled flag is deliberately untouched: enable is a separate lever.
-func (s *Store) ResetLocalUserPassword(ctx context.Context, id uuid.UUID, passwordHash string) (username, role string, err error) {
+// one transaction, returning the username and role for the reveal response
+// and the sessions removed for the audit log. Federated accounts are
+// refused explicitly — an unguarded UPDATE would trip the users_auth_shape
+// constraint and surface as an opaque 500. A deleted identity
+// (login_events row with no users row) lands on the not-found path. The
+// disabled flag is deliberately untouched: enable is a separate lever.
+func (s *Store) ResetLocalUserPassword(ctx context.Context, id uuid.UUID, passwordHash string) (username, role string, revoked []SessionRef, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return "", "", fmt.Errorf("reset password %s: %w", id, err)
+		return "", "", nil, fmt.Errorf("reset password %s: %w", id, err)
 	}
 	defer tx.Rollback(ctx)
 
@@ -335,38 +413,40 @@ func (s *Store) ResetLocalUserPassword(ctx context.Context, id uuid.UUID, passwo
 		`SELECT username, role, auth_source FROM users WHERE id = $1 FOR UPDATE`, id).
 		Scan(&username, &role, &authSource)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", "", notFoundf("user %s does not exist", id)
+		return "", "", nil, notFoundf("user %s does not exist", id)
 	}
 	if err != nil {
-		return "", "", fmt.Errorf("reset password %s: %w", id, err)
+		return "", "", nil, fmt.Errorf("reset password %s: %w", id, err)
 	}
 	if authSource != "local" {
-		return "", "", conflictf("federated accounts authenticate at the identity provider")
+		return "", "", nil, conflictf("federated accounts authenticate at the identity provider")
 	}
 	if _, err := tx.Exec(ctx, `UPDATE users SET password_hash = $2 WHERE id = $1`, id, passwordHash); err != nil {
-		return "", "", fmt.Errorf("reset password %s: %w", id, err)
+		return "", "", nil, fmt.Errorf("reset password %s: %w", id, err)
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1`, id); err != nil {
-		return "", "", fmt.Errorf("reset password %s: %w", id, err)
+	revoked, err = deleteUserSessions(ctx, tx, id, nil)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("reset password %s: %w", id, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return "", "", fmt.Errorf("reset password %s: %w", id, err)
+		return "", "", nil, fmt.Errorf("reset password %s: %w", id, err)
 	}
-	return username, role, nil
+	return username, role, revoked, nil
 }
 
 // UpdateOwnPassword replaces userID's password hash and deletes their OTHER
 // sessions (keepSessionID survives — the one that just proved the current
-// password) in one transaction. Current-password verification is the
-// caller's job: an argon2 KDF must not run while holding the row lock.
-// verifiedHash is the hash that verification ran against; the row must
-// still carry it, or the update is refused — otherwise a change verified
-// against the old credential could land after an admin reset and overwrite
-// the fresh password, exactly the takeover the reset was revoking.
-func (s *Store) UpdateOwnPassword(ctx context.Context, userID uuid.UUID, verifiedHash, passwordHash string, keepSessionID uuid.UUID) error {
+// password) in one transaction, returning the sessions removed. Current-
+// password verification is the caller's job: an argon2 KDF must not run
+// while holding the row lock. verifiedHash is the hash that verification
+// ran against; the row must still carry it, or the update is refused —
+// otherwise a change verified against the old credential could land after
+// an admin reset and overwrite the fresh password, exactly the takeover the
+// reset was revoking.
+func (s *Store) UpdateOwnPassword(ctx context.Context, userID uuid.UUID, verifiedHash, passwordHash string, keepSessionID uuid.UUID) ([]SessionRef, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("update password %s: %w", userID, err)
+		return nil, fmt.Errorf("update password %s: %w", userID, err)
 	}
 	defer tx.Rollback(ctx)
 
@@ -376,26 +456,26 @@ func (s *Store) UpdateOwnPassword(ctx context.Context, userID uuid.UUID, verifie
 		  WHERE id = $1 AND auth_source = 'local' FOR UPDATE`, userID).Scan(&curHash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// The account was deleted (or is somehow federated) mid-request.
-		return notFoundf("user %s does not exist", userID)
+		return nil, notFoundf("user %s does not exist", userID)
 	}
 	if err != nil {
-		return fmt.Errorf("update password %s: %w", userID, err)
+		return nil, fmt.Errorf("update password %s: %w", userID, err)
 	}
 	if curHash != verifiedHash {
-		return conflictf("password was changed by another request; sign in with the current password and try again")
+		return nil, conflictf("password was changed by another request; sign in with the current password and try again")
 	}
 	if _, err := tx.Exec(ctx,
 		`UPDATE users SET password_hash = $2 WHERE id = $1`, userID, passwordHash); err != nil {
-		return fmt.Errorf("update password %s: %w", userID, err)
+		return nil, fmt.Errorf("update password %s: %w", userID, err)
 	}
-	if _, err := tx.Exec(ctx,
-		`DELETE FROM sessions WHERE user_id = $1 AND id <> $2`, userID, keepSessionID); err != nil {
-		return fmt.Errorf("update password %s: %w", userID, err)
+	revoked, err := deleteUserSessions(ctx, tx, userID, &keepSessionID)
+	if err != nil {
+		return nil, fmt.Errorf("update password %s: %w", userID, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("update password %s: %w", userID, err)
+		return nil, fmt.Errorf("update password %s: %w", userID, err)
 	}
-	return nil
+	return revoked, nil
 }
 
 // ErrPasswordChanged is returned by CreateLocalSession when the password (or
@@ -409,20 +489,25 @@ var ErrPasswordChanged = errors.New("password changed during login")
 // revokes every session of the old credential, and an unchecked insert would
 // hand the old (presumed leaked) password a fresh session that outlives the
 // rotation.
-func (s *Store) CreateLocalSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time, verifiedHash string) error {
-	tag, err := s.pool.Exec(ctx, `
+//
+// The new session's row id is returned for the audit record: it is the
+// handle later records (requests, logout, expiry) are correlated by.
+func (s *Store) CreateLocalSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time, verifiedHash string) (uuid.UUID, error) {
+	var id uuid.UUID
+	err := s.pool.QueryRow(ctx, `
 		INSERT INTO sessions (token_hash, user_id, csrf_token, expires_at)
 		SELECT $1, u.id, $3, $4 FROM users u
 		 WHERE u.id = $2 AND u.auth_source = 'local'
-		   AND u.password_hash = $5 AND NOT u.disabled`,
-		tokenHash, userID, csrfToken, expiresAt, verifiedHash)
+		   AND u.password_hash = $5 AND NOT u.disabled
+		RETURNING id`,
+		tokenHash, userID, csrfToken, expiresAt, verifiedHash).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrPasswordChanged
+	}
 	if err != nil {
-		return fmt.Errorf("create local session: %w", err)
+		return uuid.Nil, fmt.Errorf("create local session: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrPasswordChanged
-	}
-	return nil
+	return id, nil
 }
 
 // GetSessionByTokenHash returns the live session for a token hash, or
@@ -492,13 +577,25 @@ func (s *Store) DeleteSessionByTokenHash(ctx context.Context, tokenHash []byte) 
 }
 
 // DeleteExpiredSessions is opportunistic cleanup run from the login handler;
-// expired rows are already invisible to lookups either way.
-func (s *Store) DeleteExpiredSessions(ctx context.Context) (int64, error) {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE expires_at <= now()`)
+// expired rows are already invisible to lookups either way. It returns the
+// rows removed so each expiry can be audited at its ExpiresAt, not at the
+// cleanup that happened to notice it.
+func (s *Store) DeleteExpiredSessions(ctx context.Context) ([]SessionRef, error) {
+	rows, err := s.pool.Query(ctx, `
+		WITH d AS (
+			DELETE FROM sessions WHERE expires_at <= now()
+			RETURNING id, user_id, expires_at
+		)
+		SELECT d.id, d.user_id, COALESCE(u.username, ''), d.expires_at
+		  FROM d LEFT JOIN users u ON u.id = d.user_id`)
 	if err != nil {
-		return 0, fmt.Errorf("delete expired sessions: %w", err)
+		return nil, fmt.Errorf("delete expired sessions: %w", err)
 	}
-	return tag.RowsAffected(), nil
+	refs, err := scanSessionRefs(rows)
+	if err != nil {
+		return nil, fmt.Errorf("delete expired sessions: %w", err)
+	}
+	return refs, nil
 }
 
 // identityExpr is the SQL for a users row's stable per-person identity —

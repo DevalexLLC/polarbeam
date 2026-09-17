@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/devalexllc/polarbeam/internal/audit"
 	pb "github.com/devalexllc/polarbeam/internal/pb/polarbeamv1"
 	"github.com/devalexllc/polarbeam/internal/server/store"
 )
@@ -408,6 +409,8 @@ func (a *api) pairEndpoints(w http.ResponseWriter, r *http.Request) (ea, eb *sto
 	// lookups used, so 404 bodies are unchanged.
 	for i, name := range names {
 		if eps[i] == nil {
+			// Scope rode into the lookup: missing and foreign look alike.
+			audit.Deny(r.Context(), "not_found_or_out_of_scope")
 			writeError(w, http.StatusNotFound, "unknown site "+name)
 			return nil, nil, nil, false
 		}
@@ -431,6 +434,7 @@ func (a *api) pairEndpoints(w http.ResponseWriter, r *http.Request) (ea, eb *sto
 		// failures are byte-identical 404s: resolving first would let a
 		// tenant distinguish another tenant's plane from a typo.
 		if names := scopeNames(r.Context()); names != nil && !slices.Contains(names, net) {
+			audit.Deny(r.Context(), "out_of_scope")
 			writeError(w, http.StatusNotFound, fmt.Sprintf("network %q does not exist", net))
 			return nil, nil, nil, false
 		}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/devalexllc/polarbeam/internal/audit"
 	"github.com/devalexllc/polarbeam/internal/server/store"
 )
 
@@ -78,6 +79,7 @@ func (a *api) handleOutages(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if eps[0] == nil {
+			audit.Deny(r.Context(), "not_found_or_out_of_scope")
 			writeError(w, http.StatusNotFound, "unknown site "+name)
 			return
 		}
