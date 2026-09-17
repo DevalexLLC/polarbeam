@@ -524,18 +524,21 @@ func (s *sink) run() {
 			continue
 		}
 		s.pop()
-		s.delivered()
+		s.delivered(conn)
 	}
 }
 
-// delivered runs after a successful write: if an outage was in progress,
-// this is its end — not the reconnect, which a collector can accept and
-// drop before anything is written. Recovery is recorded (queued behind
-// whatever is still buffered) and the halt timer is cleared.
-func (s *sink) delivered() {
+// delivered runs after a successful write on conn: if an outage was in
+// progress, this is its end — not the reconnect, which a collector can
+// accept and drop before anything is written. Recovery is recorded
+// (queued behind whatever is still buffered) and the halt timer is
+// cleared. A write whose connection has since failed does not count: it
+// may have completed into a socket the peer had already closed, and its
+// bookkeeping must not undo the failure recorded meanwhile.
+func (s *sink) delivered(conn net.Conn) {
 	now := s.c.opts.Now()
 	s.mu.Lock()
-	if s.firstFailure.IsZero() {
+	if s.conn != conn || s.firstFailure.IsZero() {
 		s.mu.Unlock()
 		return
 	}
