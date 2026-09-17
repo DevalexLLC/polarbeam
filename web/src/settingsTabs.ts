@@ -12,6 +12,7 @@ export type SettingsTab =
   | 'meshes'
   | 'probes'
   | 'enrollment'
+  | 'syslog'
   | 'users'
   | 'authentication'
   | 'banner'
@@ -95,6 +96,14 @@ export const SETTINGS_TABS: SettingsTabDef[] = [
     label: 'Enrollment',
     intro: 'Single-use join tokens that enroll new agents into a site.',
     need: 'networkWrite',
+  },
+  {
+    tab: 'syslog',
+    group: 'infrastructure',
+    href: '#/settings?section=infrastructure&subsection=syslog',
+    label: 'Log forwarding',
+    intro: 'Forward audit and application logs to a syslog collector over TLS.',
+    need: 'adminWrite',
   },
   {
     tab: 'users',

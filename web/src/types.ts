@@ -888,6 +888,76 @@ export interface OIDCSettingsPut {
   ca_pem: string
 }
 
+// GET/PUT /api/v1/settings/syslog (admin-only): the audit-log forwarding
+// destination. The client private key is write-only: reads carry only
+// tls_client_key_stored, and GET additionally carries the forwarder's live
+// status.
+export type SyslogTransport = 'udp' | 'tcp' | 'tls'
+export type SyslogFraming = 'octet-counted' | 'non-transparent'
+export type SyslogContent = 'all' | 'audit'
+export type SyslogLevel = 'debug' | 'info' | 'warn' | 'error'
+export type SyslogOnFailure = 'warn' | 'halt'
+
+export interface SyslogStatus {
+  state: 'disabled' | 'connecting' | 'connected' | 'disconnected'
+  since: string
+  buffered: number
+  dropped_total: number
+  last_error?: string
+}
+
+export interface SyslogSettings {
+  enabled: boolean
+  transport: SyslogTransport
+  host: string
+  port: number
+  framing: SyslogFraming
+  facility: string
+  hostname: string
+  content: SyslogContent
+  min_level: SyslogLevel
+  on_failure: SyslogOnFailure
+  failure_timeout_ms: number
+  tls_ca_pem: string
+  tls_client_cert_pem: string
+  tls_client_key_stored: boolean
+  tls_server_name: string
+  updated_at: string
+  updated_by: string
+  status?: SyslogStatus
+  warnings?: string[]
+}
+
+export interface SyslogSettingsPut {
+  enabled: boolean
+  transport: SyslogTransport
+  host: string
+  port: number
+  framing: SyslogFraming
+  facility: string
+  hostname: string
+  content: SyslogContent
+  min_level: SyslogLevel
+  on_failure: SyslogOnFailure
+  failure_timeout_ms: number
+  tls_ca_pem: string
+  tls_client_cert_pem: string
+  // Empty keeps the stored key while a certificate is set; clearing the
+  // certificate clears the key.
+  tls_client_key_pem: string
+  tls_server_name: string
+}
+
+// POST /api/v1/settings/syslog/test — what the test connection learned.
+export interface SyslogTestResult {
+  transport: SyslogTransport
+  addr: string
+  local_addr: string
+  tls_version?: string
+  peer_subject?: string
+  peer_not_after?: string
+}
+
 // POST /api/v1/settings/oidc/test — the IdP's advertised endpoints.
 export interface OIDCDiscoveryInfo {
   issuer: string

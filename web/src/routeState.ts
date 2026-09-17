@@ -24,6 +24,7 @@ const LEGACY_SETTINGS_SECTIONS = [
   'meshes',
   'probes',
   'enrollment',
+  'syslog',
   'users',
   'authentication',
   'banner',
@@ -31,7 +32,7 @@ const LEGACY_SETTINGS_SECTIONS = [
 const SETTINGS_GROUPS = ['monitoring', 'infrastructure', 'access', 'appearance'] as const
 const SETTINGS_SUBSECTIONS = {
   monitoring: ['thresholds', 'targets', 'meshes', 'probes'],
-  infrastructure: ['sites', 'networks', 'enrollment'],
+  infrastructure: ['sites', 'networks', 'enrollment', 'syslog'],
   access: ['users', 'authentication'],
   appearance: ['banner'],
 } as const
@@ -179,7 +180,10 @@ export function canonicalizeRouteHash(hash: string, options: CanonicalRouteOptio
         legacySubsection === 'meshes' ||
         legacySubsection === 'probes'
         ? 'monitoring'
-        : legacySubsection === 'sites' || legacySubsection === 'networks' || legacySubsection === 'enrollment'
+        : legacySubsection === 'sites' ||
+            legacySubsection === 'networks' ||
+            legacySubsection === 'enrollment' ||
+            legacySubsection === 'syslog'
           ? 'infrastructure'
           : legacySubsection === 'users' || legacySubsection === 'authentication'
             ? 'access'

@@ -23,6 +23,7 @@ test('settings navigation has the required groups and one canonical subsection p
     sites: 'infrastructure',
     networks: 'infrastructure',
     enrollment: 'infrastructure',
+    syslog: 'infrastructure',
     users: 'access',
     authentication: 'access',
     banner: 'appearance',
