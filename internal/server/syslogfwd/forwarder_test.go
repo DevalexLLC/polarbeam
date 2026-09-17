@@ -350,7 +350,10 @@ func TestRoundTripTCPAndWithAttrs(t *testing.T) {
 	if m := r.next(t); !strings.Contains(m, ` cp.override polarbeam-server `) {
 		t.Errorf("hostname override missing: %s", m)
 	}
-	if st := f.Status(); st.State != StateConnected || st.Buffered != 0 {
+	// The receiver can read the frame before the writer's pop lands; wait
+	// for the queue to drain rather than asserting on the instant.
+	waitBuffered(t, f, 0)
+	if st := f.Status(); st.State != StateConnected {
 		t.Errorf("status = %+v", st)
 	}
 	// Audit records pass regardless of MinLevel; operational ones below it
@@ -761,6 +764,18 @@ func TestApplyRejectsInvalid(t *testing.T) {
 	if err := errors.Join(nil); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func waitBuffered(t *testing.T, f *Forwarder, want int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if f.Status().Buffered == want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("buffered = %d, want %d", f.Status().Buffered, want)
 }
 
 func waitState(t *testing.T, f *Forwarder, want State) {
