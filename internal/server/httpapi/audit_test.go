@@ -26,7 +26,8 @@ import (
 // emits api.write; the two exceptions own a richer record and suppress
 // the generic one. A new suppression must be declared here.
 var expectedEvent = map[string]string{
-	"POST /api/v1/auth/logout": audit.EventSessionEnded,
+	"POST /api/v1/auth/logout":    audit.EventSessionEnded,
+	"PUT /api/v1/settings/syslog": audit.EventSyslogSettingsUpdate,
 }
 
 func routeEvent(route string) string {
@@ -66,22 +67,28 @@ func TestAuditRouteContract(t *testing.T) {
 			continue
 		}
 		// The route owes one record of its own event; session-ended
-		// records for sessions it revoked may ride along.
+		// records for sessions it revoked may ride along. A route that owns
+		// a richer success record still gets the generic one when it
+		// refuses the request before reaching that point.
+		want := routeEvent(route)
+		if w.Code >= 400 {
+			want = audit.EventAPIWrite
+		}
 		var own []slog.Record
 		for _, r := range recs {
-			if audit.EventID(r) == routeEvent(route) {
+			if audit.EventID(r) == want {
 				own = append(own, r)
 			}
 		}
 		if len(own) != 1 {
-			t.Errorf("%s (%d): %d records of %s, want exactly 1", route, w.Code, len(own), routeEvent(route))
+			t.Errorf("%s (%d): %d records of %s, want exactly 1", route, w.Code, len(own), want)
 			continue
 		}
 		r := own[0]
 		if attr(r, "user") == "" || attr(r, "session") == "" || attr(r, "remote") != "203.0.113.9" {
 			t.Errorf("%s: record lacks actor/session/remote: user=%q session=%q remote=%q", route, attr(r, "user"), attr(r, "session"), attr(r, "remote"))
 		}
-		if routeEvent(route) == audit.EventAPIWrite {
+		if want == audit.EventAPIWrite {
 			if attr(r, "route") != route || attr(r, "status") != fmt.Sprint(w.Code) {
 				t.Errorf("%s: route=%q status=%q, want %q/%d", route, attr(r, "route"), attr(r, "status"), route, w.Code)
 			}

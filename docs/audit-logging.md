@@ -13,9 +13,12 @@ agent-facing gRPC API, the server lifecycle, and every state-changing
 `polarbeam-server` CLI subcommand. Agents do not emit audit records; their
 credential decisions are recorded by the server that made them.
 
-Today the records go to the server's standard error (`docker compose logs
-server`) alongside operational messages. Forwarding them to a syslog
-collector is a separate feature; this catalog is the contract it forwards.
+The records always go to the server's standard error (`docker compose
+logs server`) alongside operational messages, and — when an admin enables
+it under **Settings → Log forwarding** — to a syslog collector as RFC 5424
+messages. This document is both the catalog of records and the reference
+for the forwarder; the installation walkthrough is in
+[docs/install.md](install.md#optional-audit-log-forwarding-syslog).
 
 ## Record layout
 
@@ -107,6 +110,21 @@ are `outcome=denied`; the last is `failure`.
 | `server.start` | Both listeners are up (success; audit begins at startup), or preflight failed and the server never started (`failure`, `reason=preflight`; the cause is on the preceding `error:` line). | `version`, `grpc_addr`, `http_addr`, `proxy_protocol`, `reason` |
 | `server.stop` | The server is shutting down: `signal` (success), `listener_error` (failure). | `reason` |
 
+### Audit forwarding
+
+The forwarder's own transitions are audit records too (AU-5: failures of
+the audit subsystem are audited). They go to stderr always and to the
+collector when it is reachable.
+
+| Event | Trigger | Extra fields |
+|---|---|---|
+| `audit.forward.start` | Forwarding was enabled or re-pointed; the first record a collector receives from a process or after a settings change. | `transport`, `host`, `port`, `content`, `on_failure` |
+| `audit.forward.stop` | The server (or CLI process) is closing its forwarder; the last record it sends. | — |
+| `audit.forward.disconnected` | The collector became unreachable; records are being buffered. Queued, so the collector receives it when it is back, ahead of the backlog. | `host`, `reason` |
+| `audit.forward.recovered` | A record was delivered again after an outage. Sent after the buffered backlog; `dropped` is how many records the bounded buffer lost during the outage (a gap in `meta sequenceId` of the same size precedes it). | `outage`, `dropped` |
+| `audit.forward.test` | The record the settings page's **Test connection** (or the startup check) sends to prove the path. | — |
+| `settings.syslog.update` | The forwarding settings were changed (emitted by the handler instead of `api.write`, so it can be delivered to the previous destination before it is retired). Never carries PEM material. | `enabled`, `transport`, `host`, `port`, `content`, `on_failure`, `previous_enabled`, `previous_host`, `previous_port` |
+
 ### Operator CLI
 
 Each state-changing `polarbeam-server` subcommand records what it did once
@@ -156,6 +174,124 @@ identifiers are the ones an assessor will ask for.
 | **NIST SP 800-171 3.3.1 / 3.3.2, CMMC AU.L2-3.3.1 / 3.3.2** Create audit records; trace actions to individual users. | The catalog; `user` + `session` on every dashboard record, `user_id` for renamed federated identities. |
 | **OMB M-21-31** Key-value formatting, a unique identifier per event type, source IP, username where appropriate. | Every field is `key=value`; `event` is the unique type identifier; `remote`, `user`. |
 
+## Forwarding to a syslog collector
+
+Forwarding is configured in the dashboard (Settings → Log forwarding,
+admin only), stored in the database, and applied to the running server
+without a restart. The `polarbeam-server` CLI subcommands read the same
+settings and forward their own records.
+
+### Wire format
+
+Every record becomes one RFC 5424 message:
+
+```
+<134>1 2026-09-17T14:03:22.418233Z cp.example polarbeam-server 4242 agent.enroll [timeQuality tzKnown="1"][origin software="polarbeam-server" swVersion="v0.14.0" ip="10.0.0.5"][meta sequenceId="7"] <BOM>msg="agent enrolled" event=agent.enroll outcome=success user=8b2f... user_source=agent remote=203.0.113.9 agent=8b2f... site=1c3e... hostname=edge-nyc probe_address=10.10.0.5
+```
+
+| Part | Value |
+|---|---|
+| PRI | facility × 8 + severity. Facility is the configured one (default `local0`); severity is 6 (Informational) for successes and operational info, 4 (Warning) for failures/denials and operational warnings, 3 (Error) for operational errors, 7 for debug. |
+| VERSION | `1` |
+| TIMESTAMP | The record's time, UTC, microsecond precision (RFC 3339 with `Z`). |
+| HOSTNAME | The configured **Hostname**, else the container's hostname. Set the server's `hostname:` in `docker-compose.yml` to its FQDN, or fill the field, so records carry a name the collector can resolve. |
+| APP-NAME | `polarbeam-server` |
+| PROCID | The process id. |
+| MSGID | The audit event id (`agent.enroll`), or `-` for an operational record. Route on it. |
+| STRUCTURED-DATA | `timeQuality tzKnown="1"` (the timestamp carries its offset); `origin` with `software`, `swVersion`, and `ip` (the server's address on the connection, once connected); `meta sequenceId` — a per-process counter from 1. A gap in the sequence is exactly the number of records the buffer dropped during an outage. |
+| MSG | UTF-8 with the byte-order mark RFC 5424 requires, then the record as `key=value` pairs in the order shown in Record layout, with slog's quoting (values containing spaces are double-quoted, newlines escaped). SIEMs extract these pairs natively (Splunk automatic KV, Elastic `kv`, rsyslog `mmkubernetes`-style parsers). |
+
+Messages longer than 8 192 octets are truncated at the end of MSG on a
+UTF-8 boundary and end with ` truncated=1`.
+
+No custom structured-data element is emitted: that needs an IANA Private
+Enterprise Number, which PolarBEAM does not hold. Every field is in MSG.
+
+### Transports
+
+| Transport | Framing | Port default | Notes |
+|---|---|---|---|
+| `tls` (RFC 5425) — **default and recommended** | octet-counted only (`LEN SP MSG`) | 6514 | TLS 1.2 minimum, the collector's certificate verified against **CA certificate** (PEM) or, when empty, the image's system roots; **Server name** overrides the name checked (default: the host). Optional client certificate + key for mutual TLS. There is no way to skip verification. |
+| `tcp` (RFC 6587) | `octet-counted` (default; rsyslog `imtcp` and syslog-ng `syslog()` accept it) or `non-transparent` (LF-terminated; Splunk's native TCP input and most "raw" listeners) | 601 or 514 | Unencrypted: records cross the network in clear text. Not acceptable where SC-8 applies. |
+| `udp` (RFC 5426) | none | 514 | Lossy and unencrypted; delivery cannot be confirmed. Documented for completeness; the settings page warns. |
+
+**What "delivered" means.** Syslog has no application-level
+acknowledgement. Over TCP/TLS a record counts as delivered once the
+collector's kernel accepted it; the forwarder keeps a reader on the
+connection and TCP keepalives (30 s idle, 10 s probes, 3 misses) so a
+collector that goes away — gracefully or not — is noticed within about a
+minute even when nothing is being sent. Over UDP nothing is confirmed and
+"connected" means only that the socket is open.
+
+### Content and levels
+
+**Content** `all` forwards every audit record plus operational records at
+**Minimum level** and above; `audit` forwards audit records only. Audit
+records are forwarded regardless of the minimum level and regardless of
+`log.level` in `server.yaml` (that level governs standard error only).
+
+### Failure handling (AU-5)
+
+| Condition | What happens |
+|---|---|
+| The collector cannot be reached | The forwarder buffers up to 10 000 records in memory and reconnects with exponential backoff (1 s → 30 s). The first failure is logged at error level on standard error immediately, then every 5 minutes while the outage lasts (buffered and dropped counts, time down). An `audit.forward.disconnected` record is queued so the collector receives it, ahead of the backlog, when it is back. |
+| The buffer reaches 75 % | One warning on standard error (V-222483). |
+| The buffer is full | The oldest record is dropped and counted. Dropped records keep the sequence numbers they were assigned, so the collector sees a gap of exactly that size. |
+| The collector is reachable again | The outage ends when a record is actually **delivered** again, not when a connection opens (a collector that accepts and drops before anything is written is still an outage, and the halt timer keeps running). The backlog is sent in order, then `audit.forward.recovered` carrying the outage duration and the number dropped. A connection that dies young does not reset the reconnect backoff, so a flapping collector is never a connect storm. |
+| The destination is changed or disabled during an outage | The retired destination's undelivered backlog (the settings-change record among them) is lost: a warning on standard error names the count, and the replacement's `dropped_total` carries it. Save a destination change while the collector is up. |
+| **On failure** = `warn` (default) | Nothing more: the server keeps running and keeps trying. |
+| **On failure** = `halt` | If no record could be delivered for **Failure timeout** (default 5 m, minimum 1 m) since the first failure, the server records `server.stop` with reason `audit_failure`, stops, and exits non-zero. The container restart policy restarts it; its startup check then refuses to start (`preflight: syslog collector … unreachable and on_failure is halt`) until the collector answers again. This is the ASD STIG V-222486 posture ("shut down by default upon audit failure unless availability is an overriding concern"); leave it at `warn` where availability wins. |
+| The server stops | The forwarder drains for up to 3 s after `server.stop`; `audit.forward.stop` is the last record sent. Anything undelivered is reported on standard error. |
+
+The collector side should alarm on silence too (the Central Log Server
+SRG requires it): `audit.forward.start` on every (re)start and the
+sequence numbers give it what it needs.
+
+### Receiver configuration
+
+rsyslog (TLS, octet-counted, port 6514):
+
+```
+module(load="imtcp" StreamDriver.Name="gtls" StreamDriver.Mode="1" StreamDriver.AuthMode="anon")
+global(DefaultNetstreamDriverCAFile="/etc/rsyslog.d/ca.pem"
+       DefaultNetstreamDriverCertFile="/etc/rsyslog.d/collector.pem"
+       DefaultNetstreamDriverKeyFile="/etc/rsyslog.d/collector.key")
+input(type="imtcp" port="6514" SupportOctetCountedFraming="on")
+```
+
+syslog-ng (the `syslog()` source is RFC 5424 with octet counting):
+
+```
+source s_polarbeam { syslog(ip("0.0.0.0") port(6514) transport("tls")
+  tls(key-file("/etc/syslog-ng/collector.key") cert-file("/etc/syslog-ng/collector.pem")
+      peer-verify("optional-untrusted"))); };
+```
+
+Splunk: use Splunk Connect for Syslog (syslog-ng based, accepts RFC
+5424/5425 with octet counting) or, for a native TCP input, transport
+`tcp` with framing `non-transparent`. Elastic Filebeat syslog input:
+`format: rfc5424`, `framing: rfc6587`.
+
+### FIPS
+
+PolarBEAM's TLS comes from Go's standard library, which is not a FIPS
+140-validated module in the shipped images (a `GOFIPS140` build is not
+part of the release process; see `docs/architecture.md` for the ML-DSA
+constraint that also applies). Where SC-13 requires validated cryptography
+for the log link, terminate the TLS session in a validated stunnel or
+collector on the same host and point PolarBEAM at it over `tcp` on
+loopback.
+
+### Proxy, database, and agent logs
+
+The forwarder covers `polarbeam-server`. The nginx proxy, TimescaleDB, and
+the agents write to their containers' standard streams; forward those with
+the container runtime's log driver (Docker: `logging: driver: syslog` with
+`syslog-address: tcp+tls://collector:6514`, `syslog-format: rfc5424micro`;
+Podman: `--log-driver=journald` and the host's rsyslog/journald forwarding).
+They carry no audit records — every credential decision about an agent is
+recorded by the server.
+
 ## Known gaps
 
 - Certificate **revocation** has no CLI or API surface yet (it is a direct
@@ -164,6 +300,6 @@ identifiers are the ones an assessor will ask for.
   reason `revoked`).
 - Successful **reads** are not recorded (no access log). `authz.denied`
   covers refused reads.
-- Records reach standard error only. Off-loading to a central collector
-  (AU-4(1), V-222481/482) is the syslog forwarding feature, documented
-  separately when it ships.
+- The forwarder's buffer is in memory (10 000 records); a server restart
+  during a collector outage loses what was buffered. Standard error still
+  has every record.

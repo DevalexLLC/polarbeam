@@ -33,6 +33,10 @@ services:
   server:
     image: ghcr.io/devalexllc/polarbeam-server:${POLARBEAM_VERSION:-latest}
     restart: unless-stopped
+    # With audit log forwarding enabled (Settings -> Log forwarding), the
+    # RFC 5424 HOSTNAME field is this container's hostname unless the page's
+    # Hostname field is set; give the collector a name it can resolve:
+    # hostname: polarbeam.example.internal
     volumes:
       - ./server.yaml:/etc/polarbeam/server.yaml:ro
       - server-state:/var/lib/polarbeam-server

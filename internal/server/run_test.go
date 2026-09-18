@@ -344,9 +344,15 @@ func TestShutdownServerRecordsStopAndPreservesCause(t *testing.T) {
 		rec := &recHandler{}
 		httpSrv := &http.Server{Handler: http.NotFoundHandler()}
 		grpcSrv := grpc.NewServer()
-		got := shutdownServer(audit.New(slog.New(rec)), httpSrv, grpcSrv, tc.reason, tc.cause)
+		fwd := &fakeCloser{}
+		got := shutdownServer(audit.New(slog.New(rec)), httpSrv, grpcSrv, fwd, tc.reason, tc.cause)
 		if got != tc.cause {
 			t.Errorf("%s: returned %v, want the cause %v", tc.reason, got, tc.cause)
+		}
+		// The forwarder is drained last, after the stop record and the
+		// listeners, so the stop record is what it drains.
+		if fwd.closedAfter != 1 {
+			t.Errorf("%s: forwarder closed %d times (want once, after the stop record)", tc.reason, fwd.closedAfter)
 		}
 		if len(rec.recs) != 1 {
 			t.Fatalf("%s: %d records, want 1", tc.reason, len(rec.recs))
@@ -374,6 +380,12 @@ func TestShutdownServerRecordsStopAndPreservesCause(t *testing.T) {
 		}
 	}
 }
+
+// fakeCloser stands in for the forwarder; closedAfter counts Close calls
+// (recorded only when a stop record already exists — see the handler).
+type fakeCloser struct{ closedAfter int }
+
+func (f *fakeCloser) Close(context.Context) int { f.closedAfter++; return 0 }
 
 // TestPreflightErrorsAreTyped: cmdServe distinguishes a server that never
 // started (server.start failure) from one that stopped, by ErrPreflight.

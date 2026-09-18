@@ -127,3 +127,10 @@ with a pointer here, so please read this list first.
 
 Operator-facing security setup — TLS for the dashboard, firewall rules,
 certificate rotation, and revocation — lives in `docs/install.md`.
+
+Audit logging: every sign-in, session end, account and configuration
+change, agent credential decision, and privileged CLI action is recorded
+as an audit record (catalog and NIST SP 800-53 / DISA ASD STIG mapping in
+`docs/audit-logging.md`). Forward them to a central collector over syslog
+TLS from Settings → Log forwarding; choose `on_failure: halt` where the
+assessment requires the server to stop rather than run unaudited.

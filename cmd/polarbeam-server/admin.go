@@ -47,7 +47,10 @@ func (p paramsFlag) Set(kv string) error {
 	return nil
 }
 
-// adminStore opens the store the way cmdToken does.
+// adminStore opens the store for a CLI subcommand and, when the stored
+// syslog settings enable forwarding, installs the forwarder so the
+// command's audit record reaches the collector. The returned cancel
+// drains the forwarder (callers defer it after st.Close, so it runs last).
 func adminStore(cfg config.Config) (*store.Store, context.Context, context.CancelFunc, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	st, err := store.Connect(ctx, cfg.DB.URL, cfg.DB.ConnectTimeout, cfg.DB.MaxConns)
@@ -55,7 +58,8 @@ func adminStore(cfg config.Config) (*store.Store, context.Context, context.Cance
 		cancel()
 		return nil, nil, nil, err
 	}
-	return st, ctx, cancel, nil
+	stopForwarding := installForwarder(ctx, cfg, st)
+	return st, ctx, func() { stopForwarding(); cancel() }, nil
 }
 
 // cliSiteFields makes shared site validation errors name the CLI flags.

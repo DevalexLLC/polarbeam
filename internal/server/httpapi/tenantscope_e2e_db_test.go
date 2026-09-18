@@ -114,7 +114,7 @@ func e2eSetup(t *testing.T) *e2eEnv {
 	t.Cleanup(s.Close)
 
 	env := &e2eEnv{ctx: ctx, s: s,
-		h: newHandler(s, testDist, &fakeProviders{providerErr: oidcauth.ErrDisabled}, nil)}
+		h: newHandler(s, testDist, &fakeProviders{providerErr: oidcauth.ErrDisabled}, nil, &fakeForwarder{})}
 
 	must := func(what string, err error) {
 		t.Helper()

@@ -166,6 +166,12 @@ type oidcStore interface {
 	CreateOIDCSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time, issuer, clientID string, policyUpdatedAt time.Time) (uuid.UUID, error)
 }
 
+// syslogStore is the syslog forwarding settings row.
+type syslogStore interface {
+	GetSyslogSettings(ctx context.Context) (*store.SyslogSettings, error)
+	UpdateSyslogSettings(ctx context.Context, in store.SyslogSettings, keepClientKey bool) (*store.SyslogSettings, error)
+}
+
 // DB is the subset of *store.Store the dashboard needs. It is an interface
 // so handler tests run offline against a fake instead of a live PostgreSQL.
 type DB interface {
@@ -183,6 +189,7 @@ type DB interface {
 	eventReader
 	bannerStore
 	oidcStore
+	syslogStore
 }
 
 // Catch store-side signature drift here, at the declaration, rather than at

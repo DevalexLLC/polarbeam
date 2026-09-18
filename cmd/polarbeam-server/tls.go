@@ -42,6 +42,7 @@ func cmdTLS(args []string) error {
 	if problems := tlsInstallProblems(*certIn, *keyIn, *owner); len(problems) > 0 {
 		return errors.New(strings.Join(problems, "; "))
 	}
+	defer bestEffortForwarder(cfg)()
 	summary, err := installTLS(*certIn, *keyIn, cfg.TLS.CertFile, cfg.TLS.KeyFile, *owner, os.Geteuid() == 0)
 	if err != nil {
 		return err

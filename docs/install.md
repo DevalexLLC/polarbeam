@@ -1330,9 +1330,140 @@ being silently downgraded.
   database backups. Treat backups accordingly, and rotate the secret at
   the provider if a backup leaks.
 
+## Optional: audit log forwarding (syslog)
+
+PolarBEAM records every security-relevant action — sign-ins and failures,
+session ends, account and configuration changes, agent enrollment and
+certificate decisions, server start and stop, and every state-changing
+CLI command — as an audit record on the server's standard error. Sites
+that must off-load audit logs to a central collector (NIST SP 800-53
+AU-4(1), DISA ASD STIG V-222481/482) can forward them as RFC 5424 syslog
+over TLS from **Settings → Log forwarding**. The record catalog, the wire
+format, transports, failure handling, and receiver snippets are in
+[docs/audit-logging.md](audit-logging.md); this section is the setup.
+
+Forwarding is off by default, needs no configuration file change, and is
+applied to the running server without a restart. Only `polarbeam-server`
+forwards; the proxy, the database, and the agents are covered by the
+container runtime's log driver (see the reference).
+
+### Name the server
+
+Records carry the container's hostname unless you say otherwise. Either
+set the server's hostname in `docker-compose.yml` so the collector can
+resolve it —
+
+```yaml
+  server:
+    hostname: polarbeam.example.internal
+```
+
+— or fill in **Hostname** on the settings page.
+
+### Configure the collector
+
+Configure the collector to accept RFC 5424 over TLS on 6514 with
+octet-counted framing (rsyslog `imtcp` + `gtls`, syslog-ng `syslog()` —
+snippets in the reference). Have its certificate's PEM at hand, or the CA
+that signed it, unless it chains to a public CA.
+
+### Configure PolarBEAM
+
+Sign in as an admin and open **Settings → Log forwarding**. The fields:
+
+| Field | Meaning |
+|---|---|
+| Enable | Off keeps the settings but forwards nothing. |
+| Transport | `tls` (recommended, RFC 5425), `tcp` (RFC 6587), or `udp` (RFC 5426). The page warns that `tcp` is clear text and `udp` is lossy as well. |
+| Host / Port | The collector. 6514 for TLS, 601 or 514 for TCP, 514 for UDP. |
+| Framing | `octet-counted` (default, what rsyslog and syslog-ng expect) or `non-transparent` (LF-terminated, for Splunk's native TCP input). TLS is always octet-counted. |
+| Facility | RFC 5424 facility, default `local0`. |
+| Hostname | The HOSTNAME field of every record; empty uses the container's. |
+| Content | `all` (audit records plus operational log at the minimum level) or `audit` (audit records only). |
+| Minimum level | For operational records only; audit records always go. |
+| On failure | `warn` (default): buffer, alert, keep running. `halt`: stop the server after the failure timeout without a reachable collector, and refuse to start while it is unreachable — the ASD STIG V-222486 posture. |
+| Failure timeout | For `halt`: how long the collector may be unreachable before the server stops (default 5 m, minimum 1 m). |
+| CA certificate | PEM trust anchor(s) for the collector's certificate; empty uses the image's system roots. |
+| Server name | The name expected in the collector's certificate when it differs from Host. |
+| Client certificate / key | Optional mutual-TLS identity. The key is write-only: after saving, the page shows only that one is stored, and leaving it empty on later saves keeps it. Clearing the certificate clears the key. |
+
+Press **Test connection** before enabling: it dials, completes the TLS
+handshake, sends one `audit.forward.test` record, and reports the
+collector's certificate subject and expiry — or the exact error. Then
+**Save**. The page shows the live state (connected, buffered, dropped)
+and refreshes every 30 seconds.
+
+### Configure through the API
+
+The same three endpoints drive the page and work from a script (the
+dashboard panel ships in the release that follows the API). Sign in as an
+admin, keep the cookie, and send the CSRF token on writes:
+
+```sh
+# sign in
+curl -sk -c cj -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"…"}' https://polarbeam.example/api/v1/auth/login
+# → {"csrf_token":"…"}; export it as CSRF
+CA=$(python3 -c 'import json; print(json.dumps(open("collector-ca.pem").read()))')
+BODY="{\"enabled\":true,\"transport\":\"tls\",\"host\":\"collector.example\",\"port\":6514,
+  \"framing\":\"octet-counted\",\"facility\":\"local0\",\"hostname\":\"polarbeam.example\",
+  \"content\":\"all\",\"min_level\":\"info\",\"on_failure\":\"warn\",\"failure_timeout_ms\":300000,
+  \"tls_ca_pem\":$CA,\"tls_client_cert_pem\":\"\",\"tls_client_key_pem\":\"\",\"tls_server_name\":\"\"}"
+# test without saving (502 with the error text on failure)
+curl -sk -b cj -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' \
+  -X POST -d "$BODY" https://polarbeam.example/api/v1/settings/syslog/test
+# save and apply (no restart)
+curl -sk -b cj -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' \
+  -X PUT -d "$BODY" https://polarbeam.example/api/v1/settings/syslog
+# live status
+curl -sk -b cj https://polarbeam.example/api/v1/settings/syslog
+```
+
+`GET` never returns the client key; it reports `tls_client_key_stored`.
+An empty `tls_client_key_pem` on a later `PUT` keeps the stored key while
+`tls_client_cert_pem` is set, and clearing the certificate clears both.
+
+### Verify
+
+On the collector, the first records after saving are
+`event=audit.forward.start` and `event=settings.syslog.update` naming the
+admin who enabled it. Sign out and back in to see `auth.session.ended`
+and `auth.login`; restart an agent to see `agent.session.end` and
+`agent.session.start`. From the server host:
+
+```sh
+docker compose exec server polarbeam-server user add --config /etc/polarbeam/server.yaml --username audit-check
+```
+
+sends `event=cli.user.add user_source=cli`.
+
+Without a collector yet, `openssl s_server -accept 6514 -cert col.crt -key col.key -quiet`
+on any host the server can reach prints the frames as they arrive.
+
+### Operate
+
+- `docker compose logs server` shows every forwarding alert: the collector
+  becoming unreachable (immediately, then every 5 minutes), the buffer at
+  75 %, records dropped, and reconnection with the drop count.
+- Under `halt`, a stopped server logs `server.stop reason=audit_failure`
+  and the restart loop logs `preflight: syslog collector … unreachable and
+  on_failure is halt` until the collector answers. Set `warn` from the
+  database only if the collector cannot be restored:
+  `UPDATE syslog_settings SET on_failure = 'warn';` then start the server
+  and correct the setting from the page.
+- The settings live in the database (`syslog_settings`) and are included
+  in backups; the client key is a secret (see Backup scope).
+- Every change to these settings is itself recorded
+  (`settings.syslog.update`), delivered to the previous collector before
+  it is retired.
+
 ## Firewall requirements
 
 ### Control-plane host
+
+With audit log forwarding enabled, the server also needs outbound access
+to the collector (TCP 6514 for TLS by default; whatever port and protocol
+you configured).
 
 | Direction | Protocol/port | Peer | Purpose |
 |---|---|---|---|
@@ -1524,6 +1655,20 @@ re-enrolling. Treat this as identity replacement, not routine repair.
 
 Also verify the WAN firewall permits the selected probe protocol in both
 directions.
+
+### Log forwarding shows disconnected
+
+The collector is unreachable or refused the connection. `docker compose
+logs server` names the error: `connection refused` (nothing listening on
+that port, or a firewall), `x509: certificate signed by unknown authority`
+(paste the collector's CA into **CA certificate**), `x509: certificate is
+valid for X, not Y` (set **Server name** to X), `tls: handshake failure`
+(the collector requires a client certificate). **Test connection** on the
+settings page reproduces the failure with the submitted values. Records
+are buffered meanwhile (up to 10 000) and delivered in order on
+reconnection; under `on_failure: halt` the server stops after the
+failure timeout instead, and its restart loop refuses to start until the
+collector answers.
 
 ### Agent fails its pre-start check
 
@@ -1992,7 +2137,8 @@ registry digest), and the copied `.env` records the release.
 What the set contains, and how to treat it:
 
 - **Secrets.** The dump holds every password hash, the OIDC client secret
-  (`oidc_settings`), and the enrollment audit record; `volumes.tar.gz`
+  (`oidc_settings`), the syslog forwarding client key (`syslog_settings`),
+  and the enrollment audit record; `volumes.tar.gz`
   holds the CA private key and the dashboard TLS key; `.env` and
   `server.yaml` hold the database password. Keep the set readable by the
   operator only (the script's `umask 077` does that for the files it

@@ -121,7 +121,7 @@ func loadConfig(fs *flag.FlagSet, args []string) (config.Config, error) {
 	if err != nil {
 		return config.Config{}, err
 	}
-	setupLogging(cfg.Log.Level)
+	server.SetupLogging(cfg.Log.Level)
 	return cfg, nil
 }
 
@@ -140,15 +140,9 @@ func cmdServe(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	slog.Info("polarbeam-server starting", "version", version.String())
-	err = server.Run(ctx, cfg)
-	if errors.Is(err, server.ErrPreflight) {
-		// The server never came up; Run's own start record was not reached.
-		auditLog.Emit(context.Background(), audit.Event{
-			ID: audit.EventServerStart, Msg: "polarbeam-server failed preflight", Outcome: audit.Failure,
-			Attrs: []slog.Attr{slog.String("version", version.String()), slog.String("reason", "preflight")},
-		})
-	}
-	return err
+	// Run records server.start (success, or a preflight failure) and drains
+	// the forwarder itself on every exit.
+	return server.Run(ctx, cfg)
 }
 
 func cmdMigrate(args []string) error {
@@ -169,6 +163,7 @@ func cmdMigrate(args []string) error {
 		return fmt.Errorf("db unreachable at configured db.url: %w", err)
 	}
 	defer conn.Close(ctx)
+	defer bestEffortForwarder(cfg)()
 	if err := migrate.Apply(ctx, conn); err != nil {
 		auditCLI(audit.EventCLIMigrate, "migrations failed", audit.Failure, slog.String("reason", "apply_failed"))
 		return err
@@ -206,6 +201,7 @@ func cmdCAInit(args []string) error {
 	if err != nil {
 		return err
 	}
+	defer bestEffortForwarder(cfg)()
 	if err := ca.Init(cfg.CA.Dir, alg, *ifMissing); err != nil {
 		return err
 	}
@@ -235,6 +231,7 @@ func cmdCARetire(args []string) error {
 	if err != nil {
 		return err
 	}
+	defer bestEffortForwarder(cfg)()
 	retired, err := retiredir.Move(cfg.CA.Dir, time.Now())
 	if err != nil {
 		return fmt.Errorf("ca retire: %w", err)
@@ -265,12 +262,11 @@ func cmdToken(args []string) error {
 		return errors.New(strings.Join(problems, "; "))
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	st, err := store.Connect(ctx, cfg.DB.URL, cfg.DB.ConnectTimeout, cfg.DB.MaxConns)
+	st, ctx, cancel, err := adminStore(cfg)
 	if err != nil {
 		return err
 	}
+	defer cancel()
 	defer st.Close()
 	authority, err := ca.Load(cfg.CA.Dir, caLifetimes(cfg))
 	if err != nil {
@@ -351,19 +347,4 @@ func cmdSeed(args []string) error {
 	}
 	defer st.Close()
 	return seed.Run(ctx, st.Pool(), *days, os.Stdout)
-}
-
-func setupLogging(level string) {
-	var l slog.Level
-	switch level {
-	case "debug":
-		l = slog.LevelDebug
-	case "warn":
-		l = slog.LevelWarn
-	case "error":
-		l = slog.LevelError
-	default:
-		l = slog.LevelInfo
-	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: l})))
 }
