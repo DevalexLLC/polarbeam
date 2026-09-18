@@ -2,6 +2,7 @@ package syslogfwd
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -15,6 +16,8 @@ import (
 	"log/slog"
 	"math/big"
 	"net"
+	"net/url"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -243,21 +246,118 @@ func newTestForwarder(t *testing.T) *Forwarder {
 func TestMessageGolden(t *testing.T) {
 	fm := formatter{hostname: "cp.example", procID: "4242", version: "v1.2.3"}
 	at := time.Date(2026, 9, 17, 14, 3, 22, 418233000, time.UTC)
-	body := []byte(`msg="agent enrolled" event=agent.enroll outcome=success user=8b2f`)
-	got := string(fm.message(16, slog.LevelInfo, at, "agent.enroll", 7, "10.0.0.5", body))
+	body := []byte(`msg="agent enrolled" event=agent.enroll outcome=success user=8b2f remote=203.0.113.9`)
+	params := []sdParam{{"event", "agent.enroll"}, {"outcome", "success"}, {"user", "8b2f"}, {"remote", "203.0.113.9"}}
+	got := string(fm.message(16, slog.LevelInfo, at, "agent.enroll", 7, "10.0.0.5", params, body))
 	want := "<134>1 2026-09-17T14:03:22.418233Z cp.example polarbeam-server 4242 agent.enroll " +
-		`[timeQuality tzKnown="1"][origin software="polarbeam-server" swVersion="v1.2.3" ip="10.0.0.5"][meta sequenceId="7"] ` +
+		`[timeQuality tzKnown="1"][origin software="polarbeam-server" swVersion="v1.2.3" ip="10.0.0.5"][meta sequenceId="7"]` +
+		`[polarbeam@66894 event="agent.enroll" outcome="success" user="8b2f" remote="203.0.113.9"] ` +
 		"\xEF\xBB\xBF" + string(body)
 	if got != want {
 		t.Errorf("message =\n%q\nwant\n%q", got, want)
 	}
 	// Operational record: NIL msgid, Warn severity, no origin ip before the
-	// first connection, an escaped SD value.
+	// first connection, an escaped SD value, no enterprise element.
 	fm.version = `v"1]\`
-	got = string(fm.message(4, slog.LevelWarn, at, "", 1, "", []byte("x")))
+	got = string(fm.message(4, slog.LevelWarn, at, "", 1, "", nil, []byte("x")))
 	if !strings.HasPrefix(got, "<36>1 2026-09-17T14:03:22.418233Z cp.example polarbeam-server 4242 - [timeQuality") ||
-		!strings.Contains(got, `swVersion="v\"1\]\\"][meta`) || strings.Contains(got, ` ip=`) {
+		!strings.Contains(got, `swVersion="v\"1\]\\"][meta`) || strings.Contains(got, ` ip=`) ||
+		!strings.Contains(got, `"] `+"\xEF\xBB\xBF"+`x`) || strings.Contains(got, EnterpriseSDID) {
 		t.Errorf("operational message = %q", got)
+	}
+	// Enterprise PARAM-VALUEs are escaped and clipped on a rune boundary.
+	long := strings.Repeat("é", maxSDParamValue) // 2 bytes each: clipped mid-rune unless the cut backs up
+	got = string(fm.message(16, slog.LevelInfo, at, "e", 1, "", []sdParam{{"user", `a"b]c\`}, {"remote", long}}, []byte("x")))
+	wantUser := `[polarbeam@66894 user="a\"b\]c\\" remote="` + strings.Repeat("é", maxSDParamValue/2) + `"] `
+	if !strings.Contains(got, wantUser) || !utf8.ValidString(got) {
+		t.Errorf("escaped/clipped element missing in %q", got)
+	}
+}
+
+// sdDecode is what a standards-following receiver plus our documented
+// percent step yields: RFC 5424 §6.3.3 unescaping (a backslash before
+// '"', '\\', or ']' is dropped; before anything else it is kept), then
+// percent-decoding.
+func sdDecode(t *testing.T, v string) string {
+	t.Helper()
+	var b strings.Builder
+	for i := 0; i < len(v); i++ {
+		if v[i] == '\\' && i+1 < len(v) && strings.IndexByte(`"\]`, v[i+1]) >= 0 {
+			i++
+		}
+		b.WriteByte(v[i])
+	}
+	out, err := url.PathUnescape(b.String())
+	if err != nil {
+		t.Fatalf("percent-decode %q: %v", b.String(), err)
+	}
+	return out
+}
+
+// A claimed username from a failed login reaches the enterprise element
+// unfiltered. Control characters in a PARAM-VALUE must be encoded: a raw
+// LF would split a non-transparent-framed record on the collector, and
+// CR/NUL confuse header parsers. The encoding must also stay reversible
+// after the receiver's RFC unescaping, so distinct claimed identities
+// stay distinct in the indexed field.
+func TestSDValueControlChars(t *testing.T) {
+	fm := formatter{hostname: "h", procID: "1", version: "v"}
+	at := time.Date(2026, 9, 17, 14, 3, 22, 0, time.UTC)
+	values := []string{
+		"eve\ninjected\r\x00\ttab\x7f",
+		`a\nb`, "a\nb", `a\\nb`, "a%0Ab", "100%", `x"y]z\`, "tzürich é", "",
+	}
+	seen := map[string]string{}
+	for _, v := range values {
+		got := fm.message(16, slog.LevelWarn, at, "auth.login", 1, "", []sdParam{{"user", v}}, []byte("x"))
+		sd := string(got[:bytes.Index(got, bom)])
+		if strings.ContainsAny(sd, "\n\r\x00\t\x7f") || !utf8.Valid(got) {
+			t.Errorf("%q: control character or invalid UTF-8 in header/SD: %q", v, sd)
+		}
+		wire := strings.TrimSuffix(strings.SplitN(sd, `[polarbeam@66894 user="`, 2)[1], `"] `)
+		if dec := sdDecode(t, wire); dec != v {
+			t.Errorf("%q: wire %q decodes to %q", v, wire, dec)
+		}
+		if prev, dup := seen[wire]; dup {
+			t.Errorf("%q and %q share the wire spelling %q", prev, v, wire)
+		}
+		seen[wire] = v
+	}
+	// Spellings are the documented ones.
+	got := string(fm.message(16, slog.LevelWarn, at, "e", 1, "", []sdParam{{"user", "a\nb%"}}, []byte("x")))
+	if !strings.Contains(got, `[polarbeam@66894 user="a%0Ab%25"] `) {
+		t.Errorf("spelling: %q", got)
+	}
+}
+
+func TestAuditParams(t *testing.T) {
+	rec := func(attrs ...slog.Attr) slog.Record {
+		r := slog.NewRecord(time.Now(), slog.LevelInfo, "m", 0)
+		r.AddAttrs(attrs...)
+		return r
+	}
+	// Operational record (event key absent, or present but not first): no element.
+	if p := auditParams(rec(slog.String("site", "nyc"))); p != nil {
+		t.Errorf("operational params = %v, want nil", p)
+	}
+	if p := auditParams(rec(slog.String("site", "nyc"), slog.String("event", "x"))); p != nil {
+		t.Errorf("non-first event params = %v, want nil", p)
+	}
+	// Audit record: the fixed fields in Emit order, absent ones skipped,
+	// event-specific attributes ignored, and a repeated key keeps its first
+	// value (an event-specific attribute cannot shadow a fixed one).
+	got := auditParams(rec(
+		slog.String("event", "auth.login"), slog.String("outcome", "failure"),
+		slog.String("remote", "198.51.100.7:4433"), slog.String("user_source", "local"),
+		slog.String("reason", "bad password"), slog.Int("attempts", 3),
+		slog.String("remote", "spoofed"), slog.String("user", "alice"),
+	))
+	want := []sdParam{{"event", "auth.login"}, {"outcome", "failure"}, {"user", "alice"}, {"user_source", "local"}, {"remote", "198.51.100.7:4433"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("auditParams = %v, want %v", got, want)
+	}
+	if got := eventParams("syslog.forward.stop", "success"); !reflect.DeepEqual(got, []sdParam{{"event", "syslog.forward.stop"}, {"outcome", "success"}}) {
+		t.Errorf("eventParams = %v", got)
 	}
 }
 
@@ -366,7 +466,8 @@ func TestRoundTripTCPAndWithAttrs(t *testing.T) {
 	r.next(t) // start record on the new sink
 	l.Info("dropped operational")
 	audit.New(slog.New(f)).Emit(context.Background(), audit.Event{ID: audit.EventLogin, Msg: "login", Outcome: audit.Success})
-	if m := r.next(t); !strings.Contains(m, "event=auth.login") || !strings.HasPrefix(m, "<134>1 ") || !strings.Contains(m, " auth.login [") {
+	if m := r.next(t); !strings.Contains(m, "event=auth.login") || !strings.HasPrefix(m, "<134>1 ") || !strings.Contains(m, " auth.login [") ||
+		!strings.Contains(m, `[`+EnterpriseSDID+` event="auth.login" outcome="success"] `) {
 		t.Errorf("audit message = %s", m)
 	}
 	cfg.Content = ContentAudit
@@ -457,7 +558,7 @@ func TestTLSRoundTripAndProbe(t *testing.T) {
 	if res.PeerName != "CN=collector" || res.TLSVersion == "" || res.PeerExpiry.IsZero() {
 		t.Errorf("probe result = %+v", res)
 	}
-	if m := r.next(t); !strings.Contains(m, "event="+audit.EventForwardTest) {
+	if m := r.next(t); !strings.Contains(m, "event="+audit.EventForwardTest) || !strings.Contains(m, `[`+EnterpriseSDID+` event="`+audit.EventForwardTest+`" outcome="success"] `) {
 		t.Errorf("probe message = %s", m)
 	}
 	// An untrusted collector is refused: no knob skips verification.
@@ -583,7 +684,8 @@ func TestIdleConnectionLossDetected(t *testing.T) {
 	// (the listener stays up, so the reconnect that follows is immediate —
 	// the records prove the loss was seen, a state read could miss it).
 	r.dropConns()
-	if m := r.next(t); !strings.Contains(m, "event="+audit.EventForwardDisconnected) || !strings.Contains(m, "closed by the collector") {
+	if m := r.next(t); !strings.Contains(m, "event="+audit.EventForwardDisconnected) || !strings.Contains(m, "closed by the collector") ||
+		!strings.Contains(m, `[`+EnterpriseSDID+` event="`+audit.EventForwardDisconnected+`" outcome="failure"] `) {
 		t.Errorf("after idle loss, first record = %s", m)
 	}
 	if m := r.next(t); !strings.Contains(m, "event="+audit.EventForwardRecovered) {
@@ -703,7 +805,7 @@ func TestCloseSendsStopRecord(t *testing.T) {
 	}
 	waitState(t, f, StateConnected)
 	f.Close(context.Background())
-	if m := r.next(t); !strings.Contains(m, "event="+audit.EventForwardStop) {
+	if m := r.next(t); !strings.Contains(m, "event="+audit.EventForwardStop) || !strings.Contains(m, `[`+EnterpriseSDID+` event="`+audit.EventForwardStop+`" outcome="success"] `) {
 		t.Errorf("last message = %s", m)
 	}
 	if f.Status().State != StateDisabled {
