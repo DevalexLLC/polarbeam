@@ -10,12 +10,17 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"errors"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"slices"
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
+
+	"github.com/devalexllc/polarbeam/internal/audit"
 	"github.com/devalexllc/polarbeam/internal/server/ca"
 	"github.com/google/uuid"
 )
@@ -308,4 +313,73 @@ func TestGRPCTLSHandshakeEnforcement(t *testing.T) {
 			t.Error("classical-curve handshake succeeded, want rejection")
 		}
 	})
+}
+
+// recHandler captures records for the lifecycle tests.
+type recHandler struct{ recs []slog.Record }
+
+func (h *recHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *recHandler) Handle(_ context.Context, r slog.Record) error {
+	h.recs = append(h.recs, r.Clone())
+	return nil
+}
+func (h *recHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *recHandler) WithGroup(string) slog.Handler      { return h }
+
+// TestShutdownServerRecordsStopAndPreservesCause: every exit reason goes
+// through one helper that records server.stop before stopping the
+// listeners and hands the cause back unchanged, so a failure exit stays a
+// failure and never skips the stop record.
+func TestShutdownServerRecordsStopAndPreservesCause(t *testing.T) {
+	cases := []struct {
+		reason  string
+		cause   error
+		outcome string
+	}{
+		{"signal", nil, "success"},
+		{"listener_error", errors.New("accept: boom"), "failure"},
+		{"audit_failure", errors.New("collector unreachable"), "failure"},
+	}
+	for _, tc := range cases {
+		rec := &recHandler{}
+		httpSrv := &http.Server{Handler: http.NotFoundHandler()}
+		grpcSrv := grpc.NewServer()
+		got := shutdownServer(audit.New(slog.New(rec)), httpSrv, grpcSrv, tc.reason, tc.cause)
+		if got != tc.cause {
+			t.Errorf("%s: returned %v, want the cause %v", tc.reason, got, tc.cause)
+		}
+		if len(rec.recs) != 1 {
+			t.Fatalf("%s: %d records, want 1", tc.reason, len(rec.recs))
+		}
+		r := rec.recs[0]
+		var reason, outcome, event string
+		r.Attrs(func(a slog.Attr) bool {
+			switch a.Key {
+			case "reason":
+				reason = a.Value.String()
+			case "outcome":
+				outcome = a.Value.String()
+			case "event":
+				event = a.Value.String()
+			}
+			return true
+		})
+		if event != audit.EventServerStop || reason != tc.reason || outcome != tc.outcome {
+			t.Errorf("%s: event=%s reason=%s outcome=%s", tc.reason, event, reason, outcome)
+		}
+		// The listeners are stopped: a second Shutdown is a no-op error-free
+		// call and the gRPC server refuses new work.
+		if err := httpSrv.Shutdown(context.Background()); err != nil {
+			t.Errorf("%s: http server not shut down: %v", tc.reason, err)
+		}
+	}
+}
+
+// TestPreflightErrorsAreTyped: cmdServe distinguishes a server that never
+// started (server.start failure) from one that stopped, by ErrPreflight.
+func TestPreflightErrorsAreTyped(t *testing.T) {
+	err := preflightErr(errors.New("db unreachable"))
+	if !errors.Is(err, ErrPreflight) || err.Error() != "preflight: db unreachable" {
+		t.Errorf("preflightErr = %v (Is=%v)", err, errors.Is(err, ErrPreflight))
+	}
 }

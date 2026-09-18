@@ -17,6 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/devalexllc/polarbeam/internal/audit"
 	"github.com/devalexllc/polarbeam/internal/retiredir"
 	"github.com/devalexllc/polarbeam/internal/server"
 	"github.com/devalexllc/polarbeam/internal/server/ca"
@@ -108,12 +109,20 @@ func main() {
 	}
 }
 
+// loadConfig parses --config, loads the file, and installs logging at the
+// configured level for every subcommand — the operator CLI emits audit
+// records (cli.*) that must reach the same sink as the server's.
 func loadConfig(fs *flag.FlagSet, args []string) (config.Config, error) {
 	cfgPath := fs.String("config", "/etc/polarbeam/server.yaml", "path to server config file")
 	if err := fs.Parse(args); err != nil {
 		return config.Config{}, err
 	}
-	return config.Load(*cfgPath)
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		return config.Config{}, err
+	}
+	setupLogging(cfg.Log.Level)
+	return cfg, nil
 }
 
 // caLifetimes maps the validated config onto the CA's lifetime overrides.
@@ -127,12 +136,19 @@ func cmdServe(args []string) error {
 	if err != nil {
 		return err
 	}
-	setupLogging(cfg.Log.Level)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	slog.Info("polarbeam-server starting", "version", version.String())
-	return server.Run(ctx, cfg)
+	err = server.Run(ctx, cfg)
+	if errors.Is(err, server.ErrPreflight) {
+		// The server never came up; Run's own start record was not reached.
+		auditLog.Emit(context.Background(), audit.Event{
+			ID: audit.EventServerStart, Msg: "polarbeam-server failed preflight", Outcome: audit.Failure,
+			Attrs: []slog.Attr{slog.String("version", version.String()), slog.String("reason", "preflight")},
+		})
+	}
+	return err
 }
 
 func cmdMigrate(args []string) error {
@@ -153,7 +169,12 @@ func cmdMigrate(args []string) error {
 		return fmt.Errorf("db unreachable at configured db.url: %w", err)
 	}
 	defer conn.Close(ctx)
-	return migrate.Apply(ctx, conn)
+	if err := migrate.Apply(ctx, conn); err != nil {
+		auditCLI(audit.EventCLIMigrate, "migrations failed", audit.Failure, slog.String("reason", "apply_failed"))
+		return err
+	}
+	auditCLI(audit.EventCLIMigrate, "migrations applied", audit.Success)
+	return nil
 }
 
 const caUsage = "usage: polarbeam-server ca init --config <file> [--algorithm mldsa65|ecdsa-p256] [--if-missing]\n" +
@@ -195,6 +216,9 @@ func cmdCAInit(args []string) error {
 	// Report the loaded CA's algorithm, not the requested one: with
 	// --if-missing on an existing CA the two can differ, and the operator
 	// should see which algorithm is actually in force.
+	auditCLI(audit.EventCLICAInit, "ca ready", audit.Success,
+		slog.String("dir", cfg.CA.Dir), slog.String("algorithm", string(authority.Algorithm())),
+		slog.String("fingerprint", authority.Fingerprint()))
 	fmt.Printf("CA ready in %s (algorithm %s)\nfingerprint sha256:%s\n",
 		cfg.CA.Dir, authority.Algorithm(), authority.Fingerprint())
 	return nil
@@ -215,6 +239,8 @@ func cmdCARetire(args []string) error {
 	if err != nil {
 		return fmt.Errorf("ca retire: %w", err)
 	}
+	auditCLI(audit.EventCLICARetire, "ca retired", audit.Success,
+		slog.String("dir", filepath.Clean(cfg.CA.Dir)), slog.String("retired_to", retired))
 	fmt.Printf("CA retired: %s moved to %s\n"+
 		"next: polarbeam-server ca init --config <file> creates the replacement;\n"+
 		"keep the retired directory as the rollback path until every agent is re-enrolled\n",
@@ -271,6 +297,9 @@ func cmdToken(args []string) error {
 	if err != nil {
 		return err
 	}
+	// The token itself is never logged.
+	auditCLI(audit.EventCLITokenCreate, "join token issued", audit.Success,
+		slog.String("site", *site), slog.String("network", netName), slog.Duration("ttl", *ttl))
 	if *quiet {
 		fmt.Println(token)
 		return nil

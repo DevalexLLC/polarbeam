@@ -9,6 +9,7 @@ package httpapi
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/devalexllc/polarbeam/internal/audit"
 	pb "github.com/devalexllc/polarbeam/internal/pb/polarbeamv1"
 	"github.com/devalexllc/polarbeam/internal/server/configadmin"
 	"github.com/devalexllc/polarbeam/internal/server/probeadmin"
@@ -120,7 +122,7 @@ func (a *api) handleTargetsLegacy(w http.ResponseWriter, r *http.Request) {
 func (a *api) handleTargetConfigGet(w http.ResponseWriter, r *http.Request) {
 	target, err := a.db.GetTargetConfig(r.Context(), r.PathValue("name"), scopeIDs(r.Context()))
 	if err != nil {
-		writeStoreError(w, "get target config", err)
+		writeScopedStoreError(w, r, "get target config", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toTargetJSON(*target))
@@ -168,9 +170,10 @@ func (a *api) handleTargetPost(w http.ResponseWriter, r *http.Request) {
 	id, err := a.db.UpsertExternalTarget(r.Context(), in.Name, in.Address, in.Port, in.URL,
 		networkID, scopeIDs(r.Context()))
 	if err != nil {
-		writeStoreError(w, "upsert target", err)
+		writeScopedStoreError(w, r, "upsert target", err)
 		return
 	}
+	audit.Add(r.Context(), slog.String("target", in.Name), slog.String("network", in.Network))
 	writeJSON(w, http.StatusOK, map[string]string{"id": id.String()})
 }
 
@@ -178,7 +181,7 @@ func (a *api) handleTargetDelete(w http.ResponseWriter, r *http.Request) {
 	// The store refuses out-of-scope rows with ErrNotFound, so a tenant
 	// cannot tell a co-tenant's target from one that never existed.
 	if err := a.db.DeleteTarget(r.Context(), r.PathValue("name"), scopeIDs(r.Context())); err != nil {
-		writeStoreError(w, "delete target", err)
+		writeScopedStoreError(w, r, "delete target", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{})
@@ -247,9 +250,10 @@ func (a *api) handleMeshPost(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := a.db.UpsertMeshGroup(r.Context(), in.Name, networkID)
 	if err != nil {
-		writeStoreError(w, "upsert mesh", err)
+		writeScopedStoreError(w, r, "upsert mesh", err)
 		return
 	}
+	audit.Add(r.Context(), slog.String("mesh", in.Name), slog.String("network", in.Network))
 	writeJSON(w, http.StatusOK, map[string]string{"id": id.String()})
 }
 
@@ -267,7 +271,7 @@ func (a *api) handleMeshPost(w http.ResponseWriter, r *http.Request) {
 func (a *api) handleMeshDelete(w http.ResponseWriter, r *http.Request) {
 	deleted, err := a.db.DeleteMeshGroup(r.Context(), r.PathValue("name"), scopeIDs(r.Context()))
 	if err != nil {
-		writeStoreError(w, "delete mesh", err)
+		writeScopedStoreError(w, r, "delete mesh", err)
 		return
 	}
 	// The FK cascade is deliberate but never silent: the response carries
@@ -280,7 +284,7 @@ func (a *api) handleMeshMemberPost(w http.ResponseWriter, r *http.Request) {
 	// only same-plane agents, so adding a shared site to a tenant's mesh
 	// grants that tenant nothing it could not already measure.
 	if err := a.db.AddMeshMember(r.Context(), r.PathValue("name"), r.PathValue("site"), scopeIDs(r.Context())); err != nil {
-		writeStoreError(w, "add mesh member", err)
+		writeScopedStoreError(w, r, "add mesh member", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{})
@@ -288,7 +292,7 @@ func (a *api) handleMeshMemberPost(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) handleMeshMemberDelete(w http.ResponseWriter, r *http.Request) {
 	if err := a.db.RemoveMeshMember(r.Context(), r.PathValue("name"), r.PathValue("site"), scopeIDs(r.Context())); err != nil {
-		writeStoreError(w, "remove mesh member", err)
+		writeScopedStoreError(w, r, "remove mesh member", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{})
@@ -402,7 +406,7 @@ func (a *api) handleProbeGet(w http.ResponseWriter, r *http.Request) {
 	}
 	probe, err := a.db.GetProbeConfigScoped(r.Context(), id, scopeIDs(r.Context()))
 	if err != nil {
-		writeStoreError(w, "get probe config", err)
+		writeScopedStoreError(w, r, "get probe config", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toProbeCfgJSON(*probe))
@@ -519,9 +523,13 @@ func (a *api) handleProbePost(w http.ResponseWriter, r *http.Request) {
 			in.settings(probeType), enabled, updatedBy, scopeIDs(r.Context()))
 	}
 	if err != nil {
-		writeStoreError(w, "add probe", err)
+		writeScopedStoreError(w, r, "add probe", err)
 		return
 	}
+	audit.Add(r.Context(),
+		slog.String("probe", id.String()), slog.String("probe_type", in.Type),
+		slog.String("mesh", in.Mesh), slog.String("site", in.Site),
+		slog.String("target", in.Target), slog.String("network", in.Network))
 	// Advisory only: the probe was created. Warnings ride the success
 	// response so the UI can show what the configuration will actually
 	// measure when that differs from the likely intent — unless it was
@@ -549,7 +557,7 @@ func (a *api) handleProbePut(w http.ResponseWriter, r *http.Request) {
 	}
 	current, err := a.db.GetProbeConfig(r.Context(), id)
 	if err != nil {
-		writeStoreError(w, "get probe", err)
+		writeUnscopedStoreError(w, r, "get probe", err)
 		return
 	}
 	// GetProbeConfig is deliberately scope-blind (ingest and the CLI use it
@@ -623,6 +631,7 @@ func (a *api) probeInScope(w http.ResponseWriter, r *http.Request, p *store.Prob
 	if names == nil || slices.Contains(names, p.Network) {
 		return true
 	}
+	audit.Deny(r.Context(), "out_of_scope")
 	writeError(w, http.StatusNotFound, fmt.Sprintf("probe config %s does not exist", p.ID))
 	return false
 }
@@ -637,7 +646,7 @@ func (a *api) handleProbeDelete(w http.ResponseWriter, r *http.Request) {
 	// row is the only place its plane is recorded.
 	current, err := a.db.GetProbeConfig(r.Context(), id)
 	if err != nil {
-		writeStoreError(w, "get probe", err)
+		writeUnscopedStoreError(w, r, "get probe", err)
 		return
 	}
 	if !a.probeInScope(w, r, current) {

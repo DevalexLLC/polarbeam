@@ -22,7 +22,12 @@ func claimsErrorf(format string, args ...any) error {
 // identity is not allowed in: unmatched_role is "deny" and the role claim
 // matched neither admin_values nor any role rule. The callback surfaces it
 // as sso-error=denied — a policy outcome, not a configuration problem.
-type AccessDeniedError struct{ msg string }
+type AccessDeniedError struct {
+	msg string
+	// The identity the provider verified, for the audit record of the
+	// refusal: a policy denial is a decision about a known person.
+	Issuer, Subject, Username string
+}
 
 func (e *AccessDeniedError) Error() string { return e.msg }
 
@@ -82,9 +87,11 @@ func mapClaims(usernameClaim, roleClaim string, adminValues []string, roleRules 
 	}
 
 	if unmatchedRole == "deny" {
-		return nil, &AccessDeniedError{msg: fmt.Sprintf(
-			"subject %s matched no admin value or role rule and unmatched_role is deny (role claim %q carried %q)",
-			subject, roleClaim, values)}
+		return nil, &AccessDeniedError{
+			msg: fmt.Sprintf("subject %s matched no admin value or role rule and unmatched_role is deny (role claim %q carried %q)",
+				subject, roleClaim, values),
+			Issuer: issuer, Subject: subject, Username: username,
+		}
 	}
 	c.Role = store.RoleViewer
 	return c, nil

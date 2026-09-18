@@ -37,7 +37,7 @@ func TestUserActivityDays(t *testing.T) {
 	}
 
 	// A touch on the same UTC day updates the row instead of adding one.
-	if err := s.CreateLocalSession(ctx, id, []byte("hash-1"), "csrf", time.Now().Add(time.Hour), "$argon2id$h"); err != nil {
+	if _, err := s.CreateLocalSession(ctx, id, []byte("hash-1"), "csrf", time.Now().Add(time.Hour), "$argon2id$h"); err != nil {
 		t.Fatalf("CreateLocalSession: %v", err)
 	}
 	var sessionID uuid.UUID
@@ -111,7 +111,7 @@ func TestUserActivityDays(t *testing.T) {
 	})
 
 	t.Run("deleted identity keeps its activity", func(t *testing.T) {
-		if err := s.DeleteUser(ctx, id); err != nil {
+		if _, err := s.DeleteUser(ctx, id); err != nil {
 			t.Fatalf("DeleteUser: %v", err)
 		}
 		accounts, _, err := s.ListUserAccounts(ctx, store.UserAccountFilter{Status: "deleted", Limit: 10})

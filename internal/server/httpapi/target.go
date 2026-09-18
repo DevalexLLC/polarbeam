@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/devalexllc/polarbeam/internal/audit"
 	"github.com/devalexllc/polarbeam/internal/server/store"
 )
 
@@ -50,6 +51,7 @@ func (a *api) targetEndpoints(w http.ResponseWriter, r *http.Request) (*store.Ta
 		return nil, false
 	}
 	if ep == nil {
+		audit.Deny(r.Context(), "not_found_or_out_of_scope")
 		writeError(w, http.StatusNotFound, "unknown target")
 		return nil, false
 	}

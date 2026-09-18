@@ -6,6 +6,7 @@
 package httpapi
 
 import (
+	"log/slog"
 	"math"
 	"net/http"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/devalexllc/polarbeam/internal/audit"
 	"github.com/devalexllc/polarbeam/internal/server/configadmin"
 	"github.com/devalexllc/polarbeam/internal/server/store"
 )
@@ -119,7 +121,7 @@ func (a *api) handleSitesConfigLegacy(w http.ResponseWriter, r *http.Request) {
 func (a *api) handleSiteConfigGet(w http.ResponseWriter, r *http.Request) {
 	si, err := a.db.GetSiteConfig(r.Context(), r.PathValue("name"), scopeIDs(r.Context()))
 	if err != nil {
-		writeStoreError(w, "get site config", err)
+		writeScopedStoreError(w, r, "get site config", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toSiteConfigJSON(*si))
@@ -145,6 +147,7 @@ func (a *api) handleSiteConfigPost(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, "create site", err)
 		return
 	}
+	audit.Add(r.Context(), slog.String("site", in.Name))
 	writeJSON(w, http.StatusOK, map[string]string{"id": id.String()})
 }
 
@@ -281,6 +284,10 @@ func (a *api) handleTokenPost(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, "create join token", err)
 		return
 	}
+	// The token itself is never logged; the site and plane it enrolls into
+	// are what the record needs.
+	audit.Add(r.Context(), slog.String("site", in.Site), slog.String("network", netName),
+		slog.Duration("ttl", ttl))
 	// The cleartext token exists exactly here, once — only the secret's hash
 	// is stored, so it can never be shown again. expires_at is a display
 	// convenience; the row's now()+ttl is authoritative.
@@ -301,7 +308,7 @@ func (a *api) handleTokenDelete(w http.ResponseWriter, r *http.Request) {
 	// The store refuses out-of-scope tokens with ErrNotFound, so a
 	// co-tenant's pending enrollment is not discoverable by id.
 	if err := a.db.DeleteJoinToken(r.Context(), id, scopeIDs(r.Context())); err != nil {
-		writeStoreError(w, "delete join token", err)
+		writeScopedStoreError(w, r, "delete join token", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{})

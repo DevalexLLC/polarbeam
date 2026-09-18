@@ -18,11 +18,11 @@ import (
 // methods the withSession middleware uses on every authenticated request.
 type sessionStore interface {
 	GetUserByUsername(ctx context.Context, username string) (*store.UserInfo, error)
-	CreateLocalSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time, verifiedHash string) error
+	CreateLocalSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time, verifiedHash string) (uuid.UUID, error)
 	GetSessionByTokenHash(ctx context.Context, tokenHash []byte) (*store.SessionInfo, error)
 	TouchSession(ctx context.Context, id uuid.UUID) error
 	DeleteSessionByTokenHash(ctx context.Context, tokenHash []byte) error
-	DeleteExpiredSessions(ctx context.Context) (int64, error)
+	DeleteExpiredSessions(ctx context.Context) ([]store.SessionRef, error)
 	RecordLogin(ctx context.Context, userID uuid.UUID) error
 }
 
@@ -33,11 +33,11 @@ type userStore interface {
 	MonthlyLoginStats(ctx context.Context, months int) ([]store.LoginMonthStat, error)
 	CreateUser(ctx context.Context, username, passwordHash, role string, networks []uuid.UUID) (uuid.UUID, error)
 	SetUserNetworks(ctx context.Context, id uuid.UUID, networks []uuid.UUID) error
-	SetUserDisabled(ctx context.Context, id uuid.UUID, disabled bool) error
-	DeleteUser(ctx context.Context, id uuid.UUID) error
+	SetUserDisabled(ctx context.Context, id uuid.UUID, disabled bool) (changed bool, sessions []store.SessionRef, err error)
+	DeleteUser(ctx context.Context, id uuid.UUID) ([]store.SessionRef, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (*store.UserInfo, error)
-	ResetLocalUserPassword(ctx context.Context, id uuid.UUID, passwordHash string) (username, role string, err error)
-	UpdateOwnPassword(ctx context.Context, userID uuid.UUID, verifiedHash, passwordHash string, keepSessionID uuid.UUID) error
+	ResetLocalUserPassword(ctx context.Context, id uuid.UUID, passwordHash string) (username, role string, revoked []store.SessionRef, err error)
+	UpdateOwnPassword(ctx context.Context, userID uuid.UUID, verifiedHash, passwordHash string, keepSessionID uuid.UUID) ([]store.SessionRef, error)
 }
 
 // siteConfigStore is the site admin CRUD surface.
@@ -161,9 +161,9 @@ type bannerStore interface {
 // (GetOIDCSettings also satisfies oidcauth.SettingsSource).
 type oidcStore interface {
 	GetOIDCSettings(ctx context.Context) (*store.OIDCSettings, error)
-	UpdateOIDCSettings(ctx context.Context, o store.OIDCSettings, keepSecret, keepRoleRules, keepUnmatchedRole bool) (*store.OIDCSettings, int64, error)
-	UpsertOIDCUser(ctx context.Context, issuer, subject, username, role string, networks []uuid.UUID, policyUpdatedAt time.Time) (*store.UserInfo, error)
-	CreateOIDCSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time, issuer, clientID string, policyUpdatedAt time.Time) error
+	UpdateOIDCSettings(ctx context.Context, o store.OIDCSettings, keepSecret, keepRoleRules, keepUnmatchedRole bool) (*store.OIDCSettings, []store.SessionRef, error)
+	UpsertOIDCUser(ctx context.Context, issuer, subject, username, role string, networks []uuid.UUID, policyUpdatedAt time.Time) (*store.OIDCUpsertResult, error)
+	CreateOIDCSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time, issuer, clientID string, policyUpdatedAt time.Time) (uuid.UUID, error)
 }
 
 // DB is the subset of *store.Store the dashboard needs. It is an interface

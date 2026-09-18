@@ -22,6 +22,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 
+	"github.com/devalexllc/polarbeam/internal/audit"
 	"github.com/devalexllc/polarbeam/internal/server/auth"
 	"github.com/devalexllc/polarbeam/internal/server/oidcauth"
 	"github.com/devalexllc/polarbeam/internal/server/store"
@@ -70,17 +71,25 @@ func (a *api) handleAuthProviders(w http.ResponseWriter, r *http.Request) {
 // handleOIDCStart begins the flow: mint state/nonce/PKCE, stash them in the
 // transient cookie, and bounce to the IdP's authorization endpoint.
 func (a *api) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
+	refused := func(outcome audit.Outcome, reason string) {
+		a.audit.Emit(r.Context(), audit.Event{
+			ID: audit.EventSSOStart, Msg: "sso start refused", Outcome: outcome,
+			Remote: clientIP(r), Attrs: []slog.Attr{slog.String("reason", reason)},
+		})
+	}
 	if !a.ssoLimiter.allow(clientIP(r)) {
+		refused(audit.Denied, "rate_limited")
 		writeError(w, http.StatusTooManyRequests, "too many attempts; try again in a minute")
 		return
 	}
 	prov, _, err := a.providers.Provider(r.Context())
 	if err != nil {
-		code := "provider"
+		code, reason := "provider", "provider_unavailable"
 		if errors.Is(err, oidcauth.ErrDisabled) {
-			code = "config"
+			code, reason = "config", "disabled"
 		}
 		slog.Warn("httpapi: oidc start", "err", err)
+		refused(audit.Failure, reason)
 		ssoRedirect(w, r, code)
 		return
 	}
@@ -112,7 +121,24 @@ func (a *api) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 // failure logs its full detail server-side and sends the browser to a
 // short sso-error code — never IdP error strings in a URL.
 func (a *api) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
-	if !a.ssoLimiter.allow(clientIP(r)) {
+	remote := clientIP(r)
+	// username and issuer are filled in as the flow learns them, so a
+	// failure after the exchange is attributed to the identity the IdP
+	// asserted even though no session was minted.
+	var username, issuer string
+	refused := func(outcome audit.Outcome, reason string) {
+		attrs := []slog.Attr{slog.String("reason", reason)}
+		if issuer != "" {
+			attrs = append(attrs, slog.String("issuer", issuer))
+		}
+		a.audit.Emit(r.Context(), audit.Event{
+			ID: audit.EventSSOLogin, Msg: "sso login refused", Outcome: outcome,
+			Actor:  audit.Actor{User: username, Source: audit.SourceOIDC},
+			Remote: remote, Attrs: attrs,
+		})
+	}
+	if !a.ssoLimiter.allow(remote) {
+		refused(audit.Denied, "rate_limited")
 		writeError(w, http.StatusTooManyRequests, "too many attempts; try again in a minute")
 		return
 	}
@@ -129,6 +155,13 @@ func (a *api) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	})
 	fail := func(code, what string, err error) {
 		slog.Warn("httpapi: oidc callback: "+what, "err", err)
+		// A policy denial or a disabled account is a refusal of a verified
+		// identity; everything else is the flow failing.
+		outcome := audit.Failure
+		if code == "denied" || code == "disabled" {
+			outcome = audit.Denied
+		}
+		refused(outcome, reasonToken(what))
 		ssoRedirect(w, r, code)
 	}
 
@@ -174,13 +207,17 @@ func (a *api) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 			c = "claims"
 		}
 		// A policy denial (unmatched_role = deny), not a failure: the token
-		// verified and mapped cleanly, the identity just is not allowed in.
-		if _, ok := errors.AsType[*oidcauth.AccessDeniedError](err); ok {
+		// verified and mapped cleanly, the identity just is not allowed in —
+		// so the refusal is recorded against the identity the provider
+		// asserted.
+		if denied, ok := errors.AsType[*oidcauth.AccessDeniedError](err); ok {
 			c = "denied"
+			username, issuer = denied.Username, denied.Issuer
 		}
 		fail(c, "code exchange", err)
 		return
 	}
+	username, issuer = claims.Username, claims.Issuer
 
 	// Resolve the mapped network names against the networks table. A rule
 	// naming a since-deleted network contributes nothing (warned, not
@@ -189,6 +226,7 @@ func (a *api) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	// admitting the user with an empty scope would render an all-blank
 	// dashboard nobody asked for.
 	var networkIDs []uuid.UUID
+	var networkNames []string
 	if store.RoleIsNetworkScoped(claims.Role) {
 		for _, name := range claims.Networks {
 			id, err := a.db.NetworkIDByName(r.Context(), name)
@@ -201,6 +239,7 @@ func (a *api) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			networkIDs = append(networkIDs, id)
+			networkNames = append(networkNames, name)
 		}
 		if len(networkIDs) == 0 {
 			fail("claims", "role mapping resolved to no existing networks",
@@ -214,7 +253,7 @@ func (a *api) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	// (which revokes every SSO session) while this callback was at the IdP
 	// must not have its revocation undone by a stale-policy user write or
 	// session; the login fails as interrupted and the retry remaps freshly.
-	user, err := a.db.UpsertOIDCUser(r.Context(), claims.Issuer, claims.Subject, claims.Username, claims.Role, networkIDs, cfg.UpdatedAt)
+	res, err := a.db.UpsertOIDCUser(r.Context(), claims.Issuer, claims.Subject, claims.Username, claims.Role, networkIDs, cfg.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, store.ErrOIDCPolicyChanged) {
 			fail("state", "settings changed during login", err)
@@ -223,6 +262,12 @@ func (a *api) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		fail("internal", "upsert oidc user", err)
 		return
 	}
+	user := res.User
+	username = user.Username // the stored name may carry the collision suffix
+	// The account write is committed whatever happens to the login below,
+	// so it is recorded now: a created account, or a rename / role /
+	// scope change the IdP asserted (V-222413/414/467).
+	a.auditSSOAccount(r.Context(), res, networkNames, remote)
 	// disabled survives the upsert by design: it is the operator's per-user
 	// SSO revocation lever, independent of what the IdP still asserts.
 	if user.Disabled {
@@ -234,10 +279,11 @@ func (a *api) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	// IdP round-trips, and an admin may have switched providers (revoking
 	// every SSO session) in that window. Minting unchecked would hand the
 	// old provider's user a fresh session that outlives the revocation.
-	create := func(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time) error {
+	create := func(ctx context.Context, userID uuid.UUID, tokenHash []byte, csrfToken string, expiresAt time.Time) (uuid.UUID, error) {
 		return a.db.CreateOIDCSession(ctx, userID, tokenHash, csrfToken, expiresAt, cfg.Issuer, cfg.ClientID, cfg.UpdatedAt)
 	}
-	if _, err := a.issueSession(w, r, user, create); err != nil {
+	_, sessionID, err := a.issueSession(w, r, user, create)
+	if err != nil {
 		if errors.Is(err, store.ErrProviderChanged) {
 			fail("config", "provider changed during login", err)
 			return
@@ -249,7 +295,44 @@ func (a *api) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		fail("internal", "issue session", err)
 		return
 	}
+	a.audit.Emit(r.Context(), audit.Event{
+		ID: audit.EventSSOLogin, Msg: "sso login", Outcome: audit.Success,
+		Actor:  audit.Actor{User: user.Username, Source: audit.SourceOIDC, Session: sessionID.String()},
+		Remote: remote,
+		Attrs:  []slog.Attr{slog.String("issuer", claims.Issuer)},
+	})
 	ssoRedirect(w, r, "")
+}
+
+// auditSSOAccount records what UpsertOIDCUser did to the account: created,
+// or changed in username, role, or scope. networks is the resolved scope
+// the login applied (names), the same shape the previous scope is
+// reported in. Nothing is recorded for an unchanged re-login.
+func (a *api) auditSSOAccount(ctx context.Context, res *store.OIDCUpsertResult, networks []string, remote string) {
+	u := res.User
+	base := []slog.Attr{
+		slog.String("user_id", u.ID.String()),
+		slog.String("user_target", u.Username),
+		slog.String("role", u.Role),
+		slog.String("networks", strings.Join(networks, ",")),
+	}
+	switch {
+	case res.Created:
+		a.audit.Emit(ctx, audit.Event{
+			ID: audit.EventSSOAccountCreated, Msg: "sso account created", Outcome: audit.Success,
+			Actor: audit.Actor{User: u.Username, Source: audit.SourceOIDC}, Remote: remote,
+			Attrs: base,
+		})
+	case res.Changed():
+		a.audit.Emit(ctx, audit.Event{
+			ID: audit.EventSSOAccountUpdated, Msg: "sso account updated", Outcome: audit.Success,
+			Actor: audit.Actor{User: u.Username, Source: audit.SourceOIDC}, Remote: remote,
+			Attrs: append(base,
+				slog.String("prev_username", res.PrevUsername),
+				slog.String("prev_role", res.PrevRole),
+				slog.String("prev_networks", strings.Join(res.PrevNetworks, ","))),
+		})
+	}
 }
 
 // --- admin settings surface ---
@@ -583,8 +666,18 @@ func (a *api) handleOIDCSettingsPut(w http.ResponseWriter, r *http.Request) {
 		internalError(w, "update oidc settings", err)
 		return
 	}
-	if revoked > 0 {
-		slog.Info("httpapi: oidc provider or role policy changed; revoked sso sessions", "count", revoked)
+	// What the write changed, for the audit record: the provider identity,
+	// the claim→role policy, and every federated session it ended. The
+	// flags compare against the handler's read, which is what the admin
+	// saw; the store's own comparison (against the locked row) drives the
+	// revocation, and the revoked list is authoritative.
+	audit.Add(r.Context(),
+		slog.Bool("enabled", out.Enabled),
+		slog.Bool("provider_changed", current.Issuer != out.Issuer || current.ClientID != out.ClientID),
+		slog.Bool("policy_changed", oidcPolicyChanged(current, out)),
+		slog.Int("sessions_revoked", len(revoked)))
+	a.sessionsEnded(r.Context(), revoked, "oidc_policy_changed", clientIP(r))
+	if len(revoked) > 0 {
 		warnings = append(warnings, "identity provider or role mapping changed: all single sign-on sessions were signed out and users will be re-mapped at next sign-in")
 	}
 	// The next start/callback rebuilds the provider from the new row —
@@ -593,6 +686,18 @@ func (a *api) handleOIDCSettingsPut(w http.ResponseWriter, r *http.Request) {
 	resp := toOIDCSettingsJSON(out)
 	resp.Warnings = warnings
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// oidcPolicyChanged reports whether the claim→role mapping inputs differ
+// between two settings rows (the store's revocation rule, restated for
+// the audit record).
+func oidcPolicyChanged(a, b *store.OIDCSettings) bool {
+	return a.RoleClaim != b.RoleClaim ||
+		!slices.Equal(a.AdminValues, b.AdminValues) ||
+		a.UnmatchedRole != b.UnmatchedRole ||
+		!slices.EqualFunc(a.RoleRules, b.RoleRules, func(x, y store.OIDCRoleRule) bool {
+			return x.Value == y.Value && x.Role == y.Role && slices.Equal(x.Networks, y.Networks)
+		})
 }
 
 // handleOIDCSettingsTest runs discovery for the SUBMITTED configuration

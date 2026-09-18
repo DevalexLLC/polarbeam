@@ -88,7 +88,7 @@ func (a *api) handleNetworkThresholdPut(w http.ResponseWriter, r *http.Request) 
 		// The store answers ErrNotFound for a plane outside the caller's
 		// scope with the same wording an unknown name gets, so a tenant
 		// cannot enumerate other planes by writing to them.
-		writeStoreError(w, "upsert network threshold", err)
+		writeScopedStoreError(w, r, "upsert network threshold", err)
 		return
 	}
 	resp := networkThresholdWriteResponse{
@@ -109,7 +109,7 @@ func (a *api) handleNetworkThresholdPut(w http.ResponseWriter, r *http.Request) 
 
 func (a *api) handleNetworkThresholdDelete(w http.ResponseWriter, r *http.Request) {
 	if err := a.db.DeleteNetworkThreshold(r.Context(), r.PathValue("network"), scopeIDs(r.Context())); err != nil {
-		writeStoreError(w, "delete network threshold", err)
+		writeScopedStoreError(w, r, "delete network threshold", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})

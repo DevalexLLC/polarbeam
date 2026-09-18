@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strconv"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/devalexllc/polarbeam/internal/audit"
 	"github.com/devalexllc/polarbeam/internal/server/auth"
 	"github.com/devalexllc/polarbeam/internal/server/store"
 )
@@ -187,6 +189,12 @@ func (a *api) handleUserPost(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, "create user", err)
 		return
 	}
+	// The route names no object; the record must (V-222413).
+	audit.Add(r.Context(),
+		slog.String("user_target", strings.TrimSpace(in.Username)),
+		slog.String("user_id", id.String()),
+		slog.String("role", in.Role),
+		slog.String("networks", strings.Join(in.Networks, ",")))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":       id.String(),
 		"username": strings.TrimSpace(in.Username),
@@ -249,6 +257,11 @@ func (a *api) userIDParam(w http.ResponseWriter, r *http.Request, selfRefusal st
 		writeError(w, http.StatusConflict, selfRefusal)
 		return uuid.Nil, false
 	}
+	// Name the account for the audit record while it still exists (delete
+	// removes it); a lookup failure leaves the id, which the path carries.
+	if u, err := a.db.GetUserByID(r.Context(), id); err == nil && u != nil {
+		audit.Add(r.Context(), slog.String("user_target", u.Username))
+	}
 	return id, true
 }
 
@@ -266,11 +279,13 @@ func (a *api) handleUserResetPassword(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	username, role, err := a.db.ResetLocalUserPassword(r.Context(), id, hash)
+	username, role, revoked, err := a.db.ResetLocalUserPassword(r.Context(), id, hash)
 	if err != nil {
 		writeStoreError(w, "reset password", err)
 		return
 	}
+	audit.Add(r.Context(), slog.Int("sessions_revoked", len(revoked)))
+	a.sessionsEnded(r.Context(), revoked, "password_reset", clientIP(r))
 	writeJSON(w, http.StatusOK, map[string]string{
 		"id":       id.String(),
 		"username": username,
@@ -314,11 +329,32 @@ func (a *api) handleUserPut(w http.ResponseWriter, r *http.Request) {
 			writeStoreError(w, "set user networks", err)
 			return
 		}
+		audit.Add(r.Context(), slog.String("networks", strings.Join(in.Networks, ",")))
 	}
 	if in.Disabled != nil {
-		if err := a.db.SetUserDisabled(r.Context(), id, *in.Disabled); err != nil {
+		changed, live, err := a.db.SetUserDisabled(r.Context(), id, *in.Disabled)
+		if err != nil {
 			writeStoreError(w, "set user disabled", err)
 			return
+		}
+		audit.Add(r.Context(), slog.Bool("disabled", *in.Disabled), slog.Bool("changed", changed))
+		// Disable leaves the session rows in place (lookups filter on the
+		// flag, so re-enabling restores them); the audit trail records the
+		// access ending and, on enable, resuming, per session — only when
+		// the flag actually flipped (the store decides that under lock).
+		switch {
+		case !changed:
+		case *in.Disabled:
+			a.sessionsEnded(r.Context(), live, "user_disabled", clientIP(r))
+		default:
+			for _, ref := range live {
+				a.audit.Emit(r.Context(), audit.Event{
+					ID: audit.EventSessionRestored, Msg: "session restored", Outcome: audit.Success,
+					Actor:  audit.Actor{User: ref.Username, Session: ref.ID.String()},
+					Remote: clientIP(r),
+					Attrs:  []slog.Attr{slog.String("reason", "user_enabled")},
+				})
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{})
@@ -329,9 +365,12 @@ func (a *api) handleUserDelete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := a.db.DeleteUser(r.Context(), id); err != nil {
+	revoked, err := a.db.DeleteUser(r.Context(), id)
+	if err != nil {
 		writeStoreError(w, "delete user", err)
 		return
 	}
+	audit.Add(r.Context(), slog.Int("sessions_revoked", len(revoked)))
+	a.sessionsEnded(r.Context(), revoked, "user_deleted", clientIP(r))
 	writeJSON(w, http.StatusOK, map[string]string{})
 }

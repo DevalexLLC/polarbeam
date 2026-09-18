@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
+	"github.com/devalexllc/polarbeam/internal/audit"
 	"github.com/devalexllc/polarbeam/internal/server/ca"
 	"github.com/google/uuid"
 )
@@ -103,19 +104,39 @@ func (s *Server) certValidCached(ctx context.Context, serial *big.Int, agentID u
 // authenticateAgent extracts and validates the caller's identity. It returns
 // PermissionDenied for anything short of a valid, unrevoked, agent-bound
 // certificate.
+//
+// Every refusal is an audit record (agent.auth, denied): the mTLS layer
+// already rejected certificates the CA did not sign, so what arrives here
+// and is still refused is a missing certificate, a certificate that is not
+// an agent's, or one the database has revoked.
 func (s *Server) authenticateAgent(ctx context.Context) (*agentIdentity, error) {
+	refused := func(agentID uuid.UUID, reason string) {
+		var actor audit.Actor
+		attrs := []slog.Attr{slog.String("reason", reason)}
+		if agentID != uuid.Nil {
+			actor = agentActor(agentID)
+			attrs = append(attrs, slog.String("agent", agentID.String()))
+		}
+		s.audit.Emit(ctx, audit.Event{
+			ID: audit.EventAgentAuth, Msg: "agent authentication refused", Outcome: audit.Denied,
+			Actor: actor, Remote: peerHost(ctx), Attrs: attrs,
+		})
+	}
 	p, ok := peer.FromContext(ctx)
 	if !ok {
+		refused(uuid.Nil, "no_peer")
 		return nil, status.Error(codes.Unauthenticated, "no peer info")
 	}
 	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
 	if !ok || len(tlsInfo.State.VerifiedChains) == 0 || len(tlsInfo.State.VerifiedChains[0]) == 0 {
+		refused(uuid.Nil, "no_client_certificate")
 		return nil, status.Error(codes.Unauthenticated, "client certificate required")
 	}
 	leaf := tlsInfo.State.VerifiedChains[0][0]
 
 	agentID, err := ca.AgentIDFromCert(leaf)
 	if err != nil {
+		refused(uuid.Nil, "not_agent_certificate")
 		return nil, status.Error(codes.PermissionDenied, "certificate is not an agent certificate")
 	}
 	valid, err := s.certValidCached(ctx, leaf.SerialNumber, agentID)
@@ -124,6 +145,7 @@ func (s *Server) authenticateAgent(ctx context.Context) (*agentIdentity, error) 
 		return nil, status.Error(codes.Internal, "certificate check failed")
 	}
 	if !valid {
+		refused(agentID, "revoked_or_unknown")
 		return nil, status.Error(codes.PermissionDenied, "certificate revoked or unknown")
 	}
 	return &agentIdentity{AgentID: agentID, Cert: leaf}, nil

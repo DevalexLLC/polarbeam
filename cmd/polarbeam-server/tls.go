@@ -6,10 +6,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/devalexllc/polarbeam/internal/audit"
 )
 
 const tlsUsage = "usage: polarbeam-server tls install --config <file> --cert <pem> --key <pem> [--owner 10001]"
@@ -43,6 +46,8 @@ func cmdTLS(args []string) error {
 	if err != nil {
 		return err
 	}
+	auditCLI(audit.EventCLITLSInstall, "dashboard tls installed", audit.Success,
+		slog.String("cert_file", cfg.TLS.CertFile), slog.String("key_file", cfg.TLS.KeyFile))
 	fmt.Print(summary)
 	return nil
 }
