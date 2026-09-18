@@ -149,13 +149,14 @@ func (f *Forwarder) Handle(ctx context.Context, r slog.Record) error {
 		return nil
 	}
 	msgID := audit.EventID(r)
+	params := auditParams(r)
 	body := f.render(ctx, r)
 	// The sink read above may be retired by a concurrent Apply before the
 	// push lands; a retired sink refuses it, and the record goes to the
 	// sink that replaced it (or nowhere, when forwarding was disabled).
 	for attempt := 0; s != nil && attempt < 3; attempt++ {
 		if f.c.enqueue(s, msgID == audit.EventForwardRecovered, func(seq uint32, originIP string) []byte {
-			return s.fmt.message(s.cfg.Facility, r.Level, r.Time, msgID, seq, originIP, body)
+			return s.fmt.message(s.cfg.Facility, r.Level, r.Time, msgID, seq, originIP, params, body)
 		}) {
 			return nil
 		}
@@ -266,7 +267,7 @@ func (f *Forwarder) Close(ctx context.Context) int {
 	// queue it on s directly.
 	_ = c.enqueue(s, true, func(seq uint32, originIP string) []byte {
 		return s.fmt.message(s.cfg.Facility, slog.LevelInfo, c.opts.Now(), audit.EventForwardStop, seq, originIP,
-			[]byte(`msg="syslog forwarding stopped" event=`+audit.EventForwardStop+` outcome=success`))
+			eventParams(audit.EventForwardStop, audit.Success), []byte(`msg="syslog forwarding stopped" event=`+audit.EventForwardStop+` outcome=success`))
 	})
 	d := drainTimeout
 	if dl, ok := ctx.Deadline(); ok {
@@ -385,12 +386,6 @@ func (c *core) formatterFor(cfg Config) formatter {
 	return f
 }
 
-func (s *sink) originIP() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.localIP
-}
-
 func (s *sink) status() Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -416,7 +411,7 @@ func (s *sink) push(reserved bool, build func(seq uint32, originIP string) []byt
 		body := []byte(`msg="syslog forwarding disconnected" event=` + audit.EventForwardDisconnected +
 			` outcome=failure host=` + quoteValue(s.cfg.Host) + ` reason=` + quoteValue(err.Error()))
 		s.appendLocked(s.fmt.message(s.cfg.Facility, slog.LevelWarn, s.c.opts.Now(), audit.EventForwardDisconnected,
-			s.c.seqNextLocked(), s.localIP, body), false)
+			s.c.seqNextLocked(), s.localIP, eventParams(audit.EventForwardDisconnected, audit.Failure), body), false)
 	}
 	if build != nil {
 		s.appendLocked(build(s.c.seqNextLocked(), s.localIP), reserved)
@@ -738,7 +733,7 @@ func (f *Forwarder) Probe(ctx context.Context, cfg Config) (*ProbeResult, error)
 		originIP = host
 	}
 	msg := s.fmt.message(cfg.Facility, slog.LevelInfo, f.c.opts.Now(), audit.EventForwardTest, f.c.nextSeq(), originIP,
-		[]byte(`msg="syslog forwarding test" event=`+audit.EventForwardTest+` outcome=success`))
+		eventParams(audit.EventForwardTest, audit.Success), []byte(`msg="syslog forwarding test" event=`+audit.EventForwardTest+` outcome=success`))
 	_ = conn.SetWriteDeadline(deadline)
 	if _, err := conn.Write(frame(msg, cfg.Transport, cfg.Framing)); err != nil {
 		return nil, fmt.Errorf("send test record: %w", err)

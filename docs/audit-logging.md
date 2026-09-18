@@ -186,7 +186,7 @@ settings and forward their own records.
 Every record becomes one RFC 5424 message:
 
 ```
-<134>1 2026-09-17T14:03:22.418233Z cp.example polarbeam-server 4242 agent.enroll [timeQuality tzKnown="1"][origin software="polarbeam-server" swVersion="v0.14.0" ip="10.0.0.5"][meta sequenceId="7"] <BOM>msg="agent enrolled" event=agent.enroll outcome=success user=8b2f... user_source=agent remote=203.0.113.9 agent=8b2f... site=1c3e... hostname=edge-nyc probe_address=10.10.0.5
+<134>1 2026-09-17T14:03:22.418233Z cp.example polarbeam-server 4242 agent.enroll [timeQuality tzKnown="1"][origin software="polarbeam-server" swVersion="v0.14.0" ip="10.0.0.5"][meta sequenceId="7"][polarbeam@66894 event="agent.enroll" outcome="success" user="8b2f..." user_source="agent" remote="203.0.113.9"] <BOM>msg="agent enrolled" event=agent.enroll outcome=success user=8b2f... user_source=agent remote=203.0.113.9 agent=8b2f... site=1c3e... hostname=edge-nyc probe_address=10.10.0.5
 ```
 
 | Part | Value |
@@ -198,15 +198,27 @@ Every record becomes one RFC 5424 message:
 | APP-NAME | `polarbeam-server` |
 | PROCID | The process id. |
 | MSGID | The audit event id (`agent.enroll`), or `-` for an operational record. Route on it. |
-| STRUCTURED-DATA | `timeQuality tzKnown="1"` (the timestamp carries its offset); `origin` with `software`, `swVersion`, and `ip` (the server's address on the connection, once connected); `meta sequenceId` — a per-process counter from 1. A gap in the sequence is exactly the number of records the buffer dropped during an outage. |
+| STRUCTURED-DATA | `timeQuality tzKnown="1"` (the timestamp carries its offset); `origin` with `software`, `swVersion`, and `ip` (the server's address on the connection, once connected); `meta sequenceId` — a per-process counter from 1. A gap in the sequence is exactly the number of records the buffer dropped during an outage. On an audit record, `polarbeam@66894` — see below. |
 | MSG | UTF-8 with the byte-order mark RFC 5424 requires, then the record as `key=value` pairs in the order shown in Record layout, with slog's quoting (values containing spaces are double-quoted, newlines escaped). SIEMs extract these pairs natively (Splunk automatic KV, Elastic `kv`, rsyslog `mmkubernetes`-style parsers). |
 
 Messages longer than 8 192 octets are truncated at the end of MSG on a
 UTF-8 boundary and end with ` truncated=1`.
 
-No custom structured-data element is emitted: that needs an IANA Private
-Enterprise Number, which Devalex LLC has applied for and does not yet hold.
-Every field is in MSG.
+**The `polarbeam@66894` element** (Devalex LLC's IANA Private Enterprise
+Number is 66894) is present on every audit record and absent on
+operational ones, so its presence alone classifies a message. It carries
+the fixed fields of Record layout that the record has — `event`,
+`outcome`, `user`, `user_source`, `session`, `remote`, in that order — as
+SD-PARAMs, so a collector indexes them from the header without a
+key=value parser (rsyslog `mmpstrucdata` exposes them as
+`$!rfc5424-sd!polarbeam@66894!event` and so on; syslog-ng as
+`${.SDATA.polarbeam@66894.event}`). Control characters and `%` are
+percent-encoded (`%0A`, `%25`; a claimed username on a failed login is
+caller-supplied text and must not be able to split a record), then the
+value is escaped per RFC 5424 §6.3.3 and clipped to 255 bytes; after the
+receiver's RFC unescaping, percent-decoding recovers the exact value. Event-specific fields are in MSG only, and every
+fixed field stays in MSG too: nothing moved, the element is a duplicate
+for indexing, and existing MSG-parsing configurations keep working.
 
 ### Transports
 
