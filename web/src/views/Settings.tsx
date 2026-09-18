@@ -15,6 +15,7 @@ import PathThresholdsPanel from '../components/PathThresholdsPanel'
 import ProbesPanel from '../components/ProbesPanel'
 import SettingsPageError from '../components/SettingsPageError'
 import SitesPanel from '../components/SitesPanel'
+import SyslogSettingsPanel from '../components/SyslogSettingsPanel'
 import TargetsPanel from '../components/TargetsPanel'
 import ThresholdSettingsPanel from '../components/ThresholdSettings'
 import UsersPanel from '../components/UsersPanel'
@@ -134,6 +135,8 @@ export default function Settings({
               networks={knownNetworks}
               onAuthError={onAuthError}
             />
+          ) : tab === 'syslog' ? (
+            <SyslogSettingsPanel caps={caps} canWrite={caps.adminWrite} onAuthError={onAuthError} />
           ) : tab === 'banner' ? (
             <BannerSettingsPanel
               caps={caps}
