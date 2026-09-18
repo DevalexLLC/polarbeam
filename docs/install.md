@@ -1377,7 +1377,7 @@ Sign in as an admin and open **Settings → Log forwarding**. The fields:
 | Transport | `tls` (recommended, RFC 5425), `tcp` (RFC 6587), or `udp` (RFC 5426). The page warns that `tcp` is clear text and `udp` is lossy as well. |
 | Host / Port | The collector. 6514 for TLS, 601 or 514 for TCP, 514 for UDP. |
 | Framing | `octet-counted` (default, what rsyslog and syslog-ng expect) or `non-transparent` (LF-terminated, for Splunk's native TCP input). TLS is always octet-counted. |
-| Facility | RFC 5424 facility, default `local0`. |
+| Facility | The RFC 5424 facility written into every record's PRI header, default `local0`. It is a label for the collector's routing and filter rules (for example rsyslog `local0.* /var/log/polarbeam.log`) and changes nothing about what is sent. The page offers the site-defined facilities `local0`–`local7` (pick the one your collector routes) and the security ones `auth`, `authpriv`, and `audit`; the API accepts every RFC 5424 name. |
 | Hostname | The HOSTNAME field of every record; empty uses the container's. |
 | Content | `all` (audit records plus operational log at the minimum level) or `audit` (audit records only). |
 | Minimum level | For operational records only; audit records always go. |

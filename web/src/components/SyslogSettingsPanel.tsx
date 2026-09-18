@@ -19,34 +19,21 @@ import type {
 } from '../types'
 import { usePolledResource } from '../usePolledResource'
 
-// Every RFC 5424 facility the server accepts (syslogfwd.FacilityCode),
-// locals first because they are what a collector is usually told to route.
-const FACILITIES = [
-  'local0',
-  'local1',
-  'local2',
-  'local3',
-  'local4',
-  'local5',
-  'local6',
-  'local7',
-  'auth',
-  'authpriv',
-  'audit',
-  'user',
-  'daemon',
-  'syslog',
-  'kern',
-  'mail',
-  'lpr',
-  'news',
-  'uucp',
-  'cron',
-  'ftp',
-  'ntp',
-  'alert',
-  'clock',
+// The facility is a label in the PRI header of every record (RFC 5424
+// §6.2.1): collectors route and filter on it, nothing else depends on it.
+// The server accepts all 24 codes (syslogfwd.FacilityCode); the panel offers
+// the ones that make sense for an application — the site-defined locals and
+// the security ones — and keeps whatever a row saved through the API holds.
+const FACILITY_GROUPS = [
+  {
+    label: 'Site-defined (recommended)',
+    options: ['local0', 'local1', 'local2', 'local3', 'local4', 'local5', 'local6', 'local7'],
+  },
+  { label: 'Security', options: ['auth', 'authpriv', 'audit'] },
 ] as const
+
+const FACILITY_HINT =
+  "tags every record for the collector's routing rules (rsyslog local0.*); does not change what is sent"
 
 interface Draft {
   enabled: boolean
@@ -65,6 +52,15 @@ interface Draft {
   clientKeyPem: string // always starts empty; empty = keep stored (while a certificate is set)
   serverName: string
 }
+
+type Option<K extends keyof Draft> = { value: Draft[K]; label: string }
+type OptionGroup<K extends keyof Draft> = { group: string; options: readonly Option<K>[] }
+const renderOptions = <K extends keyof Draft>(options: readonly Option<K>[]) =>
+  options.map((o) => (
+    <option key={String(o.value)} value={String(o.value)}>
+      {o.label}
+    </option>
+  ))
 
 type StringKeys<T> = { [K in keyof T]: T[K] extends string ? K : never }[keyof T]
 
@@ -216,6 +212,20 @@ export default function SyslogSettingsPanel({
   const current = guardCurrent ?? draftFrom(data)
   const status = describeStatus(data.status)
 
+  // A saved facility outside the offered groups (a row written through the
+  // API with one of the other codes) stays selectable for the whole edit,
+  // keyed on the loaded row rather than the draft so picking a listed value
+  // and changing one's mind does not require discarding every other edit.
+  const facilityOptions = [
+    ...(FACILITY_GROUPS.some((g) => (g.options as readonly string[]).includes(data.facility))
+      ? []
+      : [{ value: data.facility, label: `${data.facility} (set through the API)` }]),
+    ...FACILITY_GROUPS.map((g) => ({
+      group: g.label,
+      options: g.options.map((f) => ({ value: f, label: f })),
+    })),
+  ]
+
   const update = (patch: Partial<Draft>) => {
     // A test result describes the values it was run against — any edit
     // invalidates it, and bumping the sequence drops an in-flight test's
@@ -320,7 +330,7 @@ export default function SyslogSettingsPanel({
   const selectField = <K extends 'transport' | 'framing' | 'facility' | 'content' | 'minLevel' | 'onFailure'>(
     label: string,
     key: K,
-    options: readonly { value: Draft[K]; label: string }[],
+    options: readonly (Option<K> | OptionGroup<K>)[],
     hint?: string,
   ) => (
     <label className="threshold-field">
@@ -339,11 +349,15 @@ export default function SyslogSettingsPanel({
             update(patch)
           }}
         >
-          {options.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
+          {options.map((o) =>
+            'group' in o ? (
+              <optgroup key={o.group} label={o.group}>
+                {renderOptions(o.options)}
+              </optgroup>
+            ) : (
+              renderOptions([o])
+            ),
+          )}
         </select>
         {hint && <span className="hint">{hint}</span>}
       </span>
@@ -454,11 +468,7 @@ export default function SyslogSettingsPanel({
             )}
           </div>
           <div className="config-form-grid">
-            {selectField(
-              'Facility',
-              'facility',
-              FACILITIES.map((f) => ({ value: f, label: f })),
-            )}
+            {selectField('Facility', 'facility', facilityOptions, FACILITY_HINT)}
             {textField('Hostname', 'hostname', 'polarbeam.example', {
               hint: 'the HOSTNAME field of every record; empty uses the container hostname',
             })}

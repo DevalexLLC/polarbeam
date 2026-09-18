@@ -205,7 +205,8 @@ Messages longer than 8 192 octets are truncated at the end of MSG on a
 UTF-8 boundary and end with ` truncated=1`.
 
 No custom structured-data element is emitted: that needs an IANA Private
-Enterprise Number, which PolarBEAM does not hold. Every field is in MSG.
+Enterprise Number, which Devalex LLC has applied for and does not yet hold.
+Every field is in MSG.
 
 ### Transports
 
