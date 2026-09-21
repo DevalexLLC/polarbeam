@@ -1843,27 +1843,6 @@ Work from the compose directory on the control-plane host:
    may need a larger `migrate --timeout` (default 30 m); do not
    interrupt a running backfill.
 
-   The release that added columnstore compression (migration 0026)
-   registers three compression jobs whose first runs start as soon as
-   the migration commits and compress every already-eligible chunk in the
-   background, one chunk per transaction. On a large, long-running
-   installation that is a few hours of extra disk I/O and a transient
-   extra copy of one chunk at a time; ingest and the dashboard keep
-   working throughout, and nothing here needs to wait for it. The job
-   reads its configuration once when a run starts, so a cap set with
-   `alter_job` applies to *later* runs, not to one already in progress.
-   To pace the initial backlog anyway: cancel the running job's session
-   (it stops cleanly at the next chunk boundary), cap the chunks per run,
-   and let the schedule pick the rest up:
-
-   ```sh
-   docker compose exec timescaledb psql -U polarbeam -d polarbeam -c "
-     SELECT pg_cancel_backend(pid) FROM pg_stat_activity
-      WHERE application_name LIKE 'Columnstore Policy [%';
-     SELECT alter_job(job_id, config => config || '{\"maxchunks_to_compress\": 1}')
-       FROM timescaledb_information.jobs WHERE proc_name = 'policy_compression';"
-   ```
-
 5. **Recreate the services on the new version:**
 
    ```sh
