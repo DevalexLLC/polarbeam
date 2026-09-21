@@ -266,6 +266,80 @@ button.stat-card {
   white-space: nowrap;
 }
 
+/* The Site page's six-tile strip. The page shell caps at 1440px, so six
+   across leaves ~200px per tile: three columns by default above the mobile
+   breakpoint, six only from 1300px. The context lines wrap instead of
+   ellipsizing at every width — they carry the score month and the
+   "last snapshot" warning, which must never be cut off. Grid rows stretch
+   to the tallest tile, so a wrapped line never misaligns the hairlines. */
+.stat-grid-six {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.stat-grid-six .stat-context {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+/* Two rows of three: rule the second row and reset each row's first tile. */
+.stat-grid-six .stat-card:nth-child(3n + 1) {
+  padding-left: 0.15rem;
+  border-left: 0;
+}
+
+.stat-grid-six .stat-card:nth-child(n + 4) {
+  border-top: 1px solid var(--border);
+}
+
+@media (min-width: 1300px) {
+  .stat-grid-six {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+  .stat-grid-six .stat-card:nth-child(3n + 1) {
+    padding-left: 1.1rem;
+    border-left: 1px solid var(--border);
+  }
+  .stat-grid-six .stat-card:first-child {
+    padding-left: 0.15rem;
+    border-left: 0;
+  }
+  .stat-grid-six .stat-card:nth-child(n + 4) {
+    border-top: 0;
+  }
+}
+
+/* Definitions for the strip's three percentages: a collapsed disclosure in
+   the pair page's path-id register, sitting between the strip and the
+   cards it summarizes. */
+.stat-help {
+  margin: -0.75rem 0 1.5rem;
+  color: var(--ink-3);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.stat-help summary {
+  cursor: pointer;
+}
+
+.stat-help dl {
+  margin: 0.5rem 0 0;
+}
+
+.stat-help dt {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.stat-help dd {
+  margin: 0 0 0.5rem;
+}
+
+.stat-help p {
+  margin: 0;
+}
+
 /* Overview's main row: connectivity card (map/matrix) left at ≥50% width,
    fleet card right. align-items:stretch + the fleet scroll region's
    flex:1/min-height:0 collapse make the connectivity card the height

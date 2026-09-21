@@ -74,6 +74,17 @@ screens, Map otherwise), while every explicit Sites, Map, or Matrix choice
 must remain URL-backed. Keep SVG viewport math pure in
 `web/src/mapViewport.ts` and preserve keyboard-operable controls.
 
+The Site page's Availability and Performance tiles read `/api/v1/sites/scores`
+on their own 5-minute poll, outside the page's `Promise.all`, narrowed
+server-side by the top-bar network (the tallies are folded counts and must
+never be client-filtered like the page's other feeds) and gated on the loaded
+key so a plane switch never shows the previous plane's numbers. Their context
+lines always name the response month and flag a retained snapshot after a
+failed refresh. Incident-free time is a selected-window wall-clock figure, not
+a month-to-date sample ratio; all three are defined in the page's
+"How these figures are measured" disclosure, whose copy is pinned by
+`web/test/site-scores.test.mjs`.
+
 Keep React render paths pure under oxlint's React rules. Rendered state belongs
 in React state; synchronize refs used by event handlers or imperative libraries
 in a layout effect before passive consumers run. Destructure error-summary DOM

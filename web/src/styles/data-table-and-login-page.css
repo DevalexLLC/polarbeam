@@ -372,6 +372,19 @@ table.data-table td a:focus-visible {
   .stat-card:nth-child(n + 3) {
     border-top: 1px solid var(--border);
   }
+  /* The Site page's six-tile strip (workspace.css) rules itself as three
+     columns above this breakpoint; restate the two-column rhythm at the
+     same specificity so its 3n+1 reset does not leak into row two. */
+  .stat-grid-six {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .stat-grid-six .stat-card:nth-child(even) {
+    padding-left: 1.1rem;
+    border-left: 1px solid var(--border);
+  }
+  .stat-grid-six .stat-card:nth-child(3) {
+    border-top: 1px solid var(--border);
+  }
 }
 
 /* The breakpoint is in em so it scales with the user's text size along with

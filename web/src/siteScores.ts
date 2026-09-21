@@ -53,6 +53,32 @@ export function siteScoreRatios(row: SiteScoreRow | undefined): SiteScore {
   }
 }
 
+// The Site dashboard tiles' context line. Every loaded state names the
+// response month (formatted server-side in UTC), so a snapshot retained
+// across a month boundary — or after a failed refresh — can never read as
+// the current month; `error` flags that retained-snapshot case the way the
+// map card's caption does. Performance has its own zero-denominator state:
+// samples with no OK run leave nothing to grade, which is not "no samples".
+// The tiles' context lines wrap, and Chrome breaks after an ordinary hyphen,
+// so the month's hyphen is rendered as U+2011 (non-breaking; IBM Plex Sans
+// carries the glyph) to keep "2026-09" on one line.
+export type SiteScoreKind = 'availability' | 'performance'
+
+export function siteScoreContext(
+  kind: SiteScoreKind,
+  row: SiteScoreRow | undefined,
+  month: string | null,
+  error: boolean,
+): string {
+  if (month == null) return error ? 'Scores unavailable' : 'Loading month-to-date scores…'
+  month = month.replaceAll('-', '\u2011')
+  let text: string
+  if (!row || row.samples === 0) text = `No samples · ${month}`
+  else if (kind === 'performance' && row.ok_samples === 0) text = `No OK runs · ${month}`
+  else text = `${kind === 'availability' ? 'OK probe runs' : 'OK runs in healthy hours'} · ${month}`
+  return error ? `${text} · last snapshot` : text
+}
+
 // Tone bands shared with the Site dashboard's incident-free tile, so the
 // product's two month-scale percentages never disagree about what "good"
 // is: 100 % is good, anything down to 99 % is a warning, below is critical.
