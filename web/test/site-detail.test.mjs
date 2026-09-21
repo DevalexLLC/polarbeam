@@ -12,6 +12,11 @@ test('site detail composes the overview feeds with a site-filtered incident hist
   assert.match(site, /`\/api\/v1\/outages\?window=\$\{win\}&site=\$\{encodeURIComponent\(name\)\}&include_routes=true`/)
   assert.match(site, /apiGet<AgentHealthResponse>\('\/api\/v1\/agents\/health\?window=24h'\)/)
   assert.match(site, /key: \[name, win\]\.join\('\\u0000'\)/)
+  // The month-to-date scores are a separate, slower poll: the page's own
+  // load must never wait on them.
+  const composed = site.indexOf('.then(([matrix, agents, outages, settings, health])')
+  const scores = site.indexOf('apiGet<SiteScoresResponse>')
+  assert.ok(composed > 0 && scores > composed, 'scores fetch is outside the composed Promise.all')
   assert.match(site, /buildSiteTopology\(/)
   assert.match(site, /<FleetAgentsCard/)
   assert.match(site, /<IncidentTimeline/)

@@ -638,10 +638,10 @@ incident: a degraded link that goes fully down escalates to `probe_failing`.
 The server also detects agent silence separately, so a disconnected agent is
 not mistaken for every probe failing at once.
 
-The map's site card adds two month-to-date figures for the UTC calendar
-month so far, computed from the hourly aggregate over every non-traceroute
-series the site's agents run or that targets the site (a series between two
-sites counts for both). **Availability** is the share of those samples with
+The map's site card and the Site dashboard's stat strip show two
+month-to-date figures for the UTC calendar month so far, computed from the
+hourly aggregate over every non-traceroute series the site's agents run or
+that targets the site (a series between two sites counts for both). **Availability** is the share of those samples with
 status `OK`. **Performance** is the share of the successful samples that
 fell in hours graded healthy: an hour is healthy when the series' average
 latency and its loss (failed samples included — a timed-out train is loss)
@@ -651,6 +651,13 @@ its plane default over the global row. Warn-tier values feed this score but
 still never open incidents. The grading unit is one (agent, target, probe
 type) series per hour, the same grain the matrix and pair views use, so two
 same-type templates between the same endpoints grade as one blended series.
+The Site dashboard places both tiles next to **Incident-free time**, which
+is a different kind of figure: the share of the selected window (24h, 7d, …)
+during which no incident was open at the site — wall-clock time, not probe
+runs — so it follows the window selector while the two scores stay
+month-to-date. The page's "How these figures are measured" disclosure
+carries these definitions and the tone bands (100 % in plain ink, 99 % and
+above amber, below 99 % red) for operators who never open this file.
 There is no traffic-volume or throughput measurement in PolarBEAM, so the
 card carries no "traffic impacted" figure; that needs instrumentation the
 probes do not collect.

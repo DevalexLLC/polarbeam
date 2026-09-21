@@ -12,6 +12,7 @@ import {
   fmtPercentFixed,
   indexSiteScores,
   scoreTone,
+  siteScoreContext,
   siteScoreRatios,
   siteScoresPath,
 } from '../src/siteScores.ts'
@@ -166,11 +167,137 @@ test('the map card renders both scores with the shared tone and an honest dash',
   assert.ok(value < rows && rows < bar, 'score rows render between the headline value and the bar')
 })
 
+test("the site tiles' context line names the month in every loaded state", () => {
+  const month = '2026-09'
+  // The month's hyphen renders as U+2011 (non-breaking) so a wrapped context
+  // line never splits "2026-09"; the expectations spell it out to pin that.
+  const shown = '2026\u201109'
+  const shownPrev = '2026\u201108'
+  // Nothing loaded yet: the same two captions the map card uses.
+  assert.equal(siteScoreContext('availability', undefined, null, false), 'Loading month-to-date scores…')
+  assert.equal(siteScoreContext('performance', undefined, null, true), 'Scores unavailable')
+  // No row, or a row with no samples: both tiles say so, with the month.
+  assert.equal(siteScoreContext('availability', undefined, month, false), `No samples · ${shown}`)
+  const empty = { name: 'x', samples: 0, ok_samples: 0, healthy_ok_samples: 0 }
+  assert.equal(siteScoreContext('performance', empty, month, false), `No samples · ${shown}`)
+  // Samples but no OK run: availability is a real 0 with its normal line,
+  // performance has nothing to grade and must not claim "no samples".
+  const allFailed = { name: 'x', samples: 40, ok_samples: 0, healthy_ok_samples: 0 }
+  assert.equal(siteScoreContext('availability', allFailed, month, false), `OK probe runs · ${shown}`)
+  assert.equal(siteScoreContext('performance', allFailed, month, false), `No OK runs · ${shown}`)
+  const row = { name: 'x', samples: 40, ok_samples: 39, healthy_ok_samples: 30 }
+  assert.equal(siteScoreContext('availability', row, month, false), `OK probe runs · ${shown}`)
+  assert.equal(siteScoreContext('performance', row, month, false), `OK runs in healthy hours · ${shown}`)
+  // A retained snapshot after a failed refresh is flagged and still dated,
+  // so last month's numbers can never read as this month's.
+  assert.equal(
+    siteScoreContext('performance', row, '2026-08', true),
+    `OK runs in healthy hours · ${shownPrev} · last snapshot`,
+  )
+  assert.equal(
+    siteScoreContext('availability', allFailed, '2026-08', true),
+    `OK probe runs · ${shownPrev} · last snapshot`,
+  )
+  assert.equal(siteScoreContext('performance', allFailed, '2026-08', true), `No OK runs · ${shownPrev} · last snapshot`)
+  assert.equal(
+    siteScoreContext('availability', undefined, '2026-08', true),
+    `No samples · ${shownPrev} · last snapshot`,
+  )
+  // The source pins the replacement so an ordinary hyphen cannot creep back.
+  assert.match(read('../src/siteScores.ts'), /month = month\.replaceAll\('-', '\\u2011'\)/)
+})
+
 test('the site dashboard tile shares the score tone and percent formatting', () => {
   const site = read('../src/views/SiteDetail.tsx')
-  assert.match(site, /import \{ fmtPercent, scoreTone \} from '\.\.\/siteScores'/)
+  assert.match(
+    site.replaceAll(/\s+/g, ' '),
+    /import \{ SITE_SCORES_POLL_MS, fmtPercent, scoreTone, siteScoreContext, siteScoreRatios, siteScoresPath, \} from '\.\.\/siteScores'/,
+  )
   assert.match(site, /className=\{'stat-card' \+ scoreTone\(freeRatio\)\}/)
   assert.doesNotMatch(site, /function fmtPercent/)
+})
+
+test('the site dashboard polls the scores on their own cadence, narrowed by plane', () => {
+  const site = read('../src/views/SiteDetail.tsx')
+  assert.match(site, /const scoresPath = siteScoresPath\(netFilter\)/)
+  assert.match(site, /usePolledResource\(\(\) => apiGet<SiteScoresResponse>\(scoresPath\), \{/)
+  assert.match(site, /pollMs: SITE_SCORES_POLL_MS,\s*key: scoresPath,\s*resetOnChange: true,/)
+  assert.match(site, /const scores = scoresLoadedKey === scoresPath \? scoresData : null/)
+  assert.match(site, /const scoreRow = scores\?\.sites\.find\(\(s\) => s\.name === name\)/)
+  assert.match(site, /const \{ availability, performance \} = siteScoreRatios\(scoreRow\)/)
+  // Refresh reloads both feeds.
+  assert.match(site, /void reload\(\)\s*void reloadScores\(\)/)
+  // Two tone-classed tiles, trimmed percent like the incident-free tile
+  // (never the card's fixed two decimals), an honest dash when null, and
+  // the shared context helper for every state.
+  assert.match(site, /className="stat-grid stat-grid-six"/)
+  assert.match(site, /className=\{'stat-card' \+ scoreTone\(availability\)\} onClick=\{showScoreHelp\}/)
+  assert.match(site, /className=\{'stat-card' \+ scoreTone\(performance\)\} onClick=\{showScoreHelp\}/)
+  assert.match(site, /\{availability == null \? \(\s*'—'/)
+  assert.match(site, /\{performance == null \? \(\s*'—'/)
+  assert.match(site, /fmtPercent\(availability\)/)
+  assert.match(site, /fmtPercent\(performance\)/)
+  assert.doesNotMatch(site, /fmtPercentFixed/)
+  assert.match(site, /siteScoreContext\('availability', scoreRow, scoreMonth, scoresStale\)/)
+  assert.match(site, /siteScoreContext\('performance', scoreRow, scoreMonth, scoresStale\)/)
+  assert.match(site, /const scoreMonth = scores\?\.month \?\? null/)
+  assert.match(site, /const scoresStale = scoresError !== null/)
+  // The tiles sit between the incident-group tile and the incident-free tile.
+  const groups = site.indexOf('Active incident groups')
+  const avail = site.indexOf('>Availability<')
+  const perf = site.indexOf('>Performance<')
+  const free = site.indexOf('Incident-free time</span>')
+  assert.ok(
+    groups < avail && avail < perf && perf < free,
+    'score tiles render between incident groups and incident-free time',
+  )
+})
+
+test('the site dashboard defines all three percentages in a disclosure', () => {
+  const site = read('../src/views/SiteDetail.tsx')
+  assert.match(site, /const SCORE_HELP_ID = 'site-score-help'/)
+  assert.match(site, /if \(help instanceof HTMLDetailsElement\) help\.open = true/)
+  assert.match(site, /<details id=\{SCORE_HELP_ID\} className="stat-help">/)
+  assert.match(site, /<summary>How these figures are measured<\/summary>/)
+  assert.match(site, /<dt>Availability<\/dt>/)
+  assert.match(site, /<dt>Performance<\/dt>/)
+  assert.match(site, /<dt>Incident-free time<\/dt>/)
+  // The copy states the SQL semantics: OK share of runs, then the healthy-hour
+  // share of the OK runs, then the wall-clock window figure. oxfmt reflows
+  // JSX prose, so the pins read a whitespace-collapsed copy.
+  const prose = site.replaceAll(/\s+/g, ' ')
+  assert.match(prose, /Share of probe runs this UTC calendar month that returned OK/)
+  assert.match(prose, /packet loss inside an OK run does not lower it/)
+  assert.match(prose, /Share of those OK runs that fell in hours graded healthy/)
+  assert.match(prose, /failed runs count as loss/)
+  assert.match(prose, /pair, then network, then global/)
+  assert.match(prose, /Share of the selected window \(\{snapshotWin\}\) during which no incident was open/)
+  assert.match(prose, /counts wall-clock time, not probe runs/)
+  // Tone bands as the stylesheet actually renders them: healthy stays in
+  // ink (stat-good has no color rule), warn is amber, critical is red.
+  assert.match(prose, /A figure at 100 % stays in plain ink; 99 % and above turns amber; below 99 % turns red/)
+  assert.match(prose, /a dash for performance, because there are no successful runs to grade/)
+  // No heading inside the disclosure: the page's heading order is untouched.
+  const block = site.slice(site.indexOf('<details id={SCORE_HELP_ID}'), site.indexOf('</details>'))
+  assert.doesNotMatch(block, /<h[1-6]/)
+})
+
+test('the six-tile strip wraps its context lines and steps 2 → 3 → 6 columns', () => {
+  const css = readStyles()
+  assert.match(css, /\.stat-grid-six \{\s*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);/)
+  assert.match(
+    css,
+    /@media \(min-width: 1300px\) \{\s*\.stat-grid-six \{\s*grid-template-columns: repeat\(6, minmax\(0, 1fr\)\);/,
+  )
+  assert.match(css, /\.stat-grid-six \.stat-context \{[^}]*white-space: normal;/)
+  // The mobile block restates the two-column rhythm for the modifier.
+  const mobile = css.slice(css.indexOf('@media (max-width: 1100px)'))
+  assert.match(mobile, /\.stat-grid-six \{\s*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/)
+  // The base four-column strip (the Overview) is untouched.
+  assert.match(css, /\.stat-grid \{[^}]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/)
+  const help = css.slice(css.indexOf('.stat-help {'), css.indexOf('.stat-help p {'))
+  assert.doesNotMatch(help, /#[0-9a-f]{3,8}\b|rgb\(|hsl\(|oklch\(/i)
+  assert.match(help, /font-size: 0\.8rem/)
 })
 
 test('the score rows are styled with existing tokens only', () => {

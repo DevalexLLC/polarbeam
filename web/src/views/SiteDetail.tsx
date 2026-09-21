@@ -25,7 +25,14 @@ import {
   type ThresholdResolver,
 } from '../severity'
 import { agentIsLive, ratioStatus } from '../siteHealth'
-import { fmtPercent, scoreTone } from '../siteScores'
+import {
+  SITE_SCORES_POLL_MS,
+  fmtPercent,
+  scoreTone,
+  siteScoreContext,
+  siteScoreRatios,
+  siteScoresPath,
+} from '../siteScores'
 import { buildSiteTopology, topologyUrgentSites } from '../siteTopology'
 import { useTimezone } from '../timezone'
 import { usePolledResource } from '../usePolledResource'
@@ -37,11 +44,21 @@ import type {
   MatrixResponse,
   OutagesResponse,
   SettingsResponse,
+  SiteScoresResponse,
   Window,
 } from '../types'
 import { WINDOWS } from '../types'
 
 const scrollTo = (id: string) => document.getElementById(id)?.scrollIntoView({ block: 'nearest' })
+
+// The score tiles jump to their own definitions: open the disclosure first
+// so the scroll lands on the text, not on a collapsed summary line.
+const SCORE_HELP_ID = 'site-score-help'
+const showScoreHelp = () => {
+  const help = document.getElementById(SCORE_HELP_ID)
+  if (help instanceof HTMLDetailsElement) help.open = true
+  scrollTo(SCORE_HELP_ID)
+}
 
 // One direction of a peer row: the latest fold's status, latency, and loss,
 // plus per-plane chips on multi-network installs.
@@ -119,6 +136,31 @@ export default function SiteDetail({
   const outages = data?.outages ?? null
   const settings = data?.settings ?? null
   const health = data?.health ?? null
+
+  // Month-to-date scores ride their own slower poll, outside the page's
+  // Promise.all so the page never waits on them. Unlike the feeds above,
+  // they are narrowed server-side by plane: the tallies are folded counts,
+  // so the top-bar filter cannot be applied client-side. resetOnChange +
+  // the loadedKey gate keep a slow or failed request for the new plane from
+  // leaving the old plane's percentages on the tiles (the Overview's rule).
+  const scoresPath = siteScoresPath(netFilter)
+  const {
+    data: scoresData,
+    error: scoresError,
+    loadedKey: scoresLoadedKey,
+    reload: reloadScores,
+  } = usePolledResource(() => apiGet<SiteScoresResponse>(scoresPath), {
+    pollMs: SITE_SCORES_POLL_MS,
+    key: scoresPath,
+    resetOnChange: true,
+    onAuthError,
+    logLabel: 'site scores',
+  })
+  const scores = scoresLoadedKey === scoresPath ? scoresData : null
+  const scoreRow = scores?.sites.find((s) => s.name === name)
+  const { availability, performance } = siteScoreRatios(scoreRow)
+  const scoreMonth = scores?.month ?? null
+  const scoresStale = scoresError !== null
 
   // Identity resolves against the UNFILTERED site list: a site with no agent
   // on the selected plane is still this site, just unstaffed here.
@@ -282,7 +324,14 @@ export default function SiteDetail({
         </div>
         <div className="page-actions">
           <span className="freshness">Updated {fmtAgo(lastLoadedAt?.toISOString() ?? null)}</span>
-          <button className="secondary-button" disabled={refreshing} onClick={() => void reload()}>
+          <button
+            className="secondary-button"
+            disabled={refreshing}
+            onClick={() => {
+              void reload()
+              void reloadScores()
+            }}
+          >
             {refreshing ? 'Refreshing…' : 'Refresh'}
           </button>
         </div>
@@ -309,7 +358,7 @@ export default function SiteDetail({
         </div>
       </div>
 
-      <section className="stat-grid" aria-label="Site health summary">
+      <section className="stat-grid stat-grid-six" aria-label="Site health summary">
         <button
           type="button"
           className={'stat-card' + ratioStatus(liveAgents, siteAgents.length)}
@@ -347,6 +396,37 @@ export default function SiteDetail({
               : `${active.length}${outages.truncated ? '+' : ''} open ${active.length === 1 ? 'event' : 'events'}`}
           </span>
         </button>
+        {/* Month-to-date scores: the map card's two figures, with their
+            definitions one click away in the disclosure below the strip.
+            A null ratio is an honest dash, never an invented 100 %. */}
+        <button type="button" className={'stat-card' + scoreTone(availability)} onClick={showScoreHelp}>
+          <span className="stat-label">Availability</span>
+          <strong>
+            {availability == null ? (
+              '—'
+            ) : (
+              <>
+                {fmtPercent(availability)}
+                <small> %</small>
+              </>
+            )}
+          </strong>
+          <span className="stat-context">{siteScoreContext('availability', scoreRow, scoreMonth, scoresStale)}</span>
+        </button>
+        <button type="button" className={'stat-card' + scoreTone(performance)} onClick={showScoreHelp}>
+          <span className="stat-label">Performance</span>
+          <strong>
+            {performance == null ? (
+              '—'
+            ) : (
+              <>
+                {fmtPercent(performance)}
+                <small> %</small>
+              </>
+            )}
+          </strong>
+          <span className="stat-context">{siteScoreContext('performance', scoreRow, scoreMonth, scoresStale)}</span>
+        </button>
         <button type="button" className={'stat-card' + scoreTone(freeRatio)} onClick={() => scrollTo('site-incidents')}>
           <span className="stat-label">Incident-free time</span>
           <strong>
@@ -359,6 +439,38 @@ export default function SiteDetail({
           </span>
         </button>
       </section>
+
+      {/* The three percentages above look alike but measure different
+          things over different windows; the definitions live here rather
+          than on the map card so touch and keyboard readers get them too.
+          Plain text, no headings: the page's heading order stays as is. */}
+      <details id={SCORE_HELP_ID} className="stat-help">
+        <summary>How these figures are measured</summary>
+        <dl>
+          <dt>Availability</dt>
+          <dd>
+            Share of probe runs this UTC calendar month that returned OK, over every non-traceroute series this site's
+            agents run or that targets them (a series between two sites counts for both). One run is one sample whether
+            it sent a single packet or a train, so packet loss inside an OK run does not lower it.
+          </dd>
+          <dt>Performance</dt>
+          <dd>
+            Share of those OK runs that fell in hours graded healthy. An hour is healthy when the series' average
+            latency and its loss (failed runs count as loss) both stay under the warn thresholds effective for that path
+            — pair, then network, then global.
+          </dd>
+          <dt>Incident-free time</dt>
+          <dd>
+            Share of the selected window ({snapshotWin}) during which no incident was open at this site. Unlike the two
+            month-to-date scores it follows the window selector and counts wall-clock time, not probe runs.
+          </dd>
+        </dl>
+        <p>
+          A figure at 100 % stays in plain ink; 99 % and above turns amber; below 99 % turns red. A site with no samples
+          this month shows a dash for both scores; a site whose runs all failed shows 0 % availability and a dash for
+          performance, because there are no successful runs to grade.
+        </p>
+      </details>
 
       <section className="card site-peers-card" id="site-peers">
         <div className="card-head">
