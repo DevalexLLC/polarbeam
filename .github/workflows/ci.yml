@@ -521,7 +521,7 @@ jobs:
         id: sarif-server
         if: always() && steps.reports.outputs.server == 'true'
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
         with:
           sarif_file: ${{ runner.temp }}/trivy-reports/server.sarif
           category: trivy-server
@@ -529,7 +529,7 @@ jobs:
         id: sarif-agent
         if: always() && steps.reports.outputs.agent == 'true'
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
         with:
           sarif_file: ${{ runner.temp }}/trivy-reports/agent.sarif
           category: trivy-agent
@@ -537,7 +537,7 @@ jobs:
         id: sarif-proxy
         if: always() && steps.reports.outputs.proxy == 'true'
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
         with:
           sarif_file: ${{ runner.temp }}/trivy-reports/proxy.sarif
           category: trivy-proxy
