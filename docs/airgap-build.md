@@ -103,7 +103,7 @@ Prerequisites beyond this repository and Go 1.27.1:
   images, served from gcr.io, so a second registry to mirror; `alpine:3.24`
   for the server's and agent's compose-dev `dev` stages, plus `alpine:3.22`
   for the optional compose-dev `netem` sidecar;
-  `nginx:1.30.4-alpine-slim` at the digest pinned in
+  `nginx:1.30.5-alpine-slim` at the digest pinned in
   `deploy/docker/proxy.Dockerfile` — the *slim* official variant, which
   omits the dynamic-module packages and curl the stream-only proxy never
   loads, so stage that one rather than the full `-alpine` image). Building
