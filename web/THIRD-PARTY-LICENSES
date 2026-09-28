@@ -12,7 +12,7 @@ deliberately excluded.
 
 
 --------------------------------------------------------------------------------
-react-dom 19.2.8
+react-dom 19.3.0
 --------------------------------------------------------------------------------
 
 [LICENSE]
@@ -40,7 +40,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 --------------------------------------------------------------------------------
-react 19.2.8
+react 19.3.0
 --------------------------------------------------------------------------------
 
 [LICENSE]
@@ -100,7 +100,7 @@ end of terms and conditions
 The licenses of externally maintained libraries from which parts of the Software is derived are listed [here](https://github.com/rolldown/rolldown/blob/main/THIRD-PARTY-LICENSE).
 
 --------------------------------------------------------------------------------
-scheduler 0.27.0
+scheduler 0.28.0
 --------------------------------------------------------------------------------
 
 [LICENSE]
