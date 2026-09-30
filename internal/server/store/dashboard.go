@@ -175,7 +175,8 @@ type AgentProbeHealthRow struct {
 // a single health-strip bucket, with a representative most-recent error.
 // TargetKind/TargetName are nil when the target row is gone; DstSite is nil
 // for external targets. LastError is the newest non-NULL error in the group
-// (≤128 chars, truncated at ingest); nil when every row lacked one.
+// (≤128 bytes, cut on a rune boundary at ingest); nil when every row lacked
+// one.
 type AgentBucketFailureGroup struct {
 	ProbeID    uuid.UUID
 	ProbeType  int16
