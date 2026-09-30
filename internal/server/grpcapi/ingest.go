@@ -7,8 +7,10 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -27,7 +29,8 @@ const (
 	maxBatchSize = 5000
 	// Results stamped further in the future than this are clock garbage.
 	maxFutureSkew = 5 * time.Minute
-	// error text is truncated to keep hypertable rows narrow.
+	// error text is cut to this many bytes, on a rune boundary, to keep
+	// hypertable rows narrow.
 	maxErrorLen = 128
 
 	assignmentCacheTTL = 30 * time.Second
@@ -275,9 +278,7 @@ func resultToRow(r *pb.ProbeResult, now time.Time) (store.ResultRow, error) {
 		row.TotalUS = usColumn(tm.GetTotalUs())
 	}
 	if e := r.GetError(); e != "" {
-		if len(e) > maxErrorLen {
-			e = e[:maxErrorLen]
-		}
+		e = storableError(e)
 		row.Error = &e
 	}
 	if tr := r.GetTraceroute(); tr != nil {
@@ -295,6 +296,27 @@ func resultToRow(r *pb.ProbeResult, now time.Time) (store.ResultRow, error) {
 		row.PathMtu = payload
 	}
 	return row, nil
+}
+
+// storableError makes agent error text safe for a Postgres text column and
+// bounds it to maxErrorLen bytes. One unstorable row fails the whole batch
+// INSERT, and the agent retries that batch forever, so nothing behind it
+// drains (#227). NUL is valid UTF-8 that text still rejects, and it reaches
+// here verbatim: a TLS server's SAN lands in the x509 hostname error. Invalid
+// UTF-8 cannot arrive over the wire (proto3 strings are validated), but
+// resultToRow is pure, so it is repaired rather than assumed. Replacement
+// runs before the cut so the byte bound holds on the final string.
+func storableError(e string) string {
+	e = strings.ToValidUTF8(e, "\uFFFD")
+	e = strings.ReplaceAll(e, "\x00", "\uFFFD")
+	if len(e) <= maxErrorLen {
+		return e
+	}
+	cut := maxErrorLen
+	for cut > 0 && !utf8.RuneStart(e[cut]) {
+		cut--
+	}
+	return e[:cut]
 }
 
 // maxTracerouteHops caps hop counts from the wire; the prober sends at most

@@ -160,7 +160,7 @@ export interface AgentBucketFailureGroup {
   dst_site: string | null
   status: string
   count: number
-  last_error: string | null // ≤128 chars, truncated at ingest
+  last_error: string | null // ≤128 bytes, cut on a rune boundary at ingest
   last_time: string
 }
 
