@@ -1047,3 +1047,239 @@ func TestApplyDuringOutageReportsUndelivered(t *testing.T) {
 		t.Errorf("b got %s", m)
 	}
 }
+
+// --- in-flight acknowledgement ---
+
+// stalledConn holds its first Write until release (or Close), then fails
+// it with failErr, or lets it through when failErr is nil. Every write
+// that goes through lands on writes.
+type stalledConn struct {
+	net.Conn // unused methods; the writer only writes, sets deadlines and closes
+	failErr  error
+	started  chan struct{}
+	release  chan struct{}
+	closed   chan struct{}
+	once     sync.Once
+	shut     sync.Once
+	writes   chan string
+}
+
+func newStalledConn(failErr error) *stalledConn {
+	return &stalledConn{failErr: failErr, started: make(chan struct{}), release: make(chan struct{}),
+		closed: make(chan struct{}), writes: make(chan string, QueueSize+10)}
+}
+
+func (c *stalledConn) Write(b []byte) (int, error) {
+	first := false
+	c.once.Do(func() { first = true; close(c.started) })
+	if first {
+		select {
+		case <-c.release:
+		case <-c.closed:
+			return 0, net.ErrClosed
+		}
+		if c.failErr != nil {
+			return 0, c.failErr
+		}
+	}
+	select {
+	case <-c.closed:
+		return 0, net.ErrClosed
+	default:
+	}
+	c.writes <- string(b)
+	return len(b), nil
+}
+
+func (c *stalledConn) SetWriteDeadline(time.Time) error { return nil }
+func (c *stalledConn) Close() error                     { c.shut.Do(func() { close(c.closed) }); return nil }
+
+// waitStarted waits until the writer is inside its first write.
+func (c *stalledConn) waitStarted(t *testing.T) {
+	t.Helper()
+	select {
+	case <-c.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("writer never started writing")
+	}
+}
+
+// next waits for a write and returns the record without its octet count.
+func (c *stalledConn) next(t *testing.T) string {
+	t.Helper()
+	select {
+	case w := <-c.writes:
+		_, msg, _ := strings.Cut(w, " ")
+		return msg
+	case <-time.After(5 * time.Second):
+		t.Fatal("no write within 5s")
+		return ""
+	}
+}
+
+// stalledSink starts a writer whose live connection is conn.
+func stalledSink(t *testing.T, f *Forwarder, cfg Config, conn *stalledConn) *sink {
+	t.Helper()
+	s := newSink(f.c, cfg, nil)
+	s.conn = conn
+	go s.run()
+	t.Cleanup(func() { s.stop(time.Second) })
+	return s
+}
+
+// enqueueRecords queues n records whose body is "r" plus their own
+// sequence number, so deliveries show exactly which records survived.
+func enqueueRecords(f *Forwarder, s *sink, n int) {
+	for i := 0; i < n; i++ {
+		f.c.enqueue(s, false, func(seq uint32, _ string) []byte {
+			return []byte("r" + strconv.FormatUint(uint64(seq), 10))
+		})
+	}
+}
+
+// recSeq is the sequence number of an enqueueRecords record, or of a
+// formatted RFC 5424 message (the forwarder's own records).
+func recSeq(t *testing.T, msg string) int {
+	t.Helper()
+	if rest, ok := strings.CutPrefix(msg, "r"); ok {
+		n, err := strconv.Atoi(rest)
+		if err != nil {
+			t.Fatalf("bad record %q", msg)
+		}
+		return n
+	}
+	return seqOf(t, msg)
+}
+
+// TestInflightAckSurvivesOverflow: the queue overflowing while a record
+// is being written evicts only queued records; the successful write
+// acknowledges the record it wrote and nothing else (issue #228).
+func TestInflightAckSurvivesOverflow(t *testing.T) {
+	for _, k := range []int{0, 3} {
+		t.Run("overflow="+strconv.Itoa(k), func(t *testing.T) {
+			r := newReceiver(t, nil, false)
+			f := New(Options{})
+			conn := newStalledConn(nil)
+			s := stalledSink(t, f, tcpConfig(r), conn)
+			enqueueRecords(f, s, 1)
+			conn.waitStarted(t)
+			enqueueRecords(f, s, QueueSize+k)
+			during := s.status()
+			close(conn.release)
+
+			// seq 1 is in flight; 2..k+1 are evicted; k+2.. survive in order.
+			if got := recSeq(t, conn.next(t)); got != 1 {
+				t.Fatalf("first write = seq %d, want 1", got)
+			}
+			for i := 1; i <= QueueSize; i++ {
+				if got, want := recSeq(t, conn.next(t)), 1+k+i; got != want {
+					t.Fatalf("write %d = seq %d, want %d (dropped_total %d)", i, got, want, s.status().DroppedTotal)
+				}
+			}
+			if during.Buffered != QueueSize+1 || during.DroppedTotal != uint64(k) {
+				t.Errorf("status during the write = %+v, want %d buffered (queue + in flight), %d dropped", during, QueueSize+1, k)
+			}
+			if n := s.stop(time.Second); n != 0 {
+				t.Errorf("undelivered = %d, want 0", n)
+			}
+			if st := s.status(); st.DroppedTotal != uint64(k) {
+				t.Errorf("dropped_total = %d, want %d", st.DroppedTotal, k)
+			}
+		})
+	}
+}
+
+// TestInflightRequeuedOnFailedWrite: a failed write puts its record back
+// at the front, so it is retried first and in sequence order.
+func TestInflightRequeuedOnFailedWrite(t *testing.T) {
+	r := newReceiver(t, nil, false)
+	f := New(Options{})
+	conn := newStalledConn(errors.New("stalled write failed"))
+	s := stalledSink(t, f, tcpConfig(r), conn)
+	enqueueRecords(f, s, 1)
+	conn.waitStarted(t)
+	enqueueRecords(f, s, 2)
+	close(conn.release)
+
+	// The writer reconnects to r: seqs 1..3, then the disconnected record.
+	for want := 1; want <= 3; want++ {
+		if got := recSeq(t, r.next(t)); got != want {
+			t.Fatalf("delivered seq %d, want %d", got, want)
+		}
+	}
+	if m := r.next(t); !strings.Contains(m, "event="+audit.EventForwardDisconnected) || seqOf(t, m) != 4 {
+		t.Fatalf("after the backlog = %s, want the disconnected record at seq 4", m)
+	}
+	if st := s.status(); st.DroppedTotal != 0 {
+		t.Errorf("dropped_total = %d, want 0", st.DroppedTotal)
+	}
+}
+
+// TestInflightDroppedWhenQueueFilledDuringFailedWrite: when producers
+// fill the queue during a write that then fails, the in-flight record is
+// the oldest and is dropped and counted like any overflow — and counted
+// against the outage, so the recovered record's dropped= matches the gap.
+func TestInflightDroppedWhenQueueFilledDuringFailedWrite(t *testing.T) {
+	r := newReceiver(t, nil, false)
+	f := New(Options{})
+	conn := newStalledConn(errors.New("stalled write failed"))
+	s := stalledSink(t, f, tcpConfig(r), conn)
+	enqueueRecords(f, s, 1)
+	conn.waitStarted(t)
+	enqueueRecords(f, s, QueueSize) // seqs 2..QueueSize+1: exactly full
+	close(conn.release)
+
+	// The disconnected record (seq QueueSize+2) evicts seq 2; the failed
+	// in-flight seq 1 finds the queue full and is dropped: a gap of two.
+	for want := 3; want <= QueueSize+1; want++ {
+		if got := recSeq(t, r.next(t)); got != want {
+			t.Fatalf("delivered seq %d, want %d", got, want)
+		}
+	}
+	if m := r.next(t); !strings.Contains(m, "event="+audit.EventForwardDisconnected) || seqOf(t, m) != QueueSize+2 {
+		t.Fatalf("after the backlog = %s, want the disconnected record at seq %d", m, QueueSize+2)
+	}
+	s.mu.Lock()
+	dropped, outage := s.dropped, s.dropped-s.droppedAtOutage
+	s.mu.Unlock()
+	if dropped != 2 || outage != 2 {
+		t.Errorf("dropped = %d (%d during the outage), want 2 and 2", dropped, outage)
+	}
+}
+
+// TestInflightCountedUndeliveredOnRetire: a destination replaced while a
+// write is stuck and the queue is full reports the in-flight record as
+// undelivered exactly once, and the replacement carries it.
+func TestInflightCountedUndeliveredOnRetire(t *testing.T) {
+	a := newReceiver(t, nil, false)
+	b := newReceiver(t, nil, false)
+	f := newTestForwarder(t)
+	alerts := &captureHandler{}
+	f.c.alert = slog.New(alerts)
+	conn := newStalledConn(nil) // never released: only the retiring Close ends the write
+	s := newSink(f.c, tcpConfig(a), nil)
+	s.conn = conn
+	f.c.mu.Lock()
+	f.c.sink = s
+	f.c.mu.Unlock()
+	go s.run()
+	enqueueRecords(f, s, 1)
+	conn.waitStarted(t)
+	enqueueRecords(f, s, QueueSize)
+
+	if err := f.Apply(tcpConfig(b), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if !alerts.has("undelivered") {
+		t.Error("no alert about undelivered records")
+	}
+	if st := f.Status(); st.DroppedTotal != QueueSize+1 {
+		t.Errorf("replacement dropped_total = %d, want %d", st.DroppedTotal, QueueSize+1)
+	}
+	s.mu.Lock()
+	n, dropped := s.n, s.dropped
+	s.mu.Unlock()
+	if n != QueueSize+1 || dropped != 0 {
+		t.Errorf("retired sink: %d queued, %d dropped; want %d and 0", n, dropped, QueueSize+1)
+	}
+}
