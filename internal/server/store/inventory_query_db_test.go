@@ -36,6 +36,14 @@ func targetInventoryIDs(rows []store.OperationalTargetInfo) []uuid.UUID {
 	return out
 }
 
+// uuidTextContains reports whether a target matches a search term only
+// through its random UUIDs. An agent target's name is agent:<agent_id>,
+// so AgentID covers it.
+func uuidTextContains(row store.OperationalTargetInfo, term string) bool {
+	return strings.Contains(row.ID.String(), term) ||
+		(row.AgentID != nil && strings.Contains(row.AgentID.String(), term))
+}
+
 func seedInventoryAgents(t *testing.T, ctx context.Context, s *store.Store) (netFixture, time.Time) {
 	t.Helper()
 	f := buildNetFixture(t, ctx, s)
@@ -363,9 +371,22 @@ func TestQueryOperationalTargetsAggregatesSortingPagingAndScope(t *testing.T) {
 	if summary.Total != 1 || len(rows) != 1 || rows[0].ID != mgmtTarget {
 		t.Errorf("stable-id search = ids %v summary %+v", targetInventoryIDs(rows), summary)
 	}
+	// Search also matches the text of every row's UUIDs (id, agent_id, and
+	// the agent:<uuid> name), and "8443" is valid hex: a random fixture
+	// UUID can legitimately contain it. The port match must be present;
+	// any other hit must be such a UUID match.
 	filter.Query = "8443"
 	rows, summary = query(filter)
-	if summary.Total != 1 || len(rows) != 1 || rows[0].ID != mgmtTarget {
+	portHit := false
+	for _, row := range rows {
+		switch {
+		case row.ID == mgmtTarget && row.Port == 8443:
+			portHit = true
+		case !uuidTextContains(row, filter.Query):
+			t.Errorf("port search matched %s (%s) with no port or UUID containing %q", row.ID, row.Name, filter.Query)
+		}
+	}
+	if !portHit || summary.Total != int64(len(rows)) {
 		t.Errorf("port search = ids %v summary %+v", targetInventoryIDs(rows), summary)
 	}
 	filter.Query = "site-b"
