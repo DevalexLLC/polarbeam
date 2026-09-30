@@ -337,6 +337,11 @@ type sink struct {
 	ring [][]byte
 	head int
 	n    int
+	// inflight is the record the writer took off the ring and is writing;
+	// nil when idle. It is outside the QueueSize budget, so an overflow
+	// during the write evicts only queued records, and a successful write
+	// acknowledges exactly this record.
+	inflight []byte
 
 	conn        net.Conn
 	connectedAt time.Time
@@ -372,7 +377,7 @@ type sink struct {
 
 func newSink(c *core, cfg Config, tc *tls.Config) *sink {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &sink{c: c, cfg: cfg, tlsCfg: tc, fmt: c.formatterFor(cfg), ring: make([][]byte, QueueSize+1), state: StateConnecting, since: c.opts.Now(), stopCh: make(chan struct{}), done: make(chan struct{}), ctx: ctx, cancel: cancel}
+	s := &sink{c: c, cfg: cfg, tlsCfg: tc, fmt: c.formatterFor(cfg), ring: make([][]byte, QueueSize+2), state: StateConnecting, since: c.opts.Now(), stopCh: make(chan struct{}), done: make(chan struct{}), ctx: ctx, cancel: cancel}
 	s.cond = sync.NewCond(&s.mu)
 	return s
 }
@@ -389,17 +394,22 @@ func (c *core) formatterFor(cfg Config) formatter {
 func (s *sink) status() Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return Status{State: s.state, Since: s.since, Buffered: s.n, DroppedTotal: s.dropped, LastError: s.lastErr}
+	buffered := s.n
+	if s.inflight != nil {
+		buffered++
+	}
+	return Status{State: s.state, Since: s.since, Buffered: buffered, DroppedTotal: s.dropped, LastError: s.lastErr}
 }
 
 // push appends to the ring (the caller holds the sequence lock; sequence
 // numbers are assigned here so a pending disconnect record takes the
 // number just before the record that follows it), dropping and counting
 // the oldest record when the QueueSize budget is spent, and warns once
-// per fill cycle at 75 % (ASD STIG V-222483). The ring has one spare slot
-// beyond QueueSize that only a reserved record (recovery, stop) may
-// occupy, so those never evict what they are about to account for. A
-// retired sink refuses the push.
+// per fill cycle at 75 % (ASD STIG V-222483). The ring has two spare
+// slots beyond QueueSize: one only a reserved record (recovery, stop) may
+// occupy, so those never evict what they are about to account for, and
+// one for an in-flight record requeued while the sink retires. A retired
+// sink refuses the push.
 func (s *sink) push(reserved bool, build func(seq uint32, originIP string) []byte) bool {
 	s.mu.Lock()
 	if s.stopping {
@@ -449,17 +459,47 @@ func quoteValue(v string) string {
 	return v
 }
 
-func (s *sink) pop() {
-	s.mu.Lock()
-	if s.n > 0 {
-		s.ring[s.head] = nil
-		s.head = (s.head + 1) % len(s.ring)
-		s.n--
-		if s.n*2 < QueueSize {
-			s.warned75 = false
-		}
+// takeLocked moves the oldest record off the ring into inflight; the
+// caller holds s.mu and has checked s.n > 0.
+func (s *sink) takeLocked() []byte {
+	msg := s.ring[s.head]
+	s.ring[s.head] = nil
+	s.head = (s.head + 1) % len(s.ring)
+	s.n--
+	if s.n*2 < QueueSize {
+		s.warned75 = false
 	}
+	s.inflight = msg
+	return msg
+}
+
+// ack clears the in-flight record after a successful write.
+func (s *sink) ack() {
+	s.mu.Lock()
+	s.inflight = nil
 	s.mu.Unlock()
+}
+
+// requeue returns the in-flight record to the front of the ring after a
+// failed write, so it is retried first. If producers filled the queue
+// meanwhile it is the oldest record there, and it is dropped and counted
+// as overflow would drop it — unless the sink is retiring: then it goes
+// back regardless (into the second spare slot), so stop reports it as
+// undelivered rather than losing it in a drop total that dies with the
+// sink. The writer calls it after fail, so a drop here is counted against
+// the outage fail has just opened.
+func (s *sink) requeue() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	msg := s.inflight
+	s.inflight = nil
+	if s.n >= QueueSize && !s.stopping {
+		s.dropped++
+		return
+	}
+	s.head = (s.head - 1 + len(s.ring)) % len(s.ring)
+	s.ring[s.head] = msg
+	s.n++
 }
 
 // run is the writer goroutine: connect (with backoff) while disconnected,
@@ -510,15 +550,16 @@ func (s *sink) run() {
 			s.connected(conn)
 			continue
 		}
-		msg := s.ring[s.head]
+		msg := s.takeLocked()
 		conn := s.conn
 		s.mu.Unlock()
 		_ = conn.SetWriteDeadline(s.c.opts.Now().Add(writeTimeout))
 		if _, err := conn.Write(frame(msg, s.cfg.Transport, s.cfg.Framing)); err != nil {
 			s.fail(conn, err)
+			s.requeue()
 			continue
 		}
-		s.pop()
+		s.ack()
 		s.delivered(conn)
 	}
 }
