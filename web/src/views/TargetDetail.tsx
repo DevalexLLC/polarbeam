@@ -319,9 +319,15 @@ export default function TargetDetail({
 
   // Same load discipline as PairDetail: settings ride along so threshold
   // changes and chart redraws land together, and the hook's generation
-  // counter drops superseded responses after a window/metric flip.
+  // counter drops superseded responses after a window/metric flip. The
+  // network filter is applied client-side below, so it is not in the key.
   const base = `/api/v1/targets/${encodeURIComponent(id)}`
-  const { data, error, reload } = usePolledResource(
+  const requestKey = [id, win, metric].join('\u0000')
+  const {
+    data,
+    snapshot: view,
+    reload,
+  } = usePolledResource(
     () =>
       Promise.all([
         apiGet<TargetSummaryResponse>(`${base}?window=${win}`),
@@ -338,19 +344,23 @@ export default function TargetDetail({
         paths,
         settings,
       })),
-    {
-      key: [id, win, metric].join('\u0000'),
-      enabled: validID,
-      onAuthError,
-      logLabel: 'target detail',
-    },
+    { key: requestKey, enabled: validID, onAuthError, logLabel: 'target detail' },
   )
-  const summary = data?.summary ?? null
-  const series = data?.series ?? null
-  const stages = data?.stages ?? null
-  const health = data?.health ?? null
-  const paths = data?.paths ?? null
-  const settings = data?.settings ?? null
+  // The body renders only the keyed snapshot, fetched for the selected
+  // window and metric, so a slow or failed switch never relabels the
+  // previous context's measurements (#229). The head and controls stay
+  // mounted meanwhile.
+  const current = view.status === 'ready' ? view.data : null
+  const summary = current?.summary ?? null
+  const series = current?.series ?? null
+  const stages = current?.stages ?? null
+  const health = current?.health ?? null
+  const paths = current?.paths ?? null
+  const settings = current?.settings ?? null
+  // Identity alone may come from the retained snapshot: App mounts
+  // TargetDetail with key={route.id}, so every response here is for this
+  // id, and a target's identity does not vary by window or metric.
+  const identity = data?.summary.target ?? null
 
   useEffect(() => {
     if (!selectedProbe) {
@@ -373,10 +383,10 @@ export default function TargetDetail({
     setSelectedProbe('', 'replace')
   }, [health, network, selectedProbe, setSelectedProbe])
 
-  const loadedTitle = summary
-    ? summary.target.kind === 'agent'
-      ? (summary.target.dst_site ?? 'deleted site')
-      : summary.target.name
+  const loadedTitle = identity
+    ? identity.kind === 'agent'
+      ? (identity.dst_site ?? 'deleted site')
+      : identity.name
     : null
   useEffect(() => {
     if (loadedTitle) onTitleChange(loadedTitle)
@@ -459,49 +469,50 @@ export default function TargetDetail({
         backLabel="Back to Targets"
       />
     )
-  if (error && !summary)
-    return (
-      <PageError
-        title="Target detail unavailable"
-        subject="target"
-        error={error}
-        backHref={targetInventoryHref()}
-        backLabel="Back to Targets"
-        onRetry={() => void reload()}
-      />
-    )
-  if (!summary || !series)
+  // Nothing has loaded yet: there is no page to keep, so the first load
+  // owns the whole view.
+  if (!identity) {
+    if (view.status === 'failed')
+      return (
+        <PageError
+          title="Target detail unavailable"
+          subject="target"
+          error={view.error}
+          backHref={targetInventoryHref()}
+          backLabel="Back to Targets"
+          onRetry={() => void reload()}
+        />
+      )
     return (
       <div className="state-panel" role="status">
         <span className="state-spinner" />
         Loading target detail…
       </div>
     )
+  }
 
-  const target = summary.target
+  const target = identity
   // Agent-kind targets are titled by site: their targets.name is the
   // synthesized agent:<uuid> handle, never shown (Agents-page convention).
   const title = target.kind === 'agent' ? (target.dst_site ?? 'deleted site') : target.name
-  // Network qualifiers appear only when the sources actually span planes,
-  // so single-network installs render the exact pre-networks labels.
-  const multiNetwork = new Set(summary.sources.map((s) => s.network)).size > 1
-  const srcLabel = (site: string, net: string) => (multiNetwork ? `${site} · ${net}` : site)
-  const shownSources = summary.sources.filter((s) => matchesNetworkFilter(network, s.network))
-  const shownSeriesSources = series.sources.filter((s) => matchesNetworkFilter(network, s.network))
-  const shownHealthProbes = (health?.probes ?? []).filter((p) => matchesNetworkFilter(network, p.network))
-  const shownPathSources = (paths?.sources ?? []).filter((s) => matchesNetworkFilter(network, s.network))
   const addressLabel = target.url ? target.url : target.port ? `${target.address}:${target.port}` : target.address
-  const withPctl = metric === 'latency' && series.source !== 'raw'
-  const lossCeiling = lossScaleCeiling(shownSeriesSources.map((s) => s.points))
-  const sourceLabel = series.source === 'raw' ? 'raw' : `${series.source} aggregate`
-  const bucketLabel =
-    (series.resolution_s >= 3600
-      ? `${series.resolution_s / 3600} h buckets`
-      : `${series.resolution_s / 60} min buckets`) + ` · ${sourceLabel}`
-  const stagePoints = stages ? densifyStages(stages.points, stages.resolution_s) : []
-  const stageData = hasAnyStage(stagePoints)
+  // Everything describing a response appears only with the response it
+  // describes.
+  const bucketLabel = series
+    ? (series.resolution_s >= 3600
+        ? `${series.resolution_s / 3600} h buckets`
+        : `${series.resolution_s / 60} min buckets`) +
+      ` · ${series.source === 'raw' ? 'raw' : `${series.source} aggregate`}`
+    : ''
+  const subLabel = [
+    bucketLabel,
+    view.status === 'loading' ? 'loading…' : '',
+    view.status === 'ready' && view.stale ? 'refresh failed, showing last data' : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
 
-  return (
+  const head = (
     <>
       <div className="page-head page-head-primary">
         <div>
@@ -515,10 +526,7 @@ export default function TargetDetail({
             {target.kind === 'external' ? 'external target' : 'agent target'}
           </p>
         </div>
-        <span className="sub">
-          {bucketLabel}
-          {error ? ' · refresh failed, showing last data' : ''}
-        </span>
+        <span className="sub">{subLabel}</span>
       </div>
 
       <div className="controls">
@@ -542,6 +550,48 @@ export default function TargetDetail({
           ))}
         </div>
       </div>
+    </>
+  )
+
+  if (view.status === 'failed')
+    return (
+      <>
+        {head}
+        <PageError
+          headingLevel={2}
+          title="Target detail unavailable"
+          subject="target"
+          error={view.error}
+          onRetry={() => void reload()}
+        />
+      </>
+    )
+  if (!summary || !series)
+    return (
+      <>
+        {head}
+        <div className="state-panel" role="status">
+          <span className="state-spinner" />
+          Loading target detail…
+        </div>
+      </>
+    )
+  // Network qualifiers appear only when the sources actually span planes,
+  // so single-network installs render the exact pre-networks labels.
+  const multiNetwork = new Set(summary.sources.map((s) => s.network)).size > 1
+  const srcLabel = (site: string, net: string) => (multiNetwork ? `${site} · ${net}` : site)
+  const shownSources = summary.sources.filter((s) => matchesNetworkFilter(network, s.network))
+  const shownSeriesSources = series.sources.filter((s) => matchesNetworkFilter(network, s.network))
+  const shownHealthProbes = (health?.probes ?? []).filter((p) => matchesNetworkFilter(network, p.network))
+  const shownPathSources = (paths?.sources ?? []).filter((s) => matchesNetworkFilter(network, s.network))
+  const withPctl = metric === 'latency' && series.source !== 'raw'
+  const lossCeiling = lossScaleCeiling(shownSeriesSources.map((s) => s.points))
+  const stagePoints = stages ? densifyStages(stages.points, stages.resolution_s) : []
+  const stageData = hasAnyStage(stagePoints)
+
+  return (
+    <>
+      {head}
 
       {shownSources.length === 0 ? (
         <div className="card">

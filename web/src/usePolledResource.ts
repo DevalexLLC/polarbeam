@@ -4,7 +4,13 @@
 // and stale-response suppression without hand-rolling the effect.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { apiGet } from './api'
-import { POLL_MS, startPolledResource, type PolledResourceController } from './polledResource'
+import {
+  keyedSnapshot,
+  POLL_MS,
+  startPolledResource,
+  type KeyedSnapshot,
+  type PolledResourceController,
+} from './polledResource'
 
 export { POLL_MS }
 
@@ -33,6 +39,11 @@ export interface PolledResource<T> {
   lastLoadedAt: Date | null
   // The key that was current when `data` was fetched.
   loadedKey: unknown
+  // The key that was current when `error` was set.
+  errorKey: unknown
+  // data/error gated on the current key (keyedSnapshot): views whose labels
+  // derive from the key render this, never another context's snapshot.
+  snapshot: KeyedSnapshot<T>
   reload: () => Promise<void>
 }
 
@@ -48,6 +59,7 @@ export function usePolledResource<T>(
   const [refreshing, setRefreshing] = useState(false)
   const [lastLoadedAt, setLastLoadedAt] = useState<Date | null>(null)
   const [loadedKey, setLoadedKey] = useState<unknown>(undefined)
+  const [errorKey, setErrorKey] = useState<unknown>(undefined)
 
   // Latest-value refs: the controller reads these so the effect only restarts
   // when the fetch identity (key/enabled/pollMs) changes, never because a
@@ -76,7 +88,10 @@ export function usePolledResource<T>(
           setLastLoadedAt(new Date())
           setLoadedKey(keyAtStart)
         },
-        onError: setError,
+        onError: (err) => {
+          setError(err)
+          setErrorKey(keyAtStart)
+        },
         onAuthError: (err) => optionsRef.current.onAuthError?.(err),
         logError: (err) => {
           const { logError, logLabel } = optionsRef.current
@@ -96,11 +111,14 @@ export function usePolledResource<T>(
         setRefreshing(false)
         setLastLoadedAt(null)
         setLoadedKey(undefined)
+        setErrorKey(undefined)
       }
     }
   }, [key, enabled, pollMs, resetOnChange])
 
   const reload = useCallback(() => controllerRef.current?.reload() ?? Promise.resolve(), [])
 
-  return { data, error, refreshing, lastLoadedAt, loadedKey, reload }
+  const snapshot = keyedSnapshot({ data, error, loadedKey, errorKey }, key)
+
+  return { data, error, refreshing, lastLoadedAt, loadedKey, errorKey, snapshot, reload }
 }

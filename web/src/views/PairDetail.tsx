@@ -249,7 +249,14 @@ export default function PairDetail({
   // paths, and MTUs all describe the same plane.
   const netQ = net === '' ? '' : `&network=${encodeURIComponent(net)}`
   const netQOnly = net === '' ? '' : `?network=${encodeURIComponent(net)}`
-  const { data, error, reload } = usePolledResource(
+  // NUL-joined: site names are unrestricted text (WorldMap's pairKey
+  // convention), so no printable separator is collision-free.
+  const requestKey = [a, b, win, metric, net].join('\u0000')
+  const {
+    data,
+    snapshot: view,
+    reload,
+  } = usePolledResource(
     () =>
       Promise.all([
         apiGet<PairResponse>(`/api/v1/pairs/${encodeURIComponent(a)}/${encodeURIComponent(b)}?window=${win}${netQ}`),
@@ -260,19 +267,19 @@ export default function PairDetail({
         apiGet<PathMtuResponse>(`/api/v1/path-mtu/${encodeURIComponent(a)}/${encodeURIComponent(b)}${netQOnly}`),
         apiGet<SettingsResponse>('/api/v1/settings'),
       ]).then(([pair, series, paths, mtus, settings]) => ({ pair, series, paths, mtus, settings })),
-    {
-      // NUL-joined: site names are unrestricted text (WorldMap's pairKey
-      // convention), so no printable separator is collision-free.
-      key: [a, b, win, metric, net].join('\u0000'),
-      onAuthError,
-      logLabel: 'pair detail',
-    },
+    { key: requestKey, onAuthError, logLabel: 'pair detail' },
   )
-  const pair = data?.pair ?? null
-  const series = data?.series ?? null
-  const paths = data?.paths ?? null
-  const mtus = data?.mtus ?? null
-  const settings = data?.settings ?? null
+  // `data` outlives a context switch while the next load is in flight or
+  // failed; the body renders only the keyed snapshot, fetched for the
+  // selected plane, window, and metric, so a slow or failed switch never
+  // relabels the previous context's measurements (#229). The head and
+  // controls stay mounted meanwhile.
+  const current = view.status === 'ready' ? view.data : null
+  const pair = current?.pair ?? null
+  const series = current?.series ?? null
+  const paths = current?.paths ?? null
+  const mtus = current?.mtus ?? null
+  const settings = current?.settings ?? null
 
   // Effective thresholds for this pair, resolved on the plane in view: the
   // top-bar filter when one is set, otherwise the pair's own plane when it
@@ -300,44 +307,47 @@ export default function PairDetail({
           critColor: c.crit,
         }
 
-  if (error && !series)
-    return (
-      <PageError
-        title="Pair detail unavailable"
-        subject="pair"
-        error={error}
-        backHref={inheritRouteNetwork('#/')}
-        backLabel="Back to Overview"
-        onRetry={() => void reload()}
-      />
-    )
-  if (!series || !pair)
+  // Nothing has loaded yet: there is no page to keep, so the first load
+  // owns the whole view.
+  if (data == null) {
+    if (view.status === 'failed')
+      return (
+        <PageError
+          title="Pair detail unavailable"
+          subject="pair"
+          error={view.error}
+          backHref={inheritRouteNetwork('#/')}
+          backLabel="Back to Overview"
+          onRetry={() => void reload()}
+        />
+      )
     return (
       <div className="state-panel" role="status">
         <span className="state-spinner" />
         Loading pair detail…
       </div>
     )
+  }
 
-  const withPctl = metric === 'latency' && series.source !== 'raw'
-  const lossCeiling = lossScaleCeiling([series.a_to_b.points, series.b_to_a.points])
-  const sourceLabel = series.source === 'raw' ? 'raw' : `${series.source} aggregate`
-  const bucketLabel =
-    (series.resolution_s >= 3600
-      ? `${series.resolution_s / 3600} h buckets`
-      : `${series.resolution_s / 60} min buckets`) + ` · ${sourceLabel}`
-
-  const directions: {
-    key: 'a_to_b' | 'b_to_a'
-    dir: 'a' | 'b'
-    chart: 'aToB' | 'bToA'
-    title: string
-  }[] = [
-    { key: 'a_to_b', dir: 'a', chart: 'aToB', title: `${a} → ${b}` },
-    { key: 'b_to_a', dir: 'b', chart: 'bToA', title: `${b} → ${a}` },
+  // The requested network always shows; everything describing a response
+  // appears only with the response it describes.
+  const bucketLabel = series
+    ? (series.resolution_s >= 3600
+        ? `${series.resolution_s / 3600} h buckets`
+        : `${series.resolution_s / 60} min buckets`) +
+      ` · ${series.source === 'raw' ? 'raw' : `${series.source} aggregate`}`
+    : ''
+  const subLabel = [
+    bucketLabel,
+    pair && pair.networks.length > 1 && net === '' ? `spans networks: ${pair.networks.join(', ')}` : '',
+    net !== '' ? `network: ${net}` : '',
+    view.status === 'loading' ? 'loading…' : '',
+    view.status === 'ready' && view.stale ? 'refresh failed, showing last data' : '',
   ]
+    .filter(Boolean)
+    .join(' · ')
 
-  return (
+  const head = (
     <>
       <div className="page-head page-head-primary">
         <div>
@@ -348,12 +358,7 @@ export default function PairDetail({
             <a href={siteDetailHref(a, win)}>{a}</a> ⇄ <a href={siteDetailHref(b, win)}>{b}</a>
           </h1>
         </div>
-        <span className="sub">
-          {bucketLabel}
-          {pair.networks.length > 1 && net === '' ? ` · spans networks: ${pair.networks.join(', ')}` : ''}
-          {net !== '' ? ` · network: ${net}` : ''}
-          {error ? ' · refresh failed, showing last data' : ''}
-        </span>
+        <span className="sub">{subLabel}</span>
       </div>
 
       <div className="controls">
@@ -377,6 +382,49 @@ export default function PairDetail({
           ))}
         </div>
       </div>
+    </>
+  )
+
+  if (view.status === 'failed')
+    return (
+      <>
+        {head}
+        <PageError
+          headingLevel={2}
+          title="Pair detail unavailable"
+          subject="pair"
+          error={view.error}
+          onRetry={() => void reload()}
+        />
+      </>
+    )
+  if (!series || !pair)
+    return (
+      <>
+        {head}
+        <div className="state-panel" role="status">
+          <span className="state-spinner" />
+          Loading pair detail…
+        </div>
+      </>
+    )
+
+  const withPctl = metric === 'latency' && series.source !== 'raw'
+  const lossCeiling = lossScaleCeiling([series.a_to_b.points, series.b_to_a.points])
+
+  const directions: {
+    key: 'a_to_b' | 'b_to_a'
+    dir: 'a' | 'b'
+    chart: 'aToB' | 'bToA'
+    title: string
+  }[] = [
+    { key: 'a_to_b', dir: 'a', chart: 'aToB', title: `${a} → ${b}` },
+    { key: 'b_to_a', dir: 'b', chart: 'bToA', title: `${b} → ${a}` },
+  ]
+
+  return (
+    <>
+      {head}
 
       <div className="pair-cards">
         <DirectionCard title={`${a} → ${b}`} s={pair.a_to_b} dir="a" />
