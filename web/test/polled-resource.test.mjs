@@ -3,7 +3,7 @@
 // resolved deferreds, so cancellation and interval logic run without React.
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { POLL_MS, startPolledResource } from '../src/polledResource.ts'
+import { keyedSnapshot, POLL_MS, startPolledResource } from '../src/polledResource.ts'
 
 const makeTimers = () => {
   const intervals = []
@@ -225,4 +225,94 @@ test('a failed load does not stop subsequent ticks', async () => {
   calls[1].resolve('recovered')
   await settle()
   assert.deepEqual(events.at(-2), ['data', 'recovered'])
+})
+
+// keyedSnapshot: what a keyed view (pair/target detail) may render. The hook
+// keeps data and error across key changes; each is trusted only under the
+// key that produced it (#229).
+const LAN = 'Alpha\u0000Beta\u000024h\u0000latency\u0000lan'
+const WAN = 'Alpha\u0000Beta\u000024h\u0000latency\u0000wan'
+const lanData = { samples: 123 }
+const wanData = { samples: 456 }
+const boom = new Error('boom')
+const state = (over) => ({ data: null, error: null, loadedKey: undefined, errorKey: undefined, ...over })
+
+test('keyedSnapshot: a slow switch shows loading, never the previous context', () => {
+  const s = state({ data: lanData, loadedKey: LAN })
+  assert.deepEqual(keyedSnapshot(s, WAN), { status: 'loading' })
+})
+
+test('keyedSnapshot: a failed switch reports the failure, never the previous context', () => {
+  const s = state({ data: lanData, loadedKey: LAN, error: boom, errorKey: WAN })
+  assert.deepEqual(keyedSnapshot(s, WAN), { status: 'failed', error: boom })
+})
+
+test('keyedSnapshot: a successful switch renders the new context', () => {
+  const s = state({ data: wanData, loadedKey: WAN })
+  assert.deepEqual(keyedSnapshot(s, WAN), { status: 'ready', data: wanData, stale: false })
+})
+
+test('keyedSnapshot: a same-context refresh failure keeps the snapshot, marked stale', () => {
+  const s = state({ data: lanData, loadedKey: LAN, error: boom, errorKey: LAN })
+  assert.deepEqual(keyedSnapshot(s, LAN), { status: 'ready', data: lanData, stale: true })
+})
+
+test("keyedSnapshot: the previous context's failure never marks the new one failed", () => {
+  // The render right after a switch still holds the old context's error;
+  // reporting it would flash (and focus) an error panel for a load that is
+  // only starting.
+  const s = state({ data: lanData, loadedKey: LAN, error: boom, errorKey: LAN })
+  assert.deepEqual(keyedSnapshot(s, WAN), { status: 'loading' })
+})
+
+test('keyedSnapshot: switching back to the context that last loaded renders it at once', () => {
+  // LAN -> WAN (never loaded) -> LAN: the retained snapshot is LAN's own.
+  const s = state({ data: lanData, loadedKey: LAN })
+  assert.deepEqual(keyedSnapshot(s, LAN), { status: 'ready', data: lanData, stale: false })
+})
+
+test('keyedSnapshot: nothing loaded yet is loading, even under the matching key', () => {
+  assert.deepEqual(keyedSnapshot(state({ loadedKey: LAN }), LAN), { status: 'loading' })
+  assert.deepEqual(keyedSnapshot(state({}), undefined), { status: 'loading' })
+})
+
+test('a failed plane switch never renders the previous plane through the controller', async () => {
+  // Mirrors usePolledResource: one controller per key, callbacks stamp the
+  // key that was current at start, stop() on every key change.
+  const hook = state({})
+  const mount = (key) => {
+    const f = makeFetcher()
+    const controller = startPolledResource(
+      f.fetcher,
+      POLL_MS,
+      {
+        onData: (data) => Object.assign(hook, { data, error: null, loadedKey: key }),
+        onError: (error) => Object.assign(hook, { error, errorKey: key }),
+      },
+      makeTimers().timers,
+    )
+    return { calls: f.calls, controller }
+  }
+
+  const lan = mount(LAN)
+  lan.calls[0].resolve(lanData)
+  await settle()
+  assert.deepEqual(keyedSnapshot(hook, LAN), { status: 'ready', data: lanData, stale: false })
+
+  // A LAN poll is in flight when the filter moves to WAN.
+  lan.controller.reload()
+  lan.controller.stop()
+  const wan = mount(WAN)
+  assert.deepEqual(keyedSnapshot(hook, WAN), { status: 'loading' }, 'slow switch')
+
+  wan.calls[0].reject(boom)
+  lan.calls[1].resolve({ samples: 999 })
+  await settle()
+  assert.deepEqual(keyedSnapshot(hook, WAN), { status: 'failed', error: boom }, 'failed switch')
+  assert.equal(hook.data, lanData, 'the late LAN response stays suppressed')
+
+  wan.controller.reload()
+  wan.calls[1].resolve(wanData)
+  await settle()
+  assert.deepEqual(keyedSnapshot(hook, WAN), { status: 'ready', data: wanData, stale: false }, 'retry')
 })

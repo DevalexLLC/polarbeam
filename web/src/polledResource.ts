@@ -95,3 +95,32 @@ export function startPolledResource<T>(
     },
   }
 }
+
+// What a keyed view may render for the context it is showing now. A hook
+// snapshot outlives key changes (the next load is in flight, or failed),
+// so data and error are each trusted only under the key that produced
+// them: another context's data never renders as this one's, and another
+// context's failure never reports this one as failed.
+export type KeyedSnapshot<T> =
+  // stale: this context loaded, then a refresh of it failed.
+  | { status: 'ready'; data: T; stale: boolean }
+  // This context has never loaded, and its latest attempt failed.
+  | { status: 'failed'; error: unknown }
+  | { status: 'loading' }
+
+export interface KeyedState<T> {
+  data: T | null
+  error: unknown
+  loadedKey: unknown
+  errorKey: unknown
+}
+
+// Keys compare with Object.is, the hook's own refetch identity.
+export function keyedSnapshot<T>(state: KeyedState<T>, key: unknown): KeyedSnapshot<T> {
+  const failedHere = state.error != null && Object.is(state.errorKey, key)
+  if (state.data != null && Object.is(state.loadedKey, key)) {
+    return { status: 'ready', data: state.data, stale: failedHere }
+  }
+  if (failedHere) return { status: 'failed', error: state.error }
+  return { status: 'loading' }
+}
