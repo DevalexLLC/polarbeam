@@ -2,9 +2,11 @@ package grpcapi
 
 import (
 	"bytes"
+	"net"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -92,6 +94,56 @@ func TestResultToRowTruncatesError(t *testing.T) {
 	}
 	if row.Error == nil || len(*row.Error) != maxErrorLen {
 		t.Errorf("error length = %v, want %d", row.Error, maxErrorLen)
+	}
+}
+
+// TestResultToRowErrorText pins that stored error text is always valid
+// Postgres text: a byte-offset cut through a rune, or a NUL (valid UTF-8,
+// but rejected by text columns — a remote TLS server can put one in an x509
+// hostname error via its SAN), fails the whole batch INSERT, and the agent
+// retries that batch forever (#227).
+func TestResultToRowErrorText(t *testing.T) {
+	a := func(n int) string { return strings.Repeat("a", n) }
+	cases := map[string]struct{ in, want string }{
+		"ascii at limit":            {a(128), a(128)},
+		"ascii over limit":          {a(500), a(128)},
+		"rune ends at limit":        {a(125) + "界", a(125) + "界"},
+		"3-byte rune straddles":     {a(127) + "界", a(127)},
+		"4-byte rune straddles":     {a(126) + "😀", a(126)},
+		"all multibyte":             {strings.Repeat("界", 50), strings.Repeat("界", 42)},
+		"nul mid-string":            {"x509: certificate is valid for evil\x00.example", "x509: certificate is valid for evil�.example"},
+		"nul at cutoff":             {a(127) + "\x00", a(127)},
+		"invalid utf-8 input":       {"ok\xffok", "ok�ok"},
+		"issue #227 dns error":      {(&net.DNSError{Err: "no such host", Name: strings.Repeat("界", 50) + ".invalid"}).Error(), "lookup " + strings.Repeat("界", 40)},
+		"short multibyte is intact": {"lookup 界.invalid: no such host", "lookup 界.invalid: no such host"},
+	}
+	now := time.Now()
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := validResult(now)
+			r.Status = pb.ProbeStatus_PROBE_STATUS_ERROR
+			r.Error = tc.in
+			row, err := resultToRow(r, now)
+			if err != nil {
+				t.Fatalf("resultToRow: %v", err)
+			}
+			if row.Error == nil {
+				t.Fatal("error text dropped")
+			}
+			got := *row.Error
+			if !utf8.ValidString(got) {
+				t.Errorf("stored error is invalid UTF-8: %d bytes, %q", len(got), got)
+			}
+			if strings.ContainsRune(got, 0) {
+				t.Errorf("stored error contains NUL: %q", got)
+			}
+			if len(got) > maxErrorLen {
+				t.Errorf("stored error is %d bytes, limit %d", len(got), maxErrorLen)
+			}
+			if got != tc.want {
+				t.Errorf("stored error = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
