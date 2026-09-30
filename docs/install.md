@@ -1738,15 +1738,33 @@ says which of the two cases applies.
 - The database is the sole agent-certificate revocation authority. There is no
   CRL or OCSP endpoint.
 
-There is not yet a certificate-revocation CLI. To revoke a known serial:
+To revoke an agent, revoke every certificate it holds. The agent ID is
+shown on the dashboard **Agents** page:
 
 ```sh
-docker compose exec timescaledb psql -U polarbeam -d polarbeam -c \
-  "UPDATE certificates SET revoked_at = now() WHERE serial = '<serial>'"
+docker compose exec server polarbeam-server agent revoke \
+  --config /etc/polarbeam/server.yaml \
+  --agent <agent-uuid>
 ```
 
-Existing agent streams using that certificate are dropped within about 30
-seconds.
+The command prints each serial it revoked. Existing agent streams using a
+revoked certificate are dropped within about 30 seconds, and renewal from a
+revoked certificate is refused. Revocation also closes the enrollment retry
+path: an agent may normally repeat its enrollment with the same (already
+used, unexpired) token and the same request to recover from a lost
+response, and once any of its certificates is revoked, that retry is refused
+too (audit reason `revoked_agent`). A revoked agent cannot come back on its
+own. To return the host to service, give it a new identity: stop it, move
+its identity aside with `polarbeam-agent identity retire` (see
+[Troubleshooting](#agents-connect-but-mesh-results-are-absent-or-target-the-proxy)),
+and enroll it with a fresh token. It becomes a new agent.
+
+`--serial <n>` revokes exactly one certificate instead. Use it only when
+you know the agent's other certificates are trustworthy, for example to
+retire one serial you have a specific record of. It warns when other
+certificates of the same agent remain valid. A renewed certificate has a
+new serial that revoking the old one does not cover, so for a compromised
+host always use `--agent`.
 
 ## Upgrades
 
@@ -2403,12 +2421,21 @@ one.
    Then, while the server is still down, undo the one security-relevant
    effect of the restore: the database is the sole revocation authority,
    so every agent certificate revoked *after* the backup is valid again
-   in the restored database. Revoke each such serial now, exactly as in
-   [Certificate lifecycle](#certificate-lifecycle) — from your own record
-   of revocations, which is why that record is worth keeping. Doing it
-   before the server starts matters: a revoked-then-restored certificate
-   that reaches a running server can renew itself, and the renewed
-   certificate has a new serial that revoking the old one does not cover.
+   in the restored database. Revoke each one again now, from your own
+   record of revocations (keep that record for exactly this reason). The
+   server is stopped, so use `run` rather than `exec`, and `--agent` for
+   an agent you revoked or `--serial` for a single serial (see
+   [Certificate lifecycle](#certificate-lifecycle)):
+
+   ```sh
+   docker compose run --rm --no-deps server agent revoke \
+     --config /etc/polarbeam/server.yaml --agent <agent-uuid>
+   ```
+
+   Doing it before the server starts matters: a revoked-then-restored
+   certificate that reaches a running server can renew itself, and the
+   renewed certificate has a new serial that revoking the old one does not
+   cover.
 
    Then expire every unused enrollment token. A token consumed or deleted
    after the backup is unused again in the restored database, still

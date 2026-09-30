@@ -62,6 +62,7 @@ const (
 	EventCLIMeshRemove    = "cli.mesh.rm"
 	EventCLIMeshDelete    = "cli.mesh.delete"
 	EventCLIMigrate       = "cli.migrate"
+	EventCLIAgentRevoke   = "cli.agent.revoke"
 )
 
 // Def describes one catalogued event for the documentation generator and
@@ -127,4 +128,5 @@ var Catalog = map[string]Def{
 	EventCLIMeshRemove:    {"Site removed from a mesh from the CLI.", []string{"mesh", "site"}},
 	EventCLIMeshDelete:    {"Mesh group deleted from the CLI.", []string{"mesh", "probes_deleted"}},
 	EventCLIMigrate:       {"Database migrations applied from the CLI.", []string{"reason"}},
+	EventCLIAgentRevoke:   {"Agent certificates revoked from the CLI (every unrevoked one, or a single serial).", []string{"agent", "serials", "serial"}},
 }

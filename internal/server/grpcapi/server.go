@@ -5,6 +5,7 @@ package grpcapi
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"log/slog"
 	"math/big"
 	"net"
@@ -144,11 +145,18 @@ func (s *Server) Enroll(ctx context.Context, req *pb.EnrollRequest) (*pb.EnrollR
 				NotAfter:  na,
 			}, nil
 		})
-	if err == store.ErrTokenInvalid {
+	if errors.Is(err, store.ErrEnrollRevoked) {
+		// A lost-response replay for an agent an operator has revoked:
+		// someone kept the token, CSR, and key. The caller gets the exact
+		// refusal any bad token gets; only the audit trail says why.
+		refused(audit.Denied, "revoked_agent")
+		return nil, status.Error(codes.PermissionDenied, store.ErrTokenInvalid.Error())
+	}
+	if errors.Is(err, store.ErrTokenInvalid) {
 		// The one refusal an attacker can provoke: a guessed, expired, or
 		// already-used token (V-222462's failed-logon analogue for agents).
 		refused(audit.Denied, "invalid_or_used_token")
-		return nil, status.Error(codes.PermissionDenied, err.Error())
+		return nil, status.Error(codes.PermissionDenied, store.ErrTokenInvalid.Error())
 	}
 	if err != nil {
 		slog.Error("enrollment failed", "err", err)
@@ -464,7 +472,10 @@ func (s *Server) RenewCert(ctx context.Context, req *pb.RenewCertRequest) (*pb.R
 	// Renewal mints a FRESH unrevoked certificate, so a 30s-stale cached
 	// auth is not good enough here: a just-revoked serial could otherwise
 	// convert its cache window into a brand-new credential and escape
-	// revocation entirely. Re-check uncached immediately before issuance.
+	// revocation entirely. RenewCertificate re-checks uncached, and does so
+	// in the same transaction as the insert under the agent-row lock that
+	// revocation also takes, so a revocation cannot land between the check
+	// and the new serial either.
 	remote := peerHost(ctx)
 	refused := func(outcome audit.Outcome, reason string) {
 		s.audit.Emit(ctx, audit.Event{
@@ -473,24 +484,29 @@ func (s *Server) RenewCert(ctx context.Context, req *pb.RenewCertRequest) (*pb.R
 			Attrs: []slog.Attr{slog.String("agent", id.AgentID.String()), slog.String("reason", reason)},
 		})
 	}
-	valid, err := s.store.CertValid(ctx, id.Cert.SerialNumber, id.AgentID)
-	if err != nil {
-		slog.Error("renewal revocation re-check failed", "err", err)
-		refused(audit.Failure, "internal")
-		return nil, status.Error(codes.Internal, "certificate check failed")
-	}
-	if !valid {
+	var (
+		certDER  []byte
+		notAfter time.Time
+		signErr  error
+	)
+	err = s.store.RenewCertificate(ctx, id.AgentID, id.Cert.SerialNumber, func() (store.IssuedCert, error) {
+		der, serial, na, err := s.ca.SignAgentCSR(req.GetCsrDer(), id.AgentID, id.Cert.Subject.CommonName)
+		if err != nil {
+			signErr = err
+			return store.IssuedCert{}, err
+		}
+		certDER, notAfter = der, na
+		return store.IssuedCert{Serial: serial, NotBefore: time.Now().Add(-5 * time.Minute), NotAfter: na}, nil
+	})
+	switch {
+	case errors.Is(err, store.ErrCertRevoked):
 		refused(audit.Denied, "revoked_or_unknown")
 		return nil, status.Error(codes.PermissionDenied, "certificate revoked or unknown")
-	}
-	certDER, serial, notAfter, err := s.ca.SignAgentCSR(req.GetCsrDer(), id.AgentID, id.Cert.Subject.CommonName)
-	if err != nil {
+	case signErr != nil:
 		refused(audit.Failure, "csr_rejected")
-		return nil, status.Errorf(codes.InvalidArgument, "CSR rejected: %v", err)
-	}
-	if err := s.store.InsertCertificate(ctx, serial, id.AgentID,
-		time.Now().Add(-5*time.Minute), notAfter); err != nil {
-		slog.Error("record renewed certificate failed", "err", err)
+		return nil, status.Errorf(codes.InvalidArgument, "CSR rejected: %v", signErr)
+	case err != nil:
+		slog.Error("certificate renewal failed", "err", err)
 		refused(audit.Failure, "internal")
 		return nil, status.Error(codes.Internal, "renewal failed")
 	}

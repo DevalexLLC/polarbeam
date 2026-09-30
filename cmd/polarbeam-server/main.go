@@ -53,6 +53,8 @@ Usage:
                                                      manage full-mesh site groups
   polarbeam-server user add --config <file> --username <name> [--admin]
                                                      create a dashboard user
+  polarbeam-server agent revoke --config <file> (--agent <uuid> | --serial <n>)
+                                                     revoke an agent's certificates, or one serial
   polarbeam-server seed --config <file> [--days 90]
                                                      load synthetic probe history (dev/gate)
   polarbeam-server healthcheck --config <file> [--timeout 5s]
@@ -89,6 +91,8 @@ func main() {
 		err = cmdMesh(os.Args[2:])
 	case "user":
 		err = cmdUser(os.Args[2:])
+	case "agent":
+		err = cmdAgent(os.Args[2:])
 	case "seed":
 		err = cmdSeed(os.Args[2:])
 	case "healthcheck":

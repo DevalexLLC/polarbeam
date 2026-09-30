@@ -309,7 +309,7 @@ func TestStreamConfigRevocationSweepDropsStream(t *testing.T) {
 
 	r := startStream(t, ctx, srv, agentID, serial, "")
 	waitInitial(ctx, t, r, raw, agentID) // no tick in flight when we revoke
-	if err := s.RevokeCertificate(ctx, serial); err != nil {
+	if _, _, err := s.RevokeCertificate(ctx, serial); err != nil {
 		t.Fatalf("RevokeCertificate: %v", err)
 	}
 	r.tickOnce(t)

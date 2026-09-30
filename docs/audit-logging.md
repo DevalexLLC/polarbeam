@@ -98,7 +98,7 @@ are `outcome=denied`; the last is `failure`.
 | Event | Trigger | Extra fields |
 |---|---|---|
 | `agent.auth` | An agent RPC was refused at the identity check: `no_peer`, `no_client_certificate`, `not_agent_certificate`, or `revoked_or_unknown` (the database is the revocation authority). Always `denied`. | `reason`, `agent` |
-| `agent.enroll` | Join-token enrollment. Success (`agent enrolled`) names the new agent, its site, the hostname it claimed, and the probe address recorded. `invalid_or_used_token` is `denied`; `missing_token_or_csr`, `csr_rejected`, `internal` are failures. | `agent`, `site`, `hostname`, `probe_address`, `reason` |
+| `agent.enroll` | Join-token enrollment. Success (`agent enrolled`) names the new agent, its site, the hostname it claimed, and the probe address recorded. `invalid_or_used_token` is `denied`, and so is `revoked_agent` — a replay of a consumed token with its original CSR (the lost-response retry path) for an agent that has a revoked certificate, which means someone kept the token, CSR, and key after the agent was revoked; the caller sees the same refusal as for any bad token. `missing_token_or_csr`, `csr_rejected`, `internal` are failures. | `agent`, `site`, `hostname`, `probe_address`, `reason` |
 | `agent.session.start` | An authenticated agent opened its config stream (`agent connected`). | `agent`, `version` |
 | `agent.session.end` | The stream closed (`agent disconnected`): `closed` (the agent went away, success); `revoked` (the periodic re-check found the certificate revoked, denied); `config_unavailable`, `send_failed`, `unconfirmable` (failures). | `agent`, `reason` |
 | `agent.cert.renew` | Certificate renewal. Success carries the new `not_after`; `revoked_or_unknown` is denied; `csr_rejected` and `internal` are failures. | `agent`, `not_after`, `reason` |
@@ -145,6 +145,7 @@ its own process, so its records go to that process's standard error.
 | `cli.probe.add` / `cli.probe.rm` | `probe …` | `probe`, `probe_type`, `mesh`, `site`, `target`, `network` |
 | `cli.mesh.create` / `cli.mesh.add` / `cli.mesh.rm` / `cli.mesh.delete` | `mesh …` | `mesh`, `site`, `network`, `probes_deleted` |
 | `cli.migrate` | `migrate` (success, or `failure` with `reason=apply_failed`) | `reason` |
+| `cli.agent.revoke` | `agent revoke` — `--agent` names every serial it revoked in `serials` (empty when none was left); `--serial` names the one in `serial` | `agent`, `serials`, `serial` |
 
 ## Standards mapping
 
