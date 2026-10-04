@@ -2,6 +2,7 @@ package grpcapi
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"math/big"
 	"testing"
@@ -81,5 +82,31 @@ func TestCertValidCached(t *testing.T) {
 	}
 	if calls != 7 {
 		t.Errorf("expired entry did not refetch: %d lookups", calls)
+	}
+}
+
+// TestCacheRevokedOverridesValidEntry: a revocation proven by an uncached
+// check replaces a fresh "valid" entry, so the next unary check refuses
+// without waiting out the TTL — and without another lookup.
+func TestCacheRevokedOverridesValidEntry(t *testing.T) {
+	ctx := context.Background()
+	agent := uuid.New()
+	serial := big.NewInt(4242)
+	calls := 0
+	s := &Server{fetchCertValid: func(context.Context, *big.Int, uuid.UUID) (bool, error) {
+		calls++
+		return true, nil
+	}}
+	if valid, err := s.certValidCached(ctx, serial, agent); err != nil || !valid {
+		t.Fatalf("seed: valid=%v err=%v", valid, err)
+	}
+
+	s.cacheRevoked(&agentIdentity{AgentID: agent, Cert: &x509.Certificate{SerialNumber: serial}})
+
+	if valid, err := s.certValidCached(ctx, serial, agent); err != nil || valid {
+		t.Errorf("after cacheRevoked: valid=%v err=%v, want false", valid, err)
+	}
+	if calls != 1 {
+		t.Errorf("cacheRevoked check cost %d lookups, want 1 (the seed only)", calls)
 	}
 }
