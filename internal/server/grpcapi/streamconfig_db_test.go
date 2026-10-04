@@ -316,6 +316,15 @@ func TestStreamConfigRevocationSweepDropsStream(t *testing.T) {
 	if err := r.joinErr(t); status.Code(err) != codes.PermissionDenied {
 		t.Errorf("post-revocation sweep returned %v, want PermissionDenied", err)
 	}
+
+	// The agent reconnects at once with the same certificate. The connect
+	// above cached it valid for 30s; the sweep's proof of revocation must
+	// override that entry, or the reconnect rides the stale cache for the
+	// rest of its TTL.
+	r2 := startStream(t, ctx, srv, agentID, serial, "")
+	if err := r2.joinErr(t); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("reconnect after the sweep drop returned %v, want PermissionDenied", err)
+	}
 }
 
 // Behavior 2b: fail closed — a sweep that cannot CONFIRM validity drops the

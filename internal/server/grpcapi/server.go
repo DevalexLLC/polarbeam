@@ -44,7 +44,8 @@ type Server struct {
 
 	// fetchCertValid is the test seam behind certValidCached; nil means
 	// s.store.CertValid. The stream sweep bypasses it (and the cache) on
-	// purpose — see certCache.
+	// purpose — see certCache — but writes a revoked verdict back
+	// (cacheRevoked).
 	fetchCertValid func(ctx context.Context, serial *big.Int, agentID uuid.UUID) (bool, error)
 
 	// streamTicker is the test seam for StreamConfig's liveness tick; nil
@@ -294,6 +295,7 @@ func (s *Server) streamConfig(ctx context.Context, hello *pb.AgentHello, stream 
 				return "unconfirmable", status.Error(codes.Unavailable, "certificate validity check failed")
 			}
 			if !valid {
+				s.cacheRevoked(id)
 				return "revoked", status.Error(codes.PermissionDenied, "certificate revoked")
 			}
 			// Rebuild only when a config write happened since the last
@@ -500,6 +502,7 @@ func (s *Server) RenewCert(ctx context.Context, req *pb.RenewCertRequest) (*pb.R
 	})
 	switch {
 	case errors.Is(err, store.ErrCertRevoked):
+		s.cacheRevoked(id)
 		refused(audit.Denied, "revoked_or_unknown")
 		return nil, status.Error(codes.PermissionDenied, "certificate revoked or unknown")
 	case signErr != nil:

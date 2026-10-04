@@ -101,6 +101,15 @@ func (s *Server) certValidCached(ctx context.Context, serial *big.Int, agentID u
 	return valid, nil
 }
 
+// cacheRevoked records a revocation that an UNCACHED check (the stream
+// sweep, renewal) just proved. Without it a stale "valid" entry outlives
+// the proof: the sweep drops the stream, the agent reconnects a second
+// later, and authenticateAgent admits it from the cache for the rest of
+// the TTL — doubling the revocation window.
+func (s *Server) cacheRevoked(id *agentIdentity) {
+	s.certs.put(certKey{agentID: id.AgentID, serial: id.Cert.SerialNumber.String()}, false, time.Now())
+}
+
 // authenticateAgent extracts and validates the caller's identity. It returns
 // PermissionDenied for anything short of a valid, unrevoked, agent-bound
 // certificate.
