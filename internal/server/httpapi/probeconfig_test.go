@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -495,6 +496,91 @@ func TestConfigBodyTooLarge(t *testing.T) {
 	w := doConfig(t, h, "POST", "/api/v1/config/targets", body, cookie, csrf)
 	if w.Code != http.StatusRequestEntityTooLarge {
 		t.Errorf("oversized target body = %d, want 413: %s", w.Code, w.Body)
+	}
+}
+
+// TestNULRefusedAtBoundary: Postgres text cannot store NUL, so a NUL that
+// reaches the store is an opaque 500 (SQLSTATE 22021). Every surface —
+// path, query, any decoded body string, the login username — must refuse
+// it as a 400 before a handler touches the store.
+func TestNULRefusedAtBoundary(t *testing.T) {
+	f := newFakeDB()
+	h := newTestAPI(t, f)
+	cookie, csrf := configLogin(t, h, f, "admin")
+
+	for _, path := range []string{
+		"/api/v1/config/sites/%00",
+		"/api/v1/pairs/%00/lon",
+		"/api/v1/config/targets?q=%00",
+		"/api/v1/outages?site=a%00b",
+	} {
+		if w := doConfig(t, h, "GET", path, "", cookie, ""); w.Code != http.StatusBadRequest {
+			t.Errorf("GET %s = %d, want 400: %s", path, w.Code, w.Body)
+		}
+	}
+	if w := doConfig(t, h, "DELETE", "/api/v1/config/networks/%00", "", cookie, csrf); w.Code != http.StatusBadRequest {
+		t.Errorf("DELETE with NUL path = %d, want 400: %s", w.Code, w.Body)
+	}
+
+	before := len(f.targets)
+	for _, body := range []string{
+		`{"name":"a\u0000b","address":"192.0.2.1"}`,
+		`{"name":"ok","address":"192.0.2.1\u0000"}`,
+	} {
+		if w := doConfig(t, h, "POST", "/api/v1/config/targets", body, cookie, csrf); w.Code != http.StatusBadRequest {
+			t.Errorf("POST target %s = %d, want 400: %s", body, w.Code, w.Body)
+		}
+	}
+	if len(f.targets) != before {
+		t.Errorf("NUL bodies created %d targets, want 0", len(f.targets)-before)
+	}
+	// Nested: a map value inside the probe request.
+	probe := `{"site":"nyc","target":"t","type":"http","interval_ms":60000,"timeout_ms":5000,"params":{"path":"/\u0000"}}`
+	if w := doConfig(t, h, "POST", "/api/v1/config/probes", probe, cookie, csrf); w.Code != http.StatusBadRequest {
+		t.Errorf("POST probe with NUL param = %d, want 400: %s", w.Code, w.Body)
+	}
+	// An escaped backslash is the literal text \u0000, not a NUL.
+	literal := `{"name":"lit\\u0000","address":"192.0.2.1"}`
+	if w := doConfig(t, h, "POST", "/api/v1/config/targets", literal, cookie, csrf); w.Code != http.StatusOK {
+		t.Errorf("POST target with literal backslash-u = %d, want 200: %s", w.Code, w.Body)
+	}
+
+	if w := doLogin(t, h, "ali\x00ce", "irrelevant"); w.Code != http.StatusBadRequest {
+		t.Errorf("login with NUL username = %d, want 400: %s", w.Code, w.Body)
+	}
+}
+
+func TestHasNUL(t *testing.T) {
+	s := "x\x00"
+	cases := []struct {
+		name string
+		v    any
+		want bool
+	}{
+		{"clean struct", struct{ A, B string }{"a", "b"}, false},
+		{"struct field", struct{ A string }{s}, true},
+		{"pointer", &s, true},
+		{"nil pointer", (*string)(nil), false},
+		{"slice", []string{"a", s}, true},
+		{"map value", map[string]string{"k": s}, true},
+		{"map key", map[string]int{s: 1}, true},
+		{"nested", struct{ P *[]map[string]string }{&[]map[string]string{{"k": s}}}, true},
+		{"allow-tagged field skipped", struct {
+			P string `nul:"allow"`
+		}{s}, false},
+		{"allow tag does not hide siblings", struct {
+			P string `nul:"allow"`
+			Q string
+		}{s, s}, true},
+		{"non-string kinds", struct {
+			N int
+			B bool
+		}{1, true}, false},
+	}
+	for _, tc := range cases {
+		if got := hasNUL(reflect.ValueOf(tc.v)); got != tc.want {
+			t.Errorf("%s: hasNUL = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 

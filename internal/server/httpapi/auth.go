@@ -101,6 +101,11 @@ func (a *api) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "username and password are required")
 		return
 	}
+	// The username reaches a text column lookup; see hasNUL.
+	if strings.IndexByte(req.Username, 0) >= 0 {
+		writeError(w, http.StatusBadRequest, nulBodyError)
+		return
+	}
 
 	user, err := a.db.GetUserByUsername(r.Context(), req.Username)
 	if err != nil {
@@ -279,8 +284,10 @@ func (a *api) handlePasswordChange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		CurrentPassword string `json:"current_password"`
-		NewPassword     string `json:"new_password"`
+		// Hashed, never stored as text: exempt from decodeStrict's NUL
+		// refusal, like the login handler's password.
+		CurrentPassword string `json:"current_password" nul:"allow"`
+		NewPassword     string `json:"new_password" nul:"allow"`
 	}
 	if !decodeStrict(w, r, &req) {
 		return

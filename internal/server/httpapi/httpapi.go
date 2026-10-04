@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -223,7 +224,23 @@ func newHandler(sdb DB, static fs.FS, providers OIDCProviders, auditLog *audit.L
 
 	mux.Handle("/", staticHandler(static))
 
-	return withAPIHeaders(withBodyLimit(mux))
+	return withAPIHeaders(withoutNUL(withBodyLimit(mux)))
+}
+
+// withoutNUL refuses a NUL byte anywhere in the URL. Postgres text cannot
+// store one, so a %00 path segment or query value that reaches a store
+// lookup fails as SQLSTATE 22021: an opaque 500 plus an ERROR log line that
+// any session holder could repeat at will. No route has a use for it.
+// (Bodies get the same refusal in decodeStrict.)
+func withoutNUL(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.IndexByte(r.URL.Path, 0) >= 0 ||
+			strings.IndexByte(r.URL.RawQuery, 0) >= 0 || strings.Contains(r.URL.RawQuery, "%00") {
+			writeError(w, http.StatusBadRequest, "request URL must not contain NUL characters")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // withBodyLimit caps request bodies at maxRequestBody. A declared
