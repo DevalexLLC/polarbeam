@@ -11,6 +11,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"reflect"
+	"strings"
 
 	"github.com/devalexllc/polarbeam/internal/server/store"
 )
@@ -37,7 +39,8 @@ func internalError(w http.ResponseWriter, what string, err error) {
 
 // decodeStrict decodes exactly one JSON object, rejecting unknown fields
 // (a client bug or version skew — never silently dropped) and trailing
-// data. It writes the 400/413 itself; callers bail on false.
+// data, and refuses a NUL character in any decoded string (see hasNUL). It
+// writes the 400/413 itself; callers bail on false.
 func decodeStrict(w http.ResponseWriter, r *http.Request, v any) bool {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
@@ -55,7 +58,50 @@ func decodeStrict(w http.ResponseWriter, r *http.Request, v any) bool {
 		writeError(w, http.StatusBadRequest, "invalid body: trailing data after JSON object")
 		return false
 	}
+	if hasNUL(reflect.ValueOf(v)) {
+		writeError(w, http.StatusBadRequest, nulBodyError)
+		return false
+	}
 	return true
+}
+
+const nulBodyError = "invalid body: strings must not contain NUL characters"
+
+// hasNUL reports whether any string reachable from v contains a NUL byte.
+// JSON can carry one as \u0000, but Postgres text cannot store it: past this
+// check it would surface as SQLSTATE 22021, an opaque 500 (the same
+// boundary withoutNUL holds for URLs). A struct field tagged `nul:"allow"`
+// is skipped: it is hashed and never stored as text (a password), and
+// refusing a NUL there would lock out a credential login still accepts.
+func hasNUL(v reflect.Value) bool {
+	switch v.Kind() {
+	case reflect.String:
+		return strings.IndexByte(v.String(), 0) >= 0
+	case reflect.Pointer, reflect.Interface:
+		return !v.IsNil() && hasNUL(v.Elem())
+	case reflect.Struct:
+		for i := range v.NumField() {
+			if v.Type().Field(i).Tag.Get("nul") == "allow" {
+				continue
+			}
+			if hasNUL(v.Field(i)) {
+				return true
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		for i := range v.Len() {
+			if hasNUL(v.Index(i)) {
+				return true
+			}
+		}
+	case reflect.Map:
+		for it := v.MapRange(); it.Next(); {
+			if hasNUL(it.Key()) || hasNUL(it.Value()) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // isBodyTooLarge writes a 413 and reports true when err is the body-limit

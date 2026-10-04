@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -53,6 +54,32 @@ func TestPasswordChange(t *testing.T) {
 	}
 	if w := doLogin(t, h, "alice", "correct-horse-battery"); w.Code != http.StatusOK {
 		t.Errorf("new-password login = %d: %s", w.Code, w.Body)
+	}
+}
+
+// TestPasswordChangeNULPassword: passwords are hashed, never stored as text,
+// so decodeStrict's NUL refusal must not reach them — a credential login
+// accepts must stay rotatable (and a new one may carry NUL too).
+func TestPasswordChangeNULPassword(t *testing.T) {
+	f := newFakeDB()
+	h := newTestAPI(t, f)
+	const current, next = "old\x00password-1", "new\x00password-2"
+	f.addUser("nul", current, "viewer", false)
+	w := doLogin(t, h, "nul", current)
+	if w.Code != http.StatusOK {
+		t.Fatalf("login with NUL password = %d: %s", w.Code, w.Body)
+	}
+	var res struct {
+		CSRFToken string `json:"csrf_token"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &res)
+
+	body, _ := json.Marshal(map[string]string{"current_password": current, "new_password": next})
+	if w := doConfig(t, h, "PUT", changePath, string(body), w.Result().Cookies()[0], res.CSRFToken); w.Code != http.StatusOK {
+		t.Fatalf("change with NUL passwords = %d, want 200: %s", w.Code, w.Body)
+	}
+	if ok, err := auth.VerifyPassword(next, f.users["nul"].PasswordHash); err != nil || !ok {
+		t.Errorf("NUL-bearing new password does not verify: ok=%v err=%v", ok, err)
 	}
 }
 
