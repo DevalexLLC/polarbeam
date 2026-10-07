@@ -665,116 +665,110 @@ export default function WorldMap({
         <span className="map-zoom-readout" aria-hidden="true">
           Zoom {zoomPercent}%
         </span>
-        {shownSite &&
-          shownPoint &&
-          shownStats &&
-          shownSev &&
-          shownInViewport && (
-            // Pointer or keyboard focus inside this card keeps it open (the
-            // shell-delegated listeners in the effect above cancel the
-            // pending hover clear), so the card stays a pure live region
-            // rather than becoming a control.
-            <div
-              ref={cardRef}
-              className={'map-tip' + (shownLeft > 72 ? ' map-tip-left' : '')}
-              style={{
-                left: `${shownLeft}%`,
-                top: `${shownTop}%`,
-              }}
-              role="status"
-            >
-              <div className="map-tip-head">
-                <b>{shownSite.name.toUpperCase()}</b>
-                <span className={`map-tip-pill sev-${shownSev}`}>{SEVERITY_LABEL[shownSev]}</span>
-              </div>
-              {(shownSite.location || shownSite.display_name) && (
-                <div className="map-tip-sub">{shownSite.location || shownSite.display_name}</div>
-              )}
-              <div className="map-tip-value">
-                {shownStats.bestLatencyUs == null ? '—' : fmtLatency(shownStats.bestLatencyUs)}
-                <small> best live latency</small>
-              </div>
-              {/* Month-to-date scores: availability is the successful
+        {shownSite && shownPoint && shownStats && shownSev && shownInViewport && (
+          // Pointer or keyboard focus inside this card keeps it open (the
+          // shell-delegated listeners in the effect above cancel the
+          // pending hover clear), so the card stays a pure live region
+          // rather than becoming a control.
+          <div
+            ref={cardRef}
+            className={'map-tip' + (shownLeft > 72 ? ' map-tip-left' : '')}
+            style={{
+              left: `${shownLeft}%`,
+              top: `${shownTop}%`,
+            }}
+            role="status"
+          >
+            <div className="map-tip-head">
+              <b>{shownSite.name.toUpperCase()}</b>
+              <span className={`map-tip-pill sev-${shownSev}`}>{SEVERITY_LABEL[shownSev]}</span>
+            </div>
+            {(shownSite.location || shownSite.display_name) && (
+              <div className="map-tip-sub">{shownSite.location || shownSite.display_name}</div>
+            )}
+            <div className="map-tip-value">
+              {shownStats.bestLatencyUs == null ? '—' : fmtLatency(shownStats.bestLatencyUs)}
+              <small> best live latency</small>
+            </div>
+            {/* Month-to-date scores: availability is the successful
                   share of every probe sample touching this site this UTC
                   calendar month; performance is the share of those
                   successes that fell in hours graded under the warn
                   thresholds. Tone reuses the stat tiles' classes, and a
                   zero denominator stays an honest dash. */}
-              <div className="map-tip-scores">
-                {(
-                  [
-                    ['Availability', shownScore.availability],
-                    ['Performance', shownScore.performance],
-                  ] as const
-                ).map(([label, ratio]) => (
-                  <div key={label} className={'map-tip-score' + scoreTone(ratio)}>
-                    <span>{label}</span>
-                    <strong>
-                      {ratio == null ? (
-                        '—'
-                      ) : (
-                        <>
-                          {fmtPercentFixed(ratio)}
-                          <small> %</small>
-                        </>
-                      )}
-                    </strong>
-                  </div>
+            <div className="map-tip-scores">
+              {(
+                [
+                  ['Availability', shownScore.availability],
+                  ['Performance', shownScore.performance],
+                ] as const
+              ).map(([label, ratio]) => (
+                <div key={label} className={'map-tip-score' + scoreTone(ratio)}>
+                  <span>{label}</span>
+                  <strong>
+                    {ratio == null ? (
+                      '—'
+                    ) : (
+                      <>
+                        {fmtPercentFixed(ratio)}
+                        <small> %</small>
+                      </>
+                    )}
+                  </strong>
+                </div>
+              ))}
+            </div>
+            <div className="map-tip-caption">{scoreCaption}</div>
+            {shownStats.directions > 0 && (
+              <div
+                className="map-tip-bar"
+                role="img"
+                aria-label={`${shownStats.dirCounts.ok} of ${shownStats.directions} directions healthy`}
+              >
+                {SEVERITIES.filter((sev) => shownStats.dirCounts[sev] > 0).map((sev) => (
+                  <span
+                    key={sev}
+                    className={`map-tip-bar-seg sev-${sev}`}
+                    style={{ flexGrow: shownStats.dirCounts[sev] }}
+                  />
                 ))}
               </div>
-              <div className="map-tip-caption">{scoreCaption}</div>
-              {shownStats.directions > 0 && (
-                <div
-                  className="map-tip-bar"
-                  role="img"
-                  aria-label={`${shownStats.dirCounts.ok} of ${shownStats.directions} directions healthy`}
+            )}
+            <div className="map-tip-caption">
+              {shownStats.degree} {shownStats.degree === 1 ? 'link' : 'links'} · {shownStats.dirCounts.ok} of{' '}
+              {shownStats.directions} {shownStats.directions === 1 ? 'direction' : 'directions'} healthy
+            </div>
+            {shownStats.netCounts.size > 1 &&
+              [...shownStats.netCounts.entries()]
+                // oxlint-disable-next-line unicorn/no-array-sort -- toSorted needs ES2023 lib
+                .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+                .map(([name, counts]) => (
+                  <div key={name} className="map-tip-caption">
+                    <span className="mono">{name}</span> · {counts.ok} of {counts.total} healthy
+                  </div>
+                ))}
+            <div className="map-tip-links">
+              <a href={siteDetailHref(shownSite.name)} aria-label={`Open site dashboard for ${shownSite.name}`}>
+                Site dashboard
+                <span className="map-tip-link-arrow" aria-hidden="true">
+                  ↗
+                </span>
+              </a>
+              {shownStats.peers.map((peer) => (
+                <a
+                  key={peer}
+                  href={inheritRouteNetwork(`#/pair/${encodeURIComponent(shownSite.name)}/${encodeURIComponent(peer)}`)}
+                  aria-label={`Open pair detail for ${shownSite.name} and ${peer}`}
                 >
-                  {SEVERITIES.filter((sev) => shownStats.dirCounts[sev] > 0).map((sev) => (
-                    <span
-                      key={sev}
-                      className={`map-tip-bar-seg sev-${sev}`}
-                      style={{ flexGrow: shownStats.dirCounts[sev] }}
-                    />
-                  ))}
-                </div>
-              )}
-              <div className="map-tip-caption">
-                {shownStats.degree} {shownStats.degree === 1 ? 'link' : 'links'} · {shownStats.dirCounts.ok} of{' '}
-                {shownStats.directions} {shownStats.directions === 1 ? 'direction' : 'directions'} healthy
-              </div>
-              {shownStats.netCounts.size > 1 &&
-                [...shownStats.netCounts.entries()]
-                  // oxlint-disable-next-line unicorn/no-array-sort -- toSorted needs ES2023 lib
-                  .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-                  .map(([name, counts]) => (
-                    <div key={name} className="map-tip-caption">
-                      <span className="mono">{name}</span> · {counts.ok} of {counts.total} healthy
-                    </div>
-                  ))}
-              <div className="map-tip-links">
-                <a href={siteDetailHref(shownSite.name)} aria-label={`Open site dashboard for ${shownSite.name}`}>
-                  Site dashboard
+                  {shownSite.name} ⇄ {peer}
                   <span className="map-tip-link-arrow" aria-hidden="true">
                     ↗
                   </span>
                 </a>
-                {shownStats.peers.map((peer) => (
-                  <a
-                    key={peer}
-                    href={inheritRouteNetwork(
-                      `#/pair/${encodeURIComponent(shownSite.name)}/${encodeURIComponent(peer)}`,
-                    )}
-                    aria-label={`Open pair detail for ${shownSite.name} and ${peer}`}
-                  >
-                    {shownSite.name} ⇄ {peer}
-                    <span className="map-tip-link-arrow" aria-hidden="true">
-                      ↗
-                    </span>
-                  </a>
-                ))}
-              </div>
+              ))}
             </div>
-          )}
+          </div>
+        )}
       </div>
       {legend}
       {/* The controls stay documented for the svg's aria-describedby (a
