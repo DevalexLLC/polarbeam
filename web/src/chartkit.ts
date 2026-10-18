@@ -186,25 +186,26 @@ export function latestValueIndex(data: uPlot.AlignedData, range?: { min: number;
   return null
 }
 
+function restoreLatestLegend(u: uPlot) {
+  const min = u.scales.x.min
+  const max = u.scales.x.max
+  const range = min == null || max == null ? undefined : { min, max }
+  const idx = latestValueIndex(u.data, range)
+  u.setLegend({ idxs: u.series.map(() => idx) })
+}
+
 // Pins the live legend to the newest visible measured point whenever the
 // cursor is away. A persisted investigation must not show a newer value from
 // outside its x range. The index is read from the plot at call time, never
 // captured: baking it into the plugin would make options change every poll.
 export function latestLegendPlugin(): uPlot.Plugin {
-  const restore = (u: uPlot) => {
-    const min = u.scales.x.min
-    const max = u.scales.x.max
-    const range = min == null || max == null ? undefined : { min, max }
-    const idx = latestValueIndex(u.data, range)
-    u.setLegend({ idxs: u.series.map(() => idx) })
-  }
   // Never while the operator is hovering: their cursor owns the readout.
   const restoreIfAway = (u: uPlot) => {
-    if ((u.cursor.left ?? -1) < 0) restore(u)
+    if ((u.cursor.left ?? -1) < 0) restoreLatestLegend(u)
   }
   return {
     hooks: {
-      ready: [restore],
+      ready: [restoreLatestLegend],
       setData: [restoreIfAway],
       setScale: [(u, key) => key === 'x' && restoreIfAway(u)],
       setCursor: [restoreIfAway],

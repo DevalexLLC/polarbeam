@@ -37,6 +37,8 @@ const topologyCell = (dst, status) => ({
   networks: [],
 })
 
+const directedCell = (src, dst, status) => ({ ...topologyCell(dst, status), src })
+
 test('an omitted topology mode is responsive while explicit modes are stable', () => {
   assert.equal(resolveTopologyMode('', true), 'sites')
   assert.equal(resolveTopologyMode('', false), 'map')
@@ -373,9 +375,13 @@ test('PathGraph label size stays in the same fixed coordinate system as its widt
 })
 
 test('site links fold both directions of a pair and grade each on its own', () => {
-  const cell = (src, dst, status) => ({ ...topologyCell(dst, status), src })
   const links = buildSiteLinks(
-    [cell('lon', 'nyc', 'ok'), cell('nyc', 'lon', 'degraded'), cell('syd', 'lon', 'stale'), cell('nyc', 'nyc', 'ok')],
+    [
+      directedCell('lon', 'nyc', 'ok'),
+      directedCell('nyc', 'lon', 'degraded'),
+      directedCell('syd', 'lon', 'stale'),
+      directedCell('nyc', 'nyc', 'ok'),
+    ],
     () => null,
   )
   // Canonical a < b keys, name-ordered regardless of response order; a
