@@ -42,11 +42,12 @@ export default function ProbeDraftFields({
     </label>
   )
 
+  const setParam = (key: string, value: string) =>
+    onChange((prev) => ({ ...prev, params: { ...prev.params, [key]: value } }))
+
   const paramFields = () => {
     const specs = paramSpecsFor(registry, draft.type, draft.mode)
     if (specs.length === 0) return null
-    const setParam = (key: string, value: string) =>
-      onChange((prev) => ({ ...prev, params: { ...prev.params, [key]: value } }))
     return (
       <div className="config-form-grid">
         {specs.map((spec) => {

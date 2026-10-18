@@ -178,6 +178,10 @@ function nodeWidth(label: string): number {
   return Math.ceil(label.length * CHAR_W) + PAD_X * 2
 }
 
+function stackH(n: number): number {
+  return n * NODE_H + (n - 1) * ROW_GAP
+}
+
 type DiffState = 'same' | 'added' | 'removed'
 
 function diffState(members: Set<string>, oldKey: string): DiffState {
@@ -219,7 +223,6 @@ export default function PathGraph({ mode, source, dest, paths }: Props) {
   // silent run still represents its full span of hops.
   const hopCount = g.columns.reduce((acc, c) => acc + c.ttlCount, 0)
 
-  const stackH = (n: number) => n * NODE_H + (n - 1) * ROW_GAP
   const maxStack = Math.max(TERM_H, ...g.columns.map((c) => stackH(c.nodes.length)))
   const height = maxStack + MARGIN * 2
   const midY = height / 2
