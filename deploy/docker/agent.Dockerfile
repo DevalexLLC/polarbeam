@@ -39,7 +39,7 @@ FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55
 # The build stage runs on the BUILD platform and cross-compiles via
 # GOOS/GOARCH — multi-arch buildx never emulates the Go compiler. Nothing
 # below runs on the target platform, so the release pipeline needs no QEMU.
-FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.2-alpine AS build
 ARG VERSION=dev
 ARG COMMIT=none
 ARG TARGETOS TARGETARCH
