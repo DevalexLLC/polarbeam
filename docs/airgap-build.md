@@ -94,9 +94,9 @@ A version tag (`vX.Y.Z`) triggers `.github/workflows/release.yml`:
 
 ## Rebuilding everything without leaving the machine
 
-Prerequisites beyond this repository and Go 1.27.1:
+Prerequisites beyond this repository and Go 1.27.2:
 
-- Docker with the base images already present (`golang:1.27.1-alpine`;
+- Docker with the base images already present (`golang:1.27.2-alpine`;
   `gcr.io/distroless/static-debian13:nonroot` at the digest pinned
   identically in `deploy/docker/server.Dockerfile` and
   `deploy/docker/agent.Dockerfile` — the runtime base of both published Go
