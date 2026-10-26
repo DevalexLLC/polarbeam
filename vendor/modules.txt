@@ -590,8 +590,8 @@ github.com/opencontainers/image-spec/specs-go/v1
 # github.com/petermattis/goid v0.0.0-20260816044145-ed329add6b1b
 ## explicit; go 1.17
 github.com/petermattis/goid
-# github.com/pires/go-proxyproto v0.15.0
-## explicit; go 1.25.0
+# github.com/pires/go-proxyproto v0.16.0
+## explicit; go 1.26.9
 github.com/pires/go-proxyproto
 # github.com/quic-go/qpack v0.6.0
 ## explicit; go 1.24
