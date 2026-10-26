@@ -73,7 +73,7 @@ buf.build/go/standard/xstrings
 # cel.dev/expr v0.25.3
 ## explicit; go 1.23.0
 cel.dev/expr
-# codeberg.org/miekg/dns v0.6.118
+# codeberg.org/miekg/dns v0.6.119
 ## explicit; go 1.27.0
 codeberg.org/miekg/dns
 codeberg.org/miekg/dns/deleg
@@ -86,6 +86,7 @@ codeberg.org/miekg/dns/internal/jump
 codeberg.org/miekg/dns/internal/pack
 codeberg.org/miekg/dns/internal/reverse
 codeberg.org/miekg/dns/internal/unpack
+codeberg.org/miekg/dns/pkg/dnsnet
 codeberg.org/miekg/dns/pkg/pool
 codeberg.org/miekg/dns/rdata
 codeberg.org/miekg/dns/svcb
