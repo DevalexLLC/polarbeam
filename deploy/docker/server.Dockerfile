@@ -18,7 +18,7 @@
 # distroless: no shell, no package manager, no libc; ships ca-certificates
 # (OIDC system roots), tzdata, /etc/passwd, /tmp. Pinned by OCI index
 # digest (multi-arch) because the tag carries no versions.
-FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3 AS base
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:18f4cc26c9ffa7f20a359298be7deadac5c607c8e03a02b8119f1a5fc2f82c99 AS base
 
 # The build stage runs on the BUILD platform and cross-compiles via
 # GOOS/GOARCH — multi-arch buildx never emulates the Go compiler.
