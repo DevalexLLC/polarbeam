@@ -35,7 +35,7 @@
 #     findings for months while looking "current". Dependabot updates tag
 #     and digest together; by hand:
 #       docker buildx imagetools inspect nginx:<ver>-alpine-slim --format '{{.Manifest.Digest}}'
-FROM nginx:1.30.6-alpine-slim@sha256:3028fc1419f99b95c1c69f844bbaf49dc1b881750c51b497fc721ac4f02a14e6
+FROM nginx:1.30.7-alpine-slim@sha256:8c950211a641ec5b23f265450517001f6bcca533666120ebe36cb4cff3d00a55
 ARG VERSION=dev
 ARG COMMIT=none
 LABEL org.opencontainers.image.title="polarbeam-proxy" \
